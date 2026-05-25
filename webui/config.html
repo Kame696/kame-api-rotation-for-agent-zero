@@ -1,0 +1,46 @@
+<!--
+  Settings UI for the api_rotation_by_kame plugin.
+  Renders inside A0's plugin settings modal.
+
+  v0.5.7.4: exposes a single toggle for the verbose trace mode. Toggling
+  the flag takes effect on the NEXT monologue start (the activation
+  extension re-reads the value on each start). Engine algorithm is
+  unaffected — this is pure log instrumentation.
+-->
+<html>
+<head>
+  <title>KAME — API Rotation Settings</title>
+  <script type="module">
+    import { store } from "/components/plugins/plugin-settings-store.js";
+  </script>
+</head>
+<body>
+  <div x-data>
+    <h2>KAME — API Rotation</h2>
+    <p>
+      Multi-key rotation, anti-dogpile / anti-thundering-herd, Trust the
+      Connection (no artificial timeouts), smart quarantine, eternal
+      carousel. Engine settings are intentionally minimal — the plugin
+      is opinionated about how it rotates and how it survives failures.
+    </p>
+
+    <h3>Observability (v0.5.7.4)</h3>
+
+    <div class="setting-row">
+      <label>
+        <input type="checkbox" x-model="config.verbose_trace" />
+        Verbose trace mode
+      </label>
+      <p class="hint">
+        Adds short key id, microsecond-level selection latency, pool snapshot
+        (e.g. <code>pool 14/15 healthy</code>), and a cascade summary to
+        every call log line. Pulse warnings explicitly say
+        <code>Local wait (no API calls)</code> and announce when the next
+        key recovers. Pure observability — <strong>no algorithm change</strong>
+        and no extra API traffic. Default OFF. Recommended ON when you
+        suspect KAME is the bottleneck or while tuning the key pool.
+      </p>
+    </div>
+  </div>
+</body>
+</html>

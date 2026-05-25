@@ -1,0 +1,691 @@
+# 🐢⚡ KAME Version Evolution — Complete History
+
+```mermaid
+graph LR
+    A["v0.4.1<br/>The Seed"] --> B["v0.4.4<br/>The Shield"]
+    B --> C["v0.4.5<br/>The Surgeon"]
+    C --> D["v0.4.6<br/>The Sentinel"]
+    D --> E["v0.4.7<br/>The Orchestrator"]
+    E --> F["v0.4.9<br/>The Strategist"]
+    F --> G["v0.5.0<br/>The Commander"]
+    G --> H["v0.5.1<br/>Log Honesty"]
+    H --> I["v0.5.2<br/>Full Speed"]
+    I --> J["v0.5.3<br/>The Speedster"]
+    J --> K["v0.5.4<br/>The Zenith"]
+    K --> L["v0.5.6<br/>The Trust"]
+    L --> M["v0.5.7"]
+    style M fill:#2ecc71,color:#fff
+```
+
+> Note: from v0.5.7 onward, releases are plain semver without codenames.
+
+---
+
+## v1.0.0 — current (FIRST STABLE RELEASE)
+
+**Production-validated.** Zero engine changes from v0.5.8.0. This release
+consolidates the journey, renames the plugin to its proper full name
+**"Key-Aware Management Engine (API Rotation)"** for public discoverability,
+ships a GitHub-ready README aimed at attracting users, and bumps to a
+1.x line to communicate API stability.
+
+### What "v1.0.0" means
+
+- **Engine API is frozen.** The public surface (`apply_kame_patch`,
+  `remove_kame_patch`, `set_verbose_trace`) and the monkey-patched
+  methods (`unified_call`, `Topic.summarize_messages`, `Bulk.summarize`,
+  rate limiter) will not change in compatible ways in the 1.x line.
+- **Algorithm is final** for 1.x. Selection logic, anti-dogpile,
+  anti-thundering-herd, ETA-driven sleep, retry-delay parsing, quarantine
+  rules — all stable, all battle-tested.
+- **Behavior is predictable**: with the same input (provider,
+  comma-separated keys, A0 settings), KAME produces the same selection
+  decisions and the same recovery behavior across all 1.x releases.
+- **Backwards compatible** with all v0.5.7.x and v0.5.8.x callers.
+
+### Production validation evidence
+
+The single test that gave KAME its 1.0.0 sticker was a real-world day of
+intensive Agent Zero usage on May 25, 2026. From the log:
+
+| Metric | Result |
+|---|---|
+| KAME operations | 1,163 |
+| Rate limit (429) events | 117 |
+| Resolved by rotation alone | 116 (99.1%) |
+| Pool-fully-sick events | 1 |
+| Sleep duration | 7.7s predicted → 7.991s actual (jitter) |
+| False pulses (v0.5.7.x bug) | 0 |
+| Engine crashes | 0 |
+| Pool "healthy" status | ~99% of operations |
+
+### Changed (cosmetic / branding)
+
+- **Plugin title** rewritten: `KAME - API Rotation` → `Key-Aware Management Engine (API Rotation)`.
+- **plugin.yaml description** rewritten as a marketing pitch ("the
+  learning carousel for Agent Zero. Round-robin is dumb; KAME learns.").
+- **README.md fully rewritten** for GitHub:
+  - Donation/Bitcoin section at the top (BEFORE the banner)
+  - Banner image
+  - Hook tagline + "what KAME is" punch paragraph
+  - Round-robin vs KAME comparison table
+  - 12-shield table (consolidates v0.5.7.4 + v0.5.8.0 additions)
+  - ASCII diagram of how it works
+  - Worked example of identity-aware health, RPM-aware selection, ETA-driven sleep
+  - Verbose mode preview
+  - Real-world impact section with production stats
+  - FAQ / troubleshooting
+  - Compatibility
+  - Contributing
+  - Evolution / version history at the bottom
+  - License placeholder
+
+- **Banner / shield list in `_print_shield_status()`** updated:
+  - "Hybrid Learning Jitter (Smart 42s Box + 2.0s Pulse)" → "Hybrid Learning (Parsed retry-delay + ETA-driven sleep)"
+  - NEW row: "Long-Delay Warning (>60s flagged for operator)"
+  - "KAME-Aware Compression Guard (UI integrated)" → "KAME-Aware Compression Guard" (simplified)
+
+- Version strings bumped to `1.0.0` in: `kame_engine.py` docstring,
+  `_print_shield_status` banner, `apply_kame_patch` error message,
+  `plugin.yaml`, README header, STATE.md.
+
+### What did NOT change from v0.5.8.0
+
+- Engine code: byte-for-byte identical algorithm
+- Selection logic, anti-dogpile, anti-thundering-herd
+- ETA-driven sleep (introduced in v0.5.8.0)
+- `continue` after sleep (introduced in v0.5.8.0)
+- Long-delay warning (introduced in v0.5.8.0)
+- Compression-aware filter (introduced in v0.5.7.4)
+- Verbose trace mode (introduced in v0.5.7.4)
+- Retry-delay parsing + 3600s cap
+- Trust the Connection
+- Clean uninstall
+
+### Pending (user-side)
+
+- LICENSE file — user is selecting (MIT recommended for A0 community).
+- Public GitHub repository — user will create.
+- Plugin Index PR (https://github.com/frdel/agent-zero) — user will submit
+  after license + public repo are in place.
+
+---
+
+## v0.5.8.0 — superseded by v1.0.0 (BEHAVIORAL FIX — ETA-driven sleep on exhausted pool)
+
+**Significant fix discovered from real production logs.** When all keys
+in the pool are simultaneously sick, prior versions burned wasted API
+requests against still-sick keys every 2-3 seconds. v0.5.8.0 sleeps
+until the soonest recovery instead, eliminating the waste and the
+self-inflicted cooldown re-arm spiral.
+
+### The bug
+
+In v0.5.7.x, the `EXHAUSTED_RETRY` branch did:
+```
+wait = 2.0 + random.uniform(0.1, 1.5)
+await asyncio.sleep(wait)
+# Falls through to acompletion(api_key=key, ...) with the SAME sick key
+```
+
+After the 2-3s pulse, the code fell through and called `acompletion()`
+with a key whose `sick_until` was still in the future. Provider rejected
+with 429, code caught the exception, re-armed `sick_until` (often
+LONGER than the original delay because every fresh 429 was a fresh
+event), looped, slept 2-3s again, and repeated.
+
+Real-world impact (observed in user's v0.5.7.4 log): ~45 wasted real
+requests in 26 seconds across a fully-sick 15-key Gemini pool, with
+keys' effective cooldowns extended from ~28s (provider's original
+guidance) to 56-59s (re-armed by repeated rejection).
+
+### The fix
+
+When all keys are exhausted:
+
+```
+soonest_eta = _next_recovery_seconds(identity, all_keys)
+if soonest_eta is not None and soonest_eta > 3.0:
+    wait = min(soonest_eta + 0.5, 30.0) + random.uniform(0.1, 1.5)
+else:
+    wait = 2.0 + random.uniform(0.1, 1.5)  # fallback: unknown ETA
+PrintStyle.warning(f"... Sleeping {wait:.1f}s ... wake at {HH:MM:SS}")
+await asyncio.sleep(wait)
+continue   # NEVER fall through to API call with sick key
+```
+
+Three changes packed into the fix:
+
+1. **ETA-driven duration**: when we have a parsed retry-delay (we do
+   in ~99% of 429 cases since v0.5.6's `_extract_retry_delay`), sleep
+   exactly that long (+0.5s clock-skew buffer, +jitter) instead of
+   fixed 2s. Capped at 30s so very long daily-quota delays still wake
+   up to re-check periodically.
+
+2. **`continue` after sleep**: the loop re-runs `_get_best_key` after
+   sleeping. We never call the API with a key whose `sick_until` is
+   still in the future. This eliminates the cooldown re-arm spiral.
+
+3. **Always-visible sleep notification**: a single log line per sleep
+   cycle, INDEPENDENT of `verbose_trace`. Operators see "Sleeping 28.4s
+   (wake at 00:33:01)" instead of silent waiting OR pulse spam. Solves
+   the "is it stuck?" perception without adding general log noise.
+
+### Plus: long-delay warning
+
+When `_extract_retry_delay` returns a value >60s, `_classify_error_delay`
+now emits:
+```
+[KAME] ⚠ Long retry delay parsed: 536s (>60s). Likely a daily quota
+or non-RPM limit. Respecting the provider's value.
+```
+
+Google's per-minute RPM cooldown is always under 60s; longer values
+typically indicate a daily quota (RPD/TPD) or a different resource
+class. The value is still respected (capped at 3600s upstream), but
+the warning flags it for operator awareness.
+
+### What did NOT change (still v0.5.7.x identical)
+
+- Algorithm: still RPM-Aware Predictive Selection
+- Anti-dogpile / Anti-thundering-herd: unchanged
+- Quarantine logic: unchanged
+- retry-delay cap: still 3600s (1h)
+- Compression flow: still "Trust the Connection", no artificial timeouts
+- Behavior when at least 1 key is healthy: IDENTICAL to v0.5.7.4 — no
+  sleeps, no extra log lines, picks key + calls API directly
+- Jitter: still `random.uniform(0.1, 1.5)`, just applied to the
+  data-driven sleep duration
+- Verbose trace mode: still opt-in via setting, same surface as v0.5.7.4
+- Compression-aware filter: still active for `📦 Compress` context
+
+### Expected difference on the v0.5.7.4 test log scenario
+
+| Cenário (15 keys sick com waits 20-28s) | v0.5.7.4 | v0.5.8.0 |
+| --------------------------------------- | -------- | -------- |
+| Real requests fired in first 28s        | ~45 (all 429) | 0 (silent sleep) |
+| Effective cooldown ETA respected        | No (re-armed to 56-59s) | Yes (28s respected) |
+| Log lines during sleep window           | ~90 noisy warnings | 1 sleep line + 1 success line |
+| Quota wasted on already-sick keys       | ~45 | 0 |
+
+### Files changed
+
+| File | Change |
+| ---- | ------ |
+| `kame_engine.py` | EXHAUSTED_RETRY branch rewritten: ETA-driven sleep + `continue` + always-visible sleep notification. `_classify_error_delay` adds >60s warning. Version strings bumped. |
+| `plugin.yaml` | Version 0.5.8.0; description updated. |
+| `README.md` | Header bumped; 2 new rows in shields table (ETA-Driven Sleep, Long-Delay Warning); Hybrid Learning Jitter row rewritten. |
+| `CHANGELOG.md` | This entry. |
+| `STATE.md` | v0.5.8.0 marked released. |
+
+### Compatibility
+
+- Backwards-compatible with v0.5.7.4 callers. Engine algorithm
+  (selection, quarantine, anti-dogpile, anti-thundering-herd,
+  Trust-the-Connection) is identical.
+- A0 v1.14+ compatible.
+- Settings unchanged (still just `verbose_trace`).
+
+### Credit
+
+Bug spotted by the maintainer from real-world v0.5.7.4 log analysis.
+The fix is the maintainer's intuition translated to code: "if KAME
+already knows when the next key recovers, why is it pulsing blindly?"
+
+---
+
+## v0.5.7.4 — superseded (UX refinements; engine algorithm UNCHANGED)
+
+Pure-quality-of-life release on top of v0.5.7.3. Three additions, all
+either opt-in or never-blocking. The selection algorithm, the pulse,
+the quarantine logic, and the retry-delay cap (3600s) are **identical**
+to v0.5.7.3.
+
+### Added
+
+1. **Verbose trace mode (opt-in via `verbose_trace: true` setting).**
+   When ON, every call line additionally shows a short SHA256-derived
+   key id (never echoes the secret), the microsecond-level selection
+   latency from `_get_best_key`, a pool snapshot string
+   (`pool 14/15 healthy, 1 cooling (next in 38s)`), and a cascade
+   summary line after rotations
+   (`✅ k7f3c2 in 47.2s | pool 15/15 healthy | 3 rotations, 1 pulse, 2.4s local wait`).
+   Default OFF. Toggleable in the Plugin Settings UI.
+
+2. **Explicit "local wait" framing on pulse.** When `verbose_trace` is
+   ON and the pulse fires (all keys in penalty box), the warning now
+   reads: `Local wait 2.4s (no API calls) - next key recovers in ~38s`.
+   The `next` ETA is the minimum `sick_until - now` across the pool.
+   Communicates clearly that the pause is in-process — no external
+   calls are being burned during the wait.
+
+3. **Compression-aware light filter in `_get_best_key`.** When the
+   call context is a compression call (`📦 Compress`) AND at least one
+   fully-rested key is available, keys that transitioned out of
+   sickness within the last 5 seconds are de-prioritized. **Never
+   empties the pool** — if all healthy keys are recently recovered,
+   the original RPM-aware logic runs unchanged. Chat/Utility paths
+   are unaffected. Rationale: a marginal key might pass for normal
+   chat but 429 on a 90k+ token compression, triggering a cascade.
+
+### Wiring
+
+- `helpers/extension.Extension` boot hook (`_10_kame_api_rotation.py`)
+  now reads the `verbose_trace` setting via `get_plugin_config` and
+  threads it to the engine via `set_verbose_trace(bool)` before
+  applying patches.
+- `default_config.yaml`: new `verbose_trace: false` field with explanation.
+- `webui/config.html`: new file exposing the toggle in the Settings UI.
+- `plugin.yaml`: bumped to 0.5.7.4. `settings_sections: [agent]` (was
+  `[]`) so the new config page renders.
+
+### Explicitly NOT changed
+
+- Selection algorithm: still RPM-Aware Predictive with anti-dogpile /
+  anti-thundering-herd. **Same code path.**
+- Pulse: still `2.0 + random.uniform(0.1, 1.5)` seconds.
+- Quarantine: still smart `_classify_error_delay` with provider
+  `retryDelay` parsing and `_extract_retry_delay` cap at 3600s.
+- "Trust the Connection": no artificial timeouts on any path.
+- Compression flow: identical engine path, same eternal carousel.
+- `_mark_key_health`: same. (Added one new field `last_sick_at` to the
+  per-key dict for the compression-aware filter; backfilled defensively
+  for keys created on older versions.)
+
+### Files changed
+
+| File | Change |
+| ---- | ------ |
+| `kame_engine.py` | + module-level `_KAME_VERBOSE_TRACE` flag, `set_verbose_trace()`, `_key_short_id()`, `_pool_snapshot()`, `_next_recovery_seconds()`. + selection-latency timing + cascade tracker inside `_kame_unified_call`. + verbose success/pulse log paths gated by the flag. + compression-aware filter inside `_get_best_key`. + `last_sick_at` field. Version strings bumped. |
+| `extensions/python/_functions/agent/Agent/monologue/start/_10_kame_api_rotation.py` | Reads plugin setting, calls `set_verbose_trace()` before patch. |
+| `default_config.yaml` | NEW — `verbose_trace: false` with explanation. |
+| `webui/config.html` | NEW — toggle UI. |
+| `plugin.yaml` | Version 0.5.7.4, `settings_sections: [agent]`, updated description. |
+| `README.md` | Header bumped; 2 new rows in shields table. |
+| `CHANGELOG.md` | This entry. |
+
+### Compatibility
+
+- Backwards-compatible with v0.5.7.3 — keep `verbose_trace: false` (the
+  default) and behavior is identical.
+- A0 v1.14+ compatible.
+
+---
+
+## v0.5.7.3 — superseded
+
+**Rollback of the `request_log` "double-count fix" that was wrongly attributed as a bug in v0.5.7.**
+
+### Restored
+
+The line `state["keys"][key]["request_log"].append(now)` inside
+`_mark_key_health(success=True)` is restored, matching the
+production-tested v0.5.6 behavior. The accompanying comment
+`# Record successful completion in RPM counter` made the design
+intent explicit: successful keys carry slightly heavier weight in
+the 60s sliding window, which acts as an anti-overuse brake on
+champion keys and biases `_get_best_key` toward more even
+dispersion across the key pool.
+
+v0.5.7 / .7.1 / .7.2 had removed this line under the (wrong) belief
+that it was an unintentional double-count. Effect of the removal:
+selection concentrated more on the best-performing keys, which
+could trigger avoidable 429s on tight quotas. v0.5.7.3 reverts.
+
+### Kept from the v0.5.7 line
+
+- `_extract_retry_delay` cap raised 300s → 3600s (lets KAME honor
+  legitimate longer waits; reduces 429 spam on long quotas).
+- `plugin.yaml` rewritten per A0 v1.15 schema (valid for marketplace).
+- `_91_recall_wait.py` import fixed (`plugins._memory` with
+  backwards-compat fallback).
+- `hooks.py` added (`uninstall()` calls `remove_kame_patch()`).
+- `default_config.yaml` removed (had invalid `enabled: true` field).
+- Documentation polish: README header / shield row rewording,
+  CHANGELOG history, stale "v0.5.3" version strings cleaned out.
+
+### Net behavior vs v0.5.6
+
+- **Engine: matches v0.5.6 exactly** (dispersion brake restored, all
+  monkey-patches identical).
+- **Quarantines: same as v0.5.6** except the `retryDelay` cap is now
+  1 hour instead of 5 minutes — only affects the rare case where a
+  provider sends a legitimate long wait; otherwise identical.
+- **Packaging: compliant with A0 v1.15** so the plugin can ship to
+  the Plugin Index.
+- **Uninstall: clean** (monkey-patches reverted on plugin removal).
+
+### Versions withdrawn
+
+- **v0.5.7** — compression regression (extension filename collision).
+- **v0.5.7.1** — partial fix, still risky on overlay-upgrades.
+- **v0.5.7.2** — compression behavior restored, but kept the wrong
+  `request_log` removal. Withdrawn in favor of v0.5.7.3.
+
+---
+
+## v0.5.7.2 — withdrawn
+
+**Stable release after the v0.5.7 / v0.5.7.1 line of compression-related regressions. Adopts the v0.5.6 compression design verbatim (zero KAME extensions in `message_loop_prompts_before`) and layers in only the safe engine refinements + packaging fixes from the v0.5.7 effort.**
+
+### Compression behavior (back to what worked)
+
+- KAME ships **no** extension under `extensions/python/message_loop_prompts_before/`. The folder is removed entirely.
+- Agent Zero's native `_10_organize_history.py` (background scheduler at end of each turn) and `_90_organize_history_wait.py` (sync waiter at start of next turn) handle 100% of compression orchestration — same as the user's working v0.5.6 setup and same as a stock A0 install with no plugin.
+- The native progress message **"Compressing history..."** appears on the UI progress bar as A0 always intended — provided by `context.log.set_progress(...)` calls inside the native extension.
+- KAME's value-add for compression remains entirely in the monkey-patches on `Topic.summarize_messages` and `Bulk.summarize` (in `kame_engine.py`). When A0's native compression flow calls those methods, KAME intercepts and the eternal carousel rotates among configured keys — exactly as v0.5.6.
+
+### Engine refinements (carried over from the v0.5.7 effort)
+
+| # | Change | Detail |
+|---|---|---|
+| 1 | `request_log` no longer double-counted on success | Previously the timestamp was appended both at selection (anti-thundering-herd) AND on completion. Successful keys appeared "busier" than they were, biasing future selection. Fix: keep the append only at selection time. See `decisions/0001` and `learnings/0001`. |
+| 2 | `_extract_retry_delay` cap raised 300s → 3600s | Lets KAME honor legitimate longer waits (e.g. a daily quota near reset) while still rejecting absurd / parsing-error values. See `decisions/0001-retry-delay-cap-3600s.md`. |
+
+### Packaging fixes (carried over from the v0.5.7 effort)
+
+| # | Change | Detail |
+|---|---|---|
+| 3 | `plugin.yaml` rewritten | Now valid per Agent Zero v1.15 schema: `name: api_rotation_by_kame` (matches install folder), proper `title`, `description`, `settings_sections`, `per_project_config`, `per_agent_config`, `always_enabled`. Removed invalid fields (`author`, `type`, `dependencies`). Required before Plugin Index submission. |
+| 4 | `_91_recall_wait.py` import fixed | Was `from plugins.memory.extensions...` which always fell through to the fallback constants. Corrected to `from plugins._memory.extensions...` (core memory plugin in v1.10+ is `_memory` with underscore prefix), with a backwards-compat try/except for legacy A0. |
+| 5 | `hooks.py` added | Implements `install()`, `pre_update()`, `uninstall()`. Uninstall calls the existing `remove_kame_patch()` so monkey-patches are reverted before the plugin directory is deleted — no dangling state in the running A0 process. |
+| 6 | `default_config.yaml` removed | Only contained the invalid `enabled: true` field. Plugin activation uses `.toggle-*` files / `always_enabled` in manifest — the file did nothing. |
+| 7 | Documentation polish | README header bumped to 0.5.7.2; the "KAME-Aware Compression Guard" shield rephrased as "KAME-Powered Compression" (accurately describing the carousel-during-compression behavior, not a UI feature that no longer exists); engine docstrings reflect actual no-timeout behavior; stale "v0.5.3" version strings cleaned out of error logs and shield-status banner. |
+
+### Versions withdrawn from the public timeline
+
+- **v0.5.7** — shipped a valid Extension class at `extensions/python/message_loop_prompts_before/_90_organize_history_wait.py`. Because A0's extension loader deduplicates by filename with **plugin-overrides-framework** precedence, KAME's class replaced the native A0 one. KAME's version only ran a single compression pass and had no stall/max-pass guards. Large chats appeared to "stop trying" to compress.
+- **v0.5.7.1** — attempted hotfix by renaming KAME's file to `_80_kame_history_announce.py`. While this fixed the collision (no longer replaces native), running KAME at `_80_` alongside the native at `_90_` still introduced edge cases in real installs (especially when users upgraded by overlaying the new zip on top of v0.5.7 without first deleting the old folder — the leftover `_90_organize_history_wait.py` from v0.5.7 was still loaded and continued to break compression).
+
+v0.5.7.2 sidesteps the entire problem class by adopting v0.5.6's deliberate design: **KAME does not put any extension in `message_loop_prompts_before`**.
+
+### Compatibility
+
+- Requires Agent Zero **v1.14+** (same as v0.5.3+ for native compression flow).
+- Built and verified against Agent Zero v1.15 (latest at release date).
+
+### Pending (out of scope)
+
+- LICENSE file at repo root — required before submitting to the Plugin Index, but is the maintainer's choice (MIT recommended).
+- Smoke tests in a running A0 environment.
+
+---
+
+## v0.5.7.1 — withdrawn (post-fix regression risk)
+
+Renamed KAME's `_90_` extension to `_80_kame_history_announce.py`. Did not fully solve compression issues in practice; superseded by v0.5.7.2's removal of the extension entirely.
+
+---
+
+## v0.5.7 — withdrawn (had compression regression)
+
+**Marketplace-ready release.** Engine refined; packaging brought into full Agent Zero v1.15 compliance.
+
+### Engine refinements
+
+| # | Change | Detail |
+|---|---|---|
+| 1 | `request_log` no longer double-counted on success | Previously the timestamp was appended both at selection (anti-thundering-herd) AND on completion. Successful keys appeared "busier" than they were, biasing future selection. Fix: keep the append only at selection time. See `decisions/0001` and `learnings/0001`. |
+| 2 | `_extract_retry_delay` cap raised 300s → 3600s | Lets KAME honor legitimate longer waits (e.g. a daily quota near reset) while still rejecting absurd / parsing-error values. See `decisions/0001-retry-delay-cap-3600s.md`. |
+
+### Packaging fixes
+
+| # | Change | Detail |
+|---|---|---|
+| 3 | `plugin.yaml` rewritten | Now valid per Agent Zero v1.15 schema: `name: api_rotation_by_kame` (matches install folder), proper `title`, `description`, `settings_sections`, `per_project_config`, `per_agent_config`, `always_enabled`. Removed invalid fields (`author`, `type`, `dependencies`). Required before Plugin Index submission. |
+| 4 | `_90_organize_history_wait.py` rewritten as `Extension` subclass | Was a module-level `async def run(agent, data)` function which the Agent Zero v1.10+ extension loader silently ignores. Now a proper `class KameHistoryWait(Extension)` with `async def execute(self, loop_data=None, **kwargs)`. The KAME-Aware Compression Guard actually fires now. |
+| 5 | `_91_recall_wait.py` import fixed | Was `from plugins.memory.extensions...` which always fell through to the fallback constants. Corrected to `from plugins._memory.extensions...` (core memory plugin in v1.10+ is `_memory` with underscore prefix), with a backwards-compat try/except for legacy A0. |
+| 6 | `hooks.py` added | Implements `install()`, `pre_update()`, `uninstall()`. Uninstall calls the existing `remove_kame_patch()` so monkey-patches are reverted before the plugin directory is deleted — no dangling state in the running A0 process. |
+| 7 | `default_config.yaml` removed | The file only contained `enabled: true`, which is not a recognized Agent Zero plugin field (plugin activation uses `.toggle-*` files / `always_enabled` in manifest). Cleaner to omit entirely. |
+| 8 | Documentation polish | README updated (removed retired "Twin Guards", added "Anti-Thundering-Herd", "Trust the Connection", "Clean Uninstall"); engine docstrings reflect actual no-timeout behavior; stale "v0.5.3" version strings cleaned out of error logs and shield-status banner. |
+
+### Compatibility
+
+- Requires Agent Zero **v1.14+** (same as v0.5.3+ for the outer-loop stall guard).
+- Built and verified against Agent Zero v1.15 (latest at release date).
+
+### Pending (out of scope for v0.5.7)
+
+- LICENSE file at repo root — required before submitting to the Plugin Index, but is the maintainer's choice (MIT recommended).
+- Smoke tests in a running A0 environment.
+
+---
+
+## v0.5.6 — "The Trust"
+
+**Philosophy: Trust the Connection.** If Google accepts and doesn't error, let it finish.
+
+| Change | Detail |
+|---|---|
+| **Trust the Connection** | Removed ALL artificial timeouts (12s/6s Zombie Guard, 20s Mid-Stream Guard). If the API accepts the request without error, KAME now patiently waits for completion — no matter how complex the prompt. Eliminates death loops where models that need time to "think" got repeatedly cut off and rotated. |
+| **Anti-Thundering-Herd** | Key selection now marks the chosen key as "pending" in `request_log` at the moment of selection. Concurrent threads see the key as "busier" and spread across different keys, preventing multiple threads from dogpiling the same key and triggering avoidable 429 errors. |
+| **Verified: Direct Key Passing** | Confirmed that v0.5.5 already passes `api_key` directly to LiteLLM (no `os.environ` injection). Thread-safe key isolation is already in place. |
+| **Verified: RateLimiter** | Inspected framework source — `RateLimiter.wait()` already sleeps outside the lock. Existing KAME patches (threading.Lock for cleanup/get_total) are correct and sufficient. |
+
+> [!IMPORTANT]
+> **Breaking change from v0.5.5:** The "Twin Guards" (Zombie Guard + Mid-Stream Guard) are completely removed. KAME no longer artificially kills connections. All real errors (429, 503, auth failures) are still caught instantly by the error handler and rotated with smart quarantine.
+
+---
+
+## v0.4.1 — "The Seed"
+
+**The beginning.** First working multi-key rotation.
+
+| Feature | Detail |
+|---|---|
+| Multi-key rotation | Comma-separated keys in `.env`, round-robin selection |
+| Basic health tracking | Mark keys as sick/healthy |
+| Monkey-patch | Replaces `LiteLLMChatWrapper.unified_call` |
+
+**Limitations:** No identity awareness, no compression guards, no zombie protection.
+
+---
+
+## v0.4.4 — "The Shield"
+
+**Added safety layers.**
+
+| Added | Detail |
+|---|---|
+| Identity-aware health | Tracks health by `provider:model` (isolates Chat vs Utility) |
+| LRU key selection | Picks least recently used key (coldest first) |
+| History compression guard | Timeout + iteration limit + drop-oldest fallback |
+| Rate limiter deadlock fix | `threading.Lock` replaces `asyncio.Lock` |
+| Sequential compression | `merge_bulks_by` changed from parallel to sequential |
+
+> [!WARNING]
+> **Regression introduced:** Sequential compression. Changed from A0's `asyncio.gather` (parallel) to one-by-one to prevent RPM cascades. This made long chats significantly slower. **Fixed in v0.5.2.**
+
+---
+
+## v0.4.5 — "The Surgeon"
+
+**Precision fixes.**
+
+| Added | Detail |
+|---|---|
+| Terminal error classification | 400/404/422 + content policy = raise (don't retry) |
+| Auth error handling | 401 = quarantine key for 1 hour |
+| Stop response support | Respects A0's mid-stream interruption |
+| Token callback support | Framework token counters work correctly |
+
+---
+
+## v0.4.6 — "The Sentinel"
+
+**Stability pass.**
+
+| Added | Detail |
+|---|---|
+| Async generator cleanup | Properly closes streaming connections on stop |
+| Improved error propagation | Terminal errors bubble up to A0 correctly |
+
+---
+
+## v0.4.7 — "The Orchestrator"
+
+**Architecture matured.**
+
+| Feature | Value |
+|---|---|
+| Quarantine (all errors) | **20s flat** |
+| Exhausted wait | Fixed **2.0s** sleep |
+| Between-retry sleep | **0.1s** |
+| Soft-Governor | 1.0s rest preference (prefer keys rested >1s) |
+| Zombie Guard | 12s first / 6s retry / 25s utility |
+| Compression | Sequential (from v0.4.4) |
+
+**This was the last "simple" version.** Key selection was pure LRU with Soft-Governor.
+
+---
+
+## v0.4.9 — "The Strategist"
+
+**Major engine upgrade.** Introduced smart, targeted quarantine.
+
+| Changed | v0.4.7 → v0.4.9 |
+|---|---|
+| Key selection | LRU → **RPM-aware predictive** (fewest requests in 60s window) |
+| Rate-limit quarantine | 20s → **10s** (or API retry-after) |
+| Timeout quarantine | 20s → **3s** |
+| 503 quarantine | 20s → **5s** |
+| Exhausted wait | Fixed 2.0s → **Dynamic** (calculates exact recovery) |
+| Between-retry sleep | 0.1s → **0.05s** |
+| Soft-Governor | **Removed** (RPM-aware selection handles spacing) |
+
+| Added | Detail |
+|---|---|
+| `_classify_error_delay()` | Smart quarantine by error type |
+| `_extract_retry_delay()` | Parses retry-after headers from API |
+| Anti-dogpile guard | `last_used = now` at selection time → concurrent calls get different keys |
+| RPM sliding window | Tracks request timestamps per key in 60s window |
+| `contextvars` tagging | Labels compression calls as `📦 Compress` in logs |
+
+> [!IMPORTANT]
+> v0.4.9 was the biggest single upgrade. It changed the engine from "simple LRU" to "intelligent RPM-aware selection with targeted quarantine."
+
+---
+
+## v0.5.0 — "The Commander"
+
+**Polish and UX.**
+
+| Changed | v0.4.9 → v0.5.0 |
+|---|---|
+| 503 quarantine | 20s → **5s** (confirmed from v0.4.9) |
+
+| Added | Detail |
+|---|---|
+| Friendly error messages | `⏳ Rate limited, cooling 10s...` instead of raw exceptions |
+| Recovery notification | `✅ Keys recovered, resuming...` |
+| Context labels | `Chat\|model` and `Util\|model` prefixes in logs |
+
+> [!WARNING]
+> **Bug introduced:** `(SUCCESS)` printed BEFORE the API call, misleading users. **Fixed in v0.5.1.**
+> 
+> **Bug introduced:** `✅ Keys recovered` printed when quarantine expired, not when API actually responded. **Fixed in v0.5.2.**
+
+---
+
+## v0.5.1 — "Log Honesty"
+
+**Log-only fixes. Zero engine changes.**
+
+| Fixed | Detail |
+|---|---|
+| `(SUCCESS)` tag | Moved from BEFORE API call to AFTER real success |
+| Success format | `✅ AIzaSy... (N attempts)` — only on real API response |
+| Failure format | Now includes which key failed: `AIzaSyBL... ⏳ Rate limited` |
+
+---
+
+## v0.5.2 — "Full Speed"
+
+**Three changes targeting speed and honesty.**
+
+| # | Change | Before → After | Impact |
+|---|---|---|---|
+| 1 | Remove false "Keys recovered" | Lied after quarantine expired → **Removed** | Honest logs |
+| 2 | Full parallel compression | Sequential (~90s for 6 bulks) → **asyncio.gather (~15s)** | Long chats 6× faster |
+| 3 | Zero rate-limit quarantine | 10s "cooling" → **0s, instant rotation** | Fastest recovery possible |
+
+> [!NOTE]
+> Change 2 restores the original A0 behavior that was broken in v0.4.4. It's now safe because anti-dogpile (added in v0.4.9) ensures concurrent compression calls get different keys.
+>
+> Change 3 removes rate-limit quarantine entirely. Anti-dogpile naturally rotates through keys. 429 errors are free and don't cost RPM.
+
+---
+
+## v0.5.3 — "The Speedster" ⭐ CURRENT
+
+**Compression stability + Rate-Limit Intelligence.**
+
+Diagnosed via live 90K token test: Quick Mode (v0.5.2) bailed after 2 key attempts during compression, injecting useless fallback text that didn't reduce tokens, causing infinite stall loops.
+
+| # | Change | Before (v0.5.2) → After | Impact |
+|---|---|---|---|
+| 1 | Remove Quick Mode | 2-attempt bail + fallback → **Eternal carousel for ALL call types** | Compression actually completes |
+| 2 | Remove `_kame_compress()` | Custom 8-iter/120s guard → **A0 v1.14 native compress + stall guard** | Less code, more reliable |
+| 3 | Remove `_kame_merge_bulks_by()` | Duplicate of A0 native → **Removed** | Cleaner codebase |
+| 4 | Rate-Limit Intelligence | Blind 3s quarantine → **Parsed retryDelay from 429 errors** | Exact quarantine per provider |
+| 5 | Compression Timeout Guard | 15s/25s dynamic → **60s flat timeout** | Carousel has time to find key |
+| 6 | Stall guard upgrade | 5-iteration wait → **8-pass + compress return check + token comparison** | Matches v1.14 quality |
+
+| Added | Detail |
+|---|---|
+| `retryDelay` parsing | Regex matches Google's "retry in 42s", standard "Retry-After: 42", and JSON `"retryDelay": "42s"` |
+| Learned-limit logging | `⏳ Rate limited (learned: wait 42s), trying next key...` — shows user what was discovered |
+| v1.14 stall detection | `_90_organize_history_wait` checks compress return value + before/after tokens |
+
+> [!IMPORTANT]
+> **Requires Agent Zero v1.14+** for the outer loop stall guard compatibility.
+>
+> With 15 API keys: 15 × 250K tokens/min = 3.75M tokens/min budget. Rate limiting during compression is nearly impossible. The 90K chat that took 59s with 1 key (42s rate-limit wait) should complete in 10-30s with 15 keys.
+
+---
+
+## v0.5.5 — "The Natural Separation"
+
+**The Final Fix.** Surgically separated the Compression logic from the aggressive rotation Engine, allowing Compression to run with Agent Zero's natural infinite patience, while fixing a major bug that caused empty-string responses to leak.
+
+| Feature | Detail |
+|---|---|
+| **Separated Compression Timeout** | Removed the artificial 25s/180s limits for Compression. It now runs naturally, but still rotates on 503/429 errors. |
+| **Empty-String Leak Fixed** | Fixed a bug where a 12s Chat timeout would accidentally leak an empty string to Agent Zero, causing the "You have sent the same message again" spam. |
+| **First-Prompt Hook Fixed** | The History Guard now correctly fetches the history object and properly triggers native compression even if a massive token file is pasted on the very first prompt. |
+
+---
+
+## Feature Matrix — All Versions
+
+| Feature | v0.4.7 | v0.4.9 | v0.5.0 | v0.5.1 | v0.5.2 | v0.5.3 | v0.5.4 | v0.5.5 |
+|---|---|---|---|---|---|---|---|---|
+| Multi-key rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Identity-aware health | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LRU/RPM selection | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Anti-dogpile | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Smart quarantine | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Rate-limit quarantine | 20s | 10s | 10s | 10s | **0s** | **Parsed** | **Parsed** | **Parsed** |
+| Rate-Limit Intelligence | ❌ | ❌ | ❌ | ❌ | ❌ | **✅** | **✅** | **✅** |
+| Zombie Guard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Compression guard | ✅ | ✅ | ✅ | ✅ | ✅ | **v1.14 native** | **v1.14 native** | **v1.14 native** |
+| Parallel compression | ❌ | ❌ | ❌ | ❌ | **✅** | **✅ (native)** | **✅ (native)** | **✅ (native)** |
+| Rate limiter fix | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Friendly errors | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Honest logs | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tool validation heal | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Clean uninstall | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+## Speed Evolution
+
+| Metric | v0.4.7 | v0.4.9 | v0.5.2 | v0.5.3 | v0.5.4 | v0.5.5 |
+|---|---|---|---|---|---|---|
+| Rate-limit quarantine | 20s | 10s | **0s** | **Parsed (exact)** | **Parsed (exact)** | **Parsed (exact)** |
+| Timeout quarantine | 20s | 3s | **3s** | **3s** | **3s** | **3s** |
+| Between-retry sleep | 0.1s | 0.05s | **0.05s** | **0.05s** | **0.05s** | **0.05s** |
+| Exhausted wait | Fixed 2s | Dynamic | **Never (for 429)** | **Dynamic** | **Dynamic** | **Dynamic** |
+| Compression | ~90s | ~90s | **~15s** | **~15s** | **Killed (25s limit)** | **Natural (No limit)** |
+| 90K chat (15 keys) | N/A | N/A | **Infinite loop** | **~10-30s** | **Timeout Spam** | **~10-30s (Smooth)** |
+

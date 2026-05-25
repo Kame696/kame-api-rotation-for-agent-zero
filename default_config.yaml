@@ -1,0 +1,18 @@
+# KAME API Rotation plugin — default settings.
+# Override via Plugin Settings UI or at any A0 config scope.
+
+# v0.5.7.4: verbose trace mode for log lines.
+# - false (default): exactly the same log surface as v0.5.7.3
+# - true: every call line additionally shows short key id, microsecond-
+#   level selection latency, pool snapshot (e.g. "pool 14/15 healthy"),
+#   and a cascade summary after rotations. Pulse warnings explicitly
+#   state "Local wait (no API calls)" and announce when the next key
+#   recovers. Pure observability — no engine algorithm change.
+#
+# Recommended ON when:
+#   - You suspect KAME is the bottleneck and want to verify it isn't.
+#   - You are tuning the API key pool and want to see which keys win.
+#   - You are debugging a cascade scenario.
+# Recommended OFF when:
+#   - Production / unattended runs where log noise hurts.
+verbose_trace: false

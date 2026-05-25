@@ -1,0 +1,9 @@
+name: api_rotation_by_kame
+title: Key-Aware Management Engine (API Rotation)
+description: The learning carousel for Agent Zero. Round-robin is dumb; KAME learns. Identity-aware health tracking per provider:model pair, RPM-aware predictive key selection, anti-dogpile + anti-thundering-herd guards for concurrency, Trust-the-Connection (zero artificial timeouts), smart quarantine that parses the provider's own retry-delay, and ETA-driven sleep that respects the cooldown EXACTLY instead of burning wasted 429 requests. Production-validated across thousands of operations. Clean monkey-patch + clean uninstall. Anti-bot jitter preserved on every wait. v1.0.0 — first stable release.
+version: 1.0.0
+settings_sections:
+  - agent
+per_project_config: false
+per_agent_config: false
+always_enabled: false
