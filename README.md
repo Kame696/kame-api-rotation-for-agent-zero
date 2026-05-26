@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🐢⚡ Key-Aware Management Engine ⚡🐢                 (API Rotation Plugin) for Agent Zero
+# \\ ~ 🐢⚡ Key-Aware Management Engine ⚡🐢 ~ // (API Rotation Plugin) for Agent Zero
 
 ### KAME — the learning carousel that keeps your AI agent alive
 
