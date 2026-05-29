@@ -1,11 +1,8 @@
 <!--
-  Settings UI for the api_rotation_by_kame plugin.
-  Renders inside A0's plugin settings modal.
-
-  v0.5.7.4: exposes a single toggle for the verbose trace mode. Toggling
-  the flag takes effect on the NEXT monologue start (the activation
-  extension re-reads the value on each start). Engine algorithm is
-  unaffected — this is pure log instrumentation.
+  Settings UI for the api_rotation_by_kame plugin (A0 plugin settings modal).
+  Settings are re-read on each monologue start and are pure configuration —
+  the rotation/selection algorithm is unaffected. (A legacy verbose_trace: true
+  still maps to the "verbose" log level.)
 -->
 <html>
 <head>
@@ -18,27 +15,64 @@
   <div x-data>
     <h2>KAME — API Rotation</h2>
     <p>
-      Multi-key rotation, anti-dogpile / anti-thundering-herd, Trust the
-      Connection (no artificial timeouts), smart quarantine, eternal
-      carousel. Engine settings are intentionally minimal — the plugin
-      is opinionated about how it rotates and how it survives failures.
+      Multi-key rotation with smart quarantine and an eternal carousel. The
+      engine is intentionally opinionated — these are the only knobs.
     </p>
 
-    <h3>Observability (v0.5.7.4)</h3>
+    <h3>Logging</h3>
 
     <div class="setting-row">
       <label>
-        <input type="checkbox" x-model="config.verbose_trace" />
-        Verbose trace mode
+        Log level
+        <select x-model="config.kame_log_level">
+          <option value="silent">silent — no plugin output (hard errors only)</option>
+          <option value="normal">normal — one line per success + events (recommended)</option>
+          <option value="verbose">verbose — full diagnostics</option>
+        </select>
       </label>
       <p class="hint">
-        Adds short key id, microsecond-level selection latency, pool snapshot
-        (e.g. <code>pool 14/15 healthy</code>), and a cascade summary to
-        every call log line. Pulse warnings explicitly say
-        <code>Local wait (no API calls)</code> and announce when the next
-        key recovers. Pure observability — <strong>no algorithm change</strong>
-        and no extra API traffic. Default OFF. Recommended ON when you
-        suspect KAME is the bottleneck or while tuning the key pool.
+        How much KAME writes to the Docker log; the rotation algorithm is the
+        same at every level. <strong>normal</strong> shows the pool count only
+        when degraded, <strong>silent</strong> keeps KAME out of the log
+        entirely, and <strong>verbose</strong> adds heartbeat, timing, pool
+        snapshot and a session summary.
+      </p>
+    </div>
+
+    <div class="setting-row">
+      <label>
+        Key display in logs
+        <select x-model="config.key_log_style">
+          <option value="fingerprint">fingerprint — anonymized id (recommended)</option>
+          <option value="prefix8">prefix8 — first 8 characters of the key</option>
+          <option value="full">full — the entire key (debug only)</option>
+        </select>
+      </label>
+      <p class="hint">
+        <strong>fingerprint</strong> is a hash like <code>k3f9a1</code> — not
+        your real key, so the secret never reaches the log.
+        <strong>full</strong> writes the whole key; use only for local debugging.
+      </p>
+    </div>
+
+    <h3>Limits</h3>
+
+    <div class="setting-row">
+      <label>
+        Daily-quota cooldown (seconds)
+        <input
+          type="number"
+          min="1"
+          max="86400"
+          step="1"
+          x-model.number="config.daily_quota_cooldown_seconds"
+        />
+      </label>
+      <p class="hint">
+        How long to rest a key after a <strong>daily-quota</strong> or
+        <strong>account / out-of-credit</strong> limit (any provider). Overrides
+        a misleadingly short retry hint and caps the adaptive backoff. Per-minute
+        limits are unaffected. Default <code>3600</code> (1h); range 1–86400.
       </p>
     </div>
   </div>

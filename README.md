@@ -4,7 +4,7 @@
 
 ### KAME — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B-purple.svg)](https://github.com/frdel/agent-zero)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
@@ -23,7 +23,7 @@ If KAME saved you from a rate-limit hell, consider a tip:
 
 ---
 
-<img src="webui/kame_banner.jpg" width="600" alt="KAME banner" />
+<img src="https://raw.githubusercontent.com/Kame696/kame-api-engine/main/webui/kame_banner.jpg" width="600" alt="KAME banner" />
 
 ### *4P1 R0T4T10N — 4FRE3D0M*
 
@@ -45,9 +45,9 @@ KAME does the **opposite** of every assumption round-robin makes:
 
 ### 🧠 Learns from every 429
 
-Parses the provider's own `retry-delay` from every error response and respects it **to the second**.
+Parses the provider's own `retry-delay` and respects it **to the second** on per-minute limits. On a **daily quota** it knows not to trust a misleadingly short delay — it cools that key for a real cooldown instead.
 
-No guessing. No fixed backoff. KAME asks the API how long to wait — and waits exactly that long.
+No guessing. No fixed backoff. Per-minute or daily, on any provider, KAME does the right thing.
 
 </td>
 <td width="50%" valign="top">
@@ -65,7 +65,7 @@ LRU tie-break ensures even spreading across the pool.
 
 ### 💤 Sleeps intelligently when keys cool
 
-When the entire pool is temporarily exhausted, KAME reads the soonest recovery time and **sleeps until then** (capped at 30s) — instead of burning wasted 429 requests that prolong the cooldown.
+When the entire pool is temporarily exhausted, KAME reads the soonest recovery time and **sleeps until then** (capped at 60s, re-checking after) — instead of burning wasted 429 requests that prolong the cooldown.
 
 Production-proven: **45 wasted requests in v0.5.7.x → 0 in v1.0.0.**
 
@@ -120,6 +120,34 @@ The single sleep event tells the whole story:
 
 > That's what production-validated means: **predictions accurate within the jitter window, zero crashes, zero wasted requests.**
 
+### v1.0.1 update — surviving a daily-quota storm (May 29, 2026)
+
+A second real-world run, on a **15-key Gemini pool**, hit the exact failure mode v1.0.1 was built for: a wave of *daily*-quota exhaustion that eventually took the **entire pool cold** at once. Here is KAME's own session summary at the 100-operation mark:
+
+```
+[KAME] Session: 100 ok · 15 limited (min 0, daily 15, quota 0) · 1 long-sleep · 11 server · 0 timeout · 0 auth · 0 other
+```
+
+| Metric | Value |
+|---|---|
+| Operations completed | **100** |
+| Rate limits classified as *daily* (correctly) | **15 / 15** — the v1.0.1 fix |
+| Rate limits mis-classified as per-minute (the v1.0.0 bug) | **0** |
+| Auth / timeout / unknown errors | **0** |
+| KAME engine crashes | **0** |
+
+When all 15 keys went cold, KAME announced the outage **once**, then slept quietly (no API calls) and woke within seconds of the first recovery:
+
+- Announced once: *"All keys cooling — next recovery in ~17m … retry around 06:32:23."*
+- Then ETA-sleeps only: *"Sleeping 17.8s … next key in ~16s"* → woke and picked the recovered key in **0.16ms**.
+
+And the eternal carousel never gave up. The single hardest call rode out the whole storm and **still returned a successful response**:
+
+- One `unified_call`: **2154.1s** wall time · **9 rotations** · **18 sleeps** · **1049s** of local waiting · ✅ success.
+- The pool then recovered all the way back to **15/15 healthy** and stayed there for the rest of the ~6-hour session.
+
+> v1.0.0 would have trusted the provider's misleading short `retryDelay` on those daily 429/503s and re-probed dead keys roughly once per second for hours. v1.0.1 rested each one for a real hour, slept through the total outage, and lost **zero** requests.
+
 ---
 
 ## ⚡ Quick start (3 steps)
@@ -135,7 +163,7 @@ Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.0.0 — ACTIVE
+  🐢⚡ KAME v1.0.1 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -144,10 +172,12 @@ Look for this banner on startup:
   ✓ Trust the Connection (No Artificial Timeouts)
   ✓ KAME-Aware Compression Guard
   ✓ Hybrid Learning (Parsed retry-delay + ETA-driven sleep)
-  ✓ Long-Delay Warning (>60s flagged for operator)
+  ✓ Daily-Quota & Account-Limit Aware (multi-provider)
+  ✓ Adaptive Backoff (provider-agnostic safety net)
   ✓ Rate Limiter Lock Fix
   ✓ Token Callback Support
-  ✓ Friendly Error Reporting
+  ✓ Friendly Error Reporting (real status + kind)
+  Note: keys are shown as anonymized ids (e.g. 'k3f9a1') — NOT your real keys.
 =======================================================
 ```
 
@@ -163,7 +193,7 @@ Look for this banner on startup:
 | Sick key recovery | guessed (often wrong) | **respected to the second** (parsed from response) |
 | Wasted 429 requests | many | **zero** |
 | Detectable as bot | yes (regular spin) | **no** (jitter on every wait) |
-| Long-delay handling | crashes or spins forever | **gracefully sleeps + warns operator** |
+| Daily-quota / out-of-credit key | trusts a misleading short retry, hammers a dead key | **detected → real cooldown, any provider** |
 | Compression flow | breaks on token limit | **rotates mid-compression**, finishes anyway |
 | Memory of failures | none | **identity-aware health** (per `provider:model`) |
 | Recovery from "all sick" pool | infinite retry, kills your quota | **ETA-driven sleep, wake exactly on time** |
@@ -172,7 +202,7 @@ Look for this banner on startup:
 
 ---
 
-## 🛡️ The 12 Shields
+## 🛡️ The 13 Shields
 
 | # | Shield | What it gives you |
 |---|---|---|
@@ -181,13 +211,14 @@ Look for this banner on startup:
 | 3 | 📊 **RPM-Aware Predictive Selection** | 60-second sliding window per key. Picks the one with most remaining capacity. LRU tie-break for even spreading. |
 | 4 | 🛡️ **Anti-Dogpile Guard** | At selection, the chosen key is marked busy NOW. Concurrent calls naturally pick different keys. |
 | 5 | 🐎 **Anti-Thundering-Herd** | The pending request counts in the 60s window BEFORE it completes, so other threads route around it. |
-| 6 | 💤 **ETA-Driven Sleep** | When all keys are sick, sleep until the soonest recovery (capped 30s). Re-select after waking. **Never call the API with a sick key.** |
+| 6 | 💤 **ETA-Driven Sleep** | When all keys are sick, sleep until the soonest recovery (capped 60s, then re-check). Re-select after waking. **Never call the API with a sick key.** |
 | 7 | 🎲 **Smart Hybrid Jitter** | `random.uniform(0.1, 1.5)` seconds on every wait. Anti-bot-detection. Prevents multi-client sync collisions. |
 | 8 | 🤝 **Trust the Connection** | **Zero artificial timeouts.** Slow legitimate work runs to completion. |
 | 9 | 📦 **KAME-Powered Compression** | History compression goes through the same eternal carousel. Multi-key rotation during summarization. |
-| 10 | ⚠️ **Long-Delay Warning** | When a parsed retry-after exceeds 60s (likely daily quota), KAME warns the operator. Value still respected, capped at 1 hour. |
-| 11 | 🔒 **Rate Limiter Deadlock Fix** | Replaces A0's `asyncio.Lock` with `threading.Lock`, eliminating an async deadlock under specific concurrency patterns. |
-| 12 | 🧹 **Clean Uninstall** | `hooks.py::uninstall()` reverts every monkey-patch. Drop the folder and KAME is gone — no leftover state. |
+| 10 | 📅 **Daily-Quota & Account-Limit Aware** | Detects daily-quota and out-of-credit (`insufficient_quota`) errors across providers and applies a real cooldown — instead of trusting a misleadingly short retry and hammering a dead key once per second. Configurable (`daily_quota_cooldown_seconds`, default 1h). |
+| 11 | 📈 **Adaptive Backoff** | Provider-agnostic safety net: if the same key keeps hitting rate limits, its cooldown escalates (20s → 40s → 80s … up to the ceiling) and resets on the first success. Kills re-probe bursts even when the provider strips all error details. |
+| 12 | 🔒 **Rate Limiter Deadlock Fix** | Replaces A0's `asyncio.Lock` with `threading.Lock`, eliminating an async deadlock under specific concurrency patterns. |
+| 13 | 🧹 **Clean Uninstall** | `hooks.py::uninstall()` reverts every monkey-patch. Drop the folder and KAME is gone — no leftover state. |
 
 ---
 
@@ -206,26 +237,27 @@ flowchart TD
     G --> H[acompletion - real API call]
     H --> I{Success?}
 
-    F --> J[Sleep min ETA+0.5s, 30s<br/>+ jitter 0.1-1.5s]
+    F --> J[Sleep min ETA+0.5s, 60s<br/>+ jitter 0.1-1.5s]
     J --> K[NO API calls during sleep]
     K --> C
 
-    I -->|Yes| L[Mark healthy<br/>Add to RPM log<br/>Return response]
-    I -->|No 429| M[Parse retry-delay]
-    M --> N{Delay > 60s?}
-    N -->|Yes| O[⚠ Warn operator]
-    N -->|No| P[Set sick_until]
-    O --> P
-    P --> C
+    I -->|Yes| L[Mark healthy<br/>reset backoff<br/>Return response]
+    I -->|No, rate-limit| M[Classify error +<br/>parse retry-delay]
+    M --> N{Daily / account limit?}
+    N -->|Yes| O[Long cooldown<br/>ignore misleading delay]
+    N -->|No| P[Per-minute: trust delay<br/>+ adaptive backoff]
+    O --> Q[Set sick_until]
+    P --> Q
+    Q --> C
 
     style E fill:#10b981
     style F fill:#f59e0b
     style L fill:#10b981
-    style O fill:#ef4444
+    style O fill:#f59e0b
     style J fill:#3b82f6
 ```
 
-The whole engine is **~800 lines in a single file** (`kame_engine.py`), monkey-patching `LiteLLMChatWrapper.unified_call`, `Topic.summarize_messages`, `Bulk.summarize`, and the framework's rate limiter.
+The whole engine is **~1,050 lines in a single file** (`kame_engine.py`), monkey-patching `LiteLLMChatWrapper.unified_call`, `Topic.summarize_messages`, `Bulk.summarize`, and the framework's rate limiter.
 
 <details>
 <summary><b>📐 Click for technical deep-dive (state schema + selection algorithm)</b></summary>
@@ -240,6 +272,7 @@ Every API key carries this dictionary, scoped under `{provider}:{model}`:
     "last_used":     float,  # for LRU tie-break + anti-dogpile
     "request_log":   [float],# 60s sliding window of request timestamps
     "last_sick_at":  float,  # for compression-aware "fresh recovery" filter
+    "consecutive_rl":int,    # consecutive rate-limit fails -> adaptive backoff (resets on success)
 }
 ```
 
@@ -261,7 +294,7 @@ In a 15-key pool firing 100 requests in 60 seconds, KAME spreads them roughly ev
 ```python
 soonest_eta = min(sick_until - now  for each sick key)
 if soonest_eta > 3.0:
-    wait = min(soonest_eta + 0.5, 30.0) + random.uniform(0.1, 1.5)
+    wait = min(soonest_eta + 0.5, 60.0) + random.uniform(0.1, 1.5)
 else:
     wait = 2.0 + random.uniform(0.1, 1.5)  # fallback for very short ETAs
 await asyncio.sleep(wait)
@@ -272,32 +305,64 @@ continue   # never fall through with a sick key
 
 ---
 
-## 📊 Verbose mode (opt-in observability)
+## 📊 Logging (silent / normal / verbose)
 
-KAME ships clean by default. When you want to see exactly what's happening, flip one switch.
+KAME explains itself in plain language. One setting — `kame_log_level` — controls how much it writes to the Docker log. **The rotation algorithm is identical at every level; this only changes what you see.** Change it in **Settings → Plugins → KAME → Log level**; it takes effect on the next monologue start (no restart).
 
-**Default (clean):**
+### `normal` (default) — success is never silent
+
+One compact line per **successful** call, plus rotations, limit hits, sleeps and errors. Keys appear as anonymized fingerprints (configurable via `key_log_style`). The pool-health count shows **only when the pool is degraded**, so a healthy pool stays quiet:
+
 ```
-[KAME] Chat|gemini-2.5-flash ➡ Calling...
-[KAME] Chat|gemini-2.5-flash ✅ AIzaSyDo... (1 attempt)
+[KAME] Chat|gemini-2.5-flash ✅ k0a770
 ```
 
-**Verbose trace** (Settings → Plugins → KAME → ☑ Verbose trace mode):
+When a key hits a limit, KAME tells you the **real reason** (v1.0.1, any provider) and rotates — then the success line says, in plain words, how many rotations it took (no more cryptic "3 attempts"):
+
+```
+[KAME] Chat|gemini-2.5-flash k0a770 ⏳ 429 per-minute → wait 37s · next key...
+[KAME] Chat|gemini-2.5-flash ✅ k1b8c2 · 1 rotation · pool 14/15 healthy
+```
+
+A daily-quota or out-of-credit key is rested for a real cooldown instead of being hammered once per second:
+
+```
+[KAME] Chat|gemini-2.5-flash k1b8c2 ⏳ 429 daily-quota → cooling 1h · next key...
+[KAME] Chat|gemini-2.5-flash ✅ k2c9d4 · 1 rotation · pool 13/15 healthy
+```
+
+### `verbose` — full diagnostics
+
+Everything in `normal`, plus a `Calling...` heartbeat, the picked-key line, per-call wall time, the **full** pool snapshot on every success, a cascade breakdown, and a periodic session summary. Best while tuning the key pool or when you suspect KAME is the bottleneck and want to prove it isn't:
+
 ```
 [KAME] Chat|gemini-2.5-flash ➡ Calling...
 [KAME] Chat|gemini-2.5-flash ➡ k0a770 picked in 0.08ms
 [KAME] Chat|gemini-2.5-flash ✅ k0a770 in 2.4s | pool 15/15 healthy
 ```
 
-**During a sleep cycle** (always visible, regardless of verbose mode):
+After a cascade across several keys (with a sleep in the middle):
+
 ```
-[KAME] Chat|gemini-2.5-flash 💤 All keys cooling. Sleeping 7.7s (no API calls)
-       - next key recovers in ~7s (wake at 18:09:00)
-[KAME] Chat|gemini-2.5-flash ➡ k0a770 picked in 0.08ms
-[KAME] Chat|gemini-2.5-flash ✅ k0a770 in 9.4s | pool 15/15 healthy | 5 rotations, 7.7s local wait
+[KAME] Chat|gemini-2.5-flash ✅ k2c9d4 in 9.4s | pool 13/15 healthy | 5 rotations, 1 sleep
 ```
 
-The sleep notification is **always visible**, so users never think the agent is stuck.
+### `silent` — the documented exception
+
+KAME stays out of the log entirely: no banner, no per-call line, no rotation or sleep notices. Only a **hard, unrecoverable error** still surfaces. Internal stats and key health are still tracked — only the log output is suppressed. Use it when you want the plugin to be invisible in the Docker log for fully unattended runs.
+
+### Sleep is always visible (except in `silent`)
+
+When the whole pool is cooling, KAME never goes dark without telling you. Near a recovery it logs each cycle (throttled); on a long outage (e.g. a full daily quota) it announces **once**, then waits quietly instead of spamming the log:
+
+```
+[KAME] Chat|gemini-2.5-flash 💤 All keys cooling. Sleeping 7.7s (no API calls) — next key in ~7s (wake 18:09:00)
+```
+```
+[KAME] Chat|gemini-2.5-flash 💤 All keys cooling — next recovery in ~1h. Waiting quietly (no API calls), retry around 19:05:00.
+```
+
+> The sleep notice means KAME is **intentionally** waiting, not stuck — so you never mistake a healthy cooldown for a hang.
 
 ---
 
@@ -305,9 +370,11 @@ The sleep notification is **always visible**, so users never think the agent is 
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `verbose_trace` | `false` | Toggle the detailed log mode shown above. |
+| `kame_log_level` | `normal` | How much KAME writes to the log: `silent` (nothing but hard errors), `normal` (one line per success + events; pool count only when degraded), or `verbose` (full diagnostics). A legacy `verbose_trace: true` still maps to `verbose`. |
+| `daily_quota_cooldown_seconds` | `3600` | How long to rest a key after a **daily-quota / out-of-credit** error (any provider). Also the adaptive-backoff ceiling. Clamped 1–86400. |
+| `key_log_style` | `fingerprint` | How keys appear in logs: `fingerprint` (anonymized id, never leaks the secret), `prefix8` (first 8 chars), or `full` (debug only). |
 
-That's the only knob. Everything else is opinionated and validated in production — the algorithm, sleep timing, jitter range, 60s RPM window, and quarantine logic are all tuned and tested. If you really want to tweak, the code in `kame_engine.py` is well-commented.
+Everything else is opinionated and validated in production — the algorithm, sleep timing, jitter range, 60s RPM window, and quarantine logic are all tuned and tested. If you really want to tweak, the code in `kame_engine.py` is well-commented.
 
 ---
 
@@ -325,6 +392,12 @@ KAME's `hooks.py::uninstall()` runs **BEFORE** deletion and reverts every monkey
 ## ❓ FAQ
 
 <details>
+<summary><b>Do I need to restart Agent Zero after installing KAME?</b></summary>
+
+No. A0 hot-reloads plugins: dropping KAME into your plugins folder (or toggling it on) clears the plugin/extension caches, and KAME activates on the **next agent turn** — no container restart, no framework restart, and it triggers no "reload the page" prompt (KAME ships no `extensions/webui`). The only prerequisite is having **multiple API keys** configured in A0's normal model settings — KAME never stores keys itself; it rotates the ones A0 already has.
+</details>
+
+<details>
 <summary><b>I only have one API key. Does KAME help?</b></summary>
 
 With one key, KAME is roughly equivalent to A0's native rate limiter. The eternal-carousel magic needs multiple keys. **Recommend 5+ for good RPM spreading.**
@@ -337,9 +410,9 @@ Likely not. If you have only 2-3 keys and one just succeeded with fresh RPM capa
 </details>
 
 <details>
-<summary><b>I'm seeing "Long retry delay parsed: 536s" — is this a bug?</b></summary>
+<summary><b>I'm seeing "429 daily-quota → cooling 1h" — is this a bug?</b></summary>
 
-No, it's a feature working correctly. The provider told KAME this specific key needs to wait 9 minutes — typically a daily quota reset. KAME respects it and surfaces the warning so you know.
+No — that's the v1.0.1 daily-quota shield working. KAME detected a daily-quota or out-of-credit error and is resting that key for a real cooldown (default 1h, set by `daily_quota_cooldown_seconds`) instead of trusting a misleadingly short retry and hammering a dead key once per second. Your other keys keep working; the rested key is re-tried after the cooldown.
 </details>
 
 <details>
@@ -349,28 +422,28 @@ No. KAME's "Trust the Connection" philosophy means zero artificial timeouts. A 9
 </details>
 
 <details>
-<summary><b>Does verbose_trace cost extra API calls?</b></summary>
+<summary><b>Does verbose / debug logging cost extra API calls?</b></summary>
 
-Zero. It's pure local instrumentation — just adds log lines.
+Zero. Every log level is pure local instrumentation — it only changes how many lines KAME prints, never how it calls the API. Even `silent` still tracks stats and key health internally; it just doesn't write them out.
 </details>
 
 <details>
 <summary><b>Can I use KAME with Anthropic / OpenAI / others, not just Gemini?</b></summary>
 
-Yes. KAME is provider-agnostic. It works wherever Agent Zero's LiteLLM layer works. The retry-delay parser handles Google, OpenAI, Anthropic, and generic HTTP `Retry-After` headers.
+Yes. KAME is provider-agnostic. It works wherever Agent Zero's LiteLLM layer works. The retry-delay parser handles Google, OpenAI, Anthropic, Groq, and generic HTTP `Retry-After` headers — including compound durations like "6m 11.52s". v1.0.1's daily-quota detection and adaptive backoff are also multi-provider, so an exhausted daily key is handled correctly no matter who serves it.
 </details>
 
 <details>
 <summary><b>What if all my keys die permanently?</b></summary>
 
-KAME keeps cycling. Auth errors (401) trigger a 1-hour quarantine for that key. If literally every key is dead, your agent sleeps 30s, wakes, tries again, sleeps 30s, etc., until you fix it. **No infinite spin against a wall.**
+KAME keeps cycling. Auth errors (401) and daily/account limits trigger a long cooldown (default 1h) for that key. If literally every key is dead, your agent sleeps (up to 60s per cycle), wakes, re-checks, and sleeps again until you fix it — announcing a long outage just once instead of spamming the log. **No infinite spin against a wall, no wasted API calls.**
 </details>
 
 ---
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ (verified through v1.15)
+- **Agent Zero**: v1.14+ (verified through v1.18)
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **No new dependencies** — uses stdlib only on top of what A0 already ships
@@ -379,10 +452,10 @@ KAME keeps cycling. Auth errors (401) trigger a 1-hour quarantine for that key. 
 
 ## 🤝 Contributing
 
-PRs welcome. The engine is intentionally small (~800 LOC, single file). When proposing changes:
+PRs welcome. The engine is intentionally small (~1,050 LOC, single file). When proposing changes:
 
 1. Keep the **engine algorithm** stable — selection, anti-dogpile, ETA-driven sleep are battle-tested.
-2. Add features behind opt-in flags when possible (see `verbose_trace` as a pattern).
+2. Add features behind opt-in settings when possible (see `kame_log_level` / `key_log_style` as a pattern).
 3. Log production behavior in `test_logs/` with version-named files so changes can be audited.
 
 Bugs and feature requests via [GitHub issues](https://github.com/Kame696/kame-api-engine/issues).
@@ -405,6 +478,7 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
+| **v1.0.1** | Quota awareness + reliability fixes + log overhaul | Google sends a misleading `retryDelay: 1s` on a *daily* 429 — trusting it re-probed a dead key once per second. Fixed with strict daily/account detection + a provider-agnostic adaptive backoff, plus honest per-call error reporting. Three reliability fixes: a mid-run chat message is now received **without** pressing *nudge agent* (KAME stopped swallowing A0's `InterventionException`); a stream that fails after emitting content no longer re-generates from scratch on another key (`got_any_chunk` guard, mirroring vanilla A0); and a sustained `503 server-busy` outage on a big pool now escalates gently instead of spinning forever. The logs were reworked into a clear `silent`/`normal`/`verbose` tri-state with self-explanatory wording (no more cryptic "N attempts"). Engine selection path unchanged. |
 | **v1.0.0** | First stable release | Engine validated: 1,163 ops / 117 rate limits / 0 crashes. ETA-driven sleep proven in production. |
 | v0.5.8.0 | The ETA Fix | Real log revealed: pulsing every 2s against sick keys burned ~45 wasted 429s in 26s. Fixed by sleeping exactly until next recovery. |
 | v0.5.7.4 | Verbose Trace | Added opt-in observability: key short id, selection latency, pool snapshot, cascade summary, compression-aware filter. |
@@ -432,7 +506,7 @@ If KAME made your agent less frustrating, drop a star ⭐ — it costs you nothi
 
 <div align="center">
 
-🐢⚡ **KAME v1.0.0** — *because round-robin was never enough*
+🐢⚡ **KAME v1.0.1** — *because round-robin was never enough*
 
 **Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
 

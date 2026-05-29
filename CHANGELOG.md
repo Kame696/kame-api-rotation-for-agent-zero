@@ -21,7 +21,157 @@ graph LR
 
 ---
 
-## v1.0.0 — current (FIRST STABLE RELEASE)
+## v1.0.1 — current
+
+**Multi-provider daily-quota & account-limit awareness + a full log overhaul.**
+A focused, additive release that fixes a real-world failure mode *and* makes the
+log self-explanatory — without touching the proven selection/rotation engine.
+When at least one key is healthy, KAME's selection behavior is identical to
+v1.0.0 — these changes only affect cooldown *duration* on failures, the
+all-keys-sick sleep cadence, and what gets written to the log.
+
+### Why (the bug)
+
+Some providers return a **misleading** short `retryDelay` on a *daily*-quota
+429. Real example from Google Gemini free tier: the daily limit (e.g. 250
+requests/day) is exhausted, the body carries
+`quotaId: ...PerDayPerProjectPerModel...`, yet it *also* says
+`retryDelay: "1s"`. v1.0.0 trusted that value and re-probed the dead key roughly
+**once per second** until the daily window reset — wasted requests against a key
+that could not recover for hours.
+
+### Fixed / Added
+
+- **Daily-quota & account-limit detection (multi-provider).** A strict marker
+  set (`PerDay`, `per day`, `/day`, `RPD`, `daily`, `insufficient_quota`, …)
+  distinguishes a *daily/account* limit from a *per-minute* one. On a daily or
+  out-of-credit error, KAME **ignores the misleading delay** and rests the key
+  for a real cooldown (`daily_quota_cooldown_seconds`, default **3600s / 1h**).
+  Per-minute limits are untouched: they still trust the provider's honest
+  `retryDelay` and recover in seconds.
+- **Adaptive backoff (provider-agnostic safety net).** When the provider strips
+  the error details (no marker, no parseable delay) and the *same* key keeps
+  failing with a rate-limit error, its cooldown escalates
+  (20s → 40s → 80s → … capped at `daily_quota_cooldown_seconds`) and **resets on
+  the first success**. This kills the re-probe burst on *any* provider, even one
+  we have no specific rule for. A key that recovers after its honest per-minute
+  delay never escalates.
+- **Hardened retry parser.**
+  - Reads the structured `exc.retry_delay` (Google `RetryInfo` Duration with
+    `.seconds`/`.nanos`).
+  - Parses **compound** durations: "6m 11.52s" (Groq), "2h 30m", "45s",
+    "2970.93s", and bare numbers.
+  - Accepted ceiling raised **3600s → 86400s (24h)** so honest long waits
+    (OpenAI/Groq daily) are respected instead of discarded to the 20s fallback.
+- **Honest per-call error reporting.** Failure lines now show the REAL error —
+  status + kind + action — e.g. `429 per-minute → wait 37s`,
+  `429 daily-quota → cooling 1h`, `insufficient_quota → cooling 24h`,
+  `invalid key → quarantined 1h`.
+- **Configurable key display (`key_log_style`).** Default `fingerprint` shows an
+  anonymized stable id (e.g. `k3f9a1`) that **never leaks the secret**; the
+  activation banner explains it. Options: `fingerprint` / `prefix8` / `full`.
+- **Quieter long outages.** When the whole pool is cooling for a long time
+  (e.g. a daily quota), KAME announces it **once** ("All keys cooling — next
+  recovery in ~1h. Waiting quietly…") instead of logging every cycle. The
+  all-keys-sick sleep cap was raised 30s → 60s (it re-checks after each nap).
+- **Optional session summary** in verbose mode (`ok / limited / server /
+  timeout / auth / other` counts), printed every ~100 calls and on uninstall.
+
+### Reliability fixes (intervention, mid-stream, server outages)
+
+Three additive fixes that harden the cascade's error handling. The
+selection/rotation path and the daily-quota classification are unchanged.
+
+- **Intervention passthrough — the "nudge" fix.** A0 raises
+  `InterventionException` from the streaming callbacks when you send a message
+  mid-generation, so the agent can stop and read it. KAME's broad
+  `except Exception` was swallowing it and rotating to the next key — which is
+  exactly why a mid-run message did nothing until you pressed the **nudge
+  agent** button. KAME now re-raises A0 control-flow exceptions
+  (`InterventionException` / `RepairableException` / `HandledException`), so a
+  message sent while KAME is working is received the way vanilla A0 receives it
+  — **no nudge needed**.
+- **`got_any_chunk` guard — no re-stream from zero.** If a stream fails *after*
+  it has already emitted content, KAME no longer rotates and re-generates the
+  whole response from scratch on another key; it re-raises so A0 restarts the
+  turn cleanly with intact history — mirroring vanilla A0's own contract.
+  Rate-limit and 503 storms fail at *connect* time (before any chunk), so the
+  eternal carousel is fully intact for them; only the rare
+  mid-stream-after-content case changes.
+- **Server-error (503/500) escalation.** A flat 5s cooldown on a *large* pool
+  let every key recover before it was re-tried, so a sustained `503
+  server-busy` outage could rotate forever without ever going quiet. A 503/500
+  now escalates gently per key (5 → 10 → 20 → 40 → 80s, capped 90s, **reset on
+  success**) via a dedicated `consecutive_server` counter, so a sustained
+  outage eventually takes the pool cold and the ETA-driven sleep takes over. A
+  transient blip still recovers in ~5s.
+
+### Logging overhaul
+
+The point of v1.0.1's log work: **you should be able to read one KAME line and
+know exactly what happened.** A user reading "3 attempts" reasonably understood
+it as KAME retrying the *same* key three times — it actually meant three
+*different* keys were tried. That ambiguity is gone.
+
+- **Tri-state log level (`kame_log_level`: `silent` / `normal` / `verbose`).**
+  Replaces the old `verbose_trace` checkbox, which still works as an alias
+  (`true` → `verbose`). The selection/rotation algorithm is identical at every
+  level; the level only changes what is printed.
+  - **`silent`** — KAME stays out of the Docker log entirely: no banner, no
+    per-call line, no rotation/sleep notices. Only a hard, unrecoverable error
+    surfaces. Internal stats and key health are still tracked — only the *output*
+    is suppressed. The documented exception for fully unattended runs.
+  - **`normal`** (default) — one compact line per **successful** call (success
+    is never silent), plus rotations, limit hits, sleeps and errors. The
+    pool-health count is shown **only when the pool is degraded**, so a healthy
+    pool stays quiet. No `Calling...` heartbeat, no raw attempt counter.
+  - **`verbose`** — everything in `normal`, plus the `Calling...` heartbeat, the
+    picked-key line, per-call wall time, the full pool snapshot on every success,
+    a cascade breakdown, and the periodic session summary.
+- **Clearer cascade wording.** The success line now reads, in plain words,
+  `· 2 rotations · pool 13/15 healthy` instead of the ambiguous `(N attempts)`.
+  The rotation count is computed as `attempt_no - 1 - sleep_count`, so an
+  all-keys-sick sleep cycle is no longer miscounted as a key rotation.
+- **Pool health visible by default when it matters.** The pool snapshot used to
+  be verbose-only. `normal` now shows `pool H/T healthy` whenever the pool is
+  degraded, so you can see how many keys are cooling without enabling verbose —
+  and a fully healthy pool still stays quiet.
+- **Hide-all option.** `silent` is the long-requested switch to keep KAME out of
+  the Docker log completely, for the rare case where any plugin output is
+  unwanted. It suppresses output only — never the rotation logic or stats.
+
+### New settings (all optional, safe defaults)
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `kame_log_level` | `normal` | `silent` (nothing but hard errors) / `normal` (one line per success + events; pool count only when degraded) / `verbose` (full diagnostics). Legacy `verbose_trace: true` → `verbose`. |
+| `daily_quota_cooldown_seconds` | `3600` | Cooldown for a detected daily/account limit (any provider). Also the adaptive-backoff ceiling. Clamped 1–86400. |
+| `key_log_style` | `fingerprint` | `fingerprint` (anonymized id) / `prefix8` / `full`. |
+
+### Engine API additions (backwards compatible)
+
+- New setters `set_log_level(level)`, `set_daily_cooldown(seconds)` and
+  `set_key_log_style(style)`. `set_verbose_trace(bool)` is kept as a
+  back-compat shim (`True` → `verbose`). The frozen public surface from v1.0.0
+  (`apply_kame_patch`, `remove_kame_patch`, the monkey-patched methods) is
+  unchanged.
+
+### Verified
+
+- Logic suite passes: daily floor (Google `1s` → 1h), per-minute trust
+  preserved, multi-provider classification (Google/OpenAI/Groq/Anthropic),
+  adaptive escalate/reset/cap, compound-duration parsing, key fingerprinting,
+  the log-level gating (silent/normal/verbose), cascade-rotation math
+  (`rotations = attempt_no - 1 - sleep_count`), and — new in this build — the
+  control-flow passthrough re-raise (intervention/nudge), the gentle 503/500
+  server-escalation curve (5→10→20→40→80, cap 90s, reset on success), and the
+  `got_any_chunk` re-raise gating.
+- Compatible with Agent Zero v1.14+ (verified through **v1.18** — all four
+  monkey-patch points and their internal dependencies unchanged upstream).
+
+---
+
+## v1.0.0 (FIRST STABLE RELEASE)
 
 **Production-validated.** Zero engine changes from v0.5.8.0. This release
 consolidates the journey, renames the plugin to its proper full name
