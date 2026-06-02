@@ -21,7 +21,88 @@ graph LR
 
 ---
 
-## v1.0.1 — current
+## v1.0.2 — current
+
+**Critical fix: a transient 5xx could be misclassified as a daily quota and cool
+the whole pool for an hour — plus a deeper "nudge" fix and honest waiting.**
+Triggered by a real ~6-hour Gemini run (02-06-2026) where the chat froze for
+~38 minutes. Cooldown / classification / logging / interruption only — the proven
+selection/rotation engine is UNCHANGED, so with >=1 healthy key behavior is
+identical to v1.0.0/1.0.1. Hence a patch (1.0.2).
+
+### Why (the bug, from the log)
+
+`gemini-3.5-flash` threw a wave of **503** errors whose verbose bodies carried
+quota / `resource_exhausted` / daily-ish tokens. v1.0.1's classifier checked that
+**text** before the status code, so each 503 was labeled
+`503 daily-quota → cooling 1h` and the whole 15-key chat pool was rested for an
+hour (and re-cooled by each new wave). Proof it was NOT a real daily quota: the
+same 503 was elsewhere classified `503 server-busy → retry 5s`; keys *succeeded*
+in the middle of the "daily" wave; and the **same keys** were `15/15 healthy` on
+the utility model at the same moment. Meanwhile the all-keys-cooling sleep slept
+through the user's messages and "nudge", and the `retry around HH:MM:SS` line
+advertised the next 60s re-check (not the real recovery) then went silent — so
+the operator waited past it and saw nothing happen.
+
+### Fixed
+
+- **5xx is always `server`, never `daily` (the critical fix).** `_classify_error`
+  now checks the status code (500/502/503/504/529 + the unambiguous server text
+  phrases) **before** the rate-limit/quota text branch. A real daily quota is a
+  429, never a 5xx, so a transient server blip can no longer be cooled for an
+  hour. Real 429 daily/account detection is unchanged.
+- **Interruptible cooling — the deeper "nudge" fix.** While the WHOLE pool is
+  cooling there is no active stream to carry A0's `handle_intervention()` check,
+  so v1.0.1's passthrough re-raise (streaming-only) couldn't help — a queued
+  message / nudge was slept through. The activation extension now stashes the
+  live agent (`set_current_agent`, task-local contextvar) and the all-keys-sick
+  sleep is **sliced**, honoring an intervention between slices. KAME yields
+  immediately instead of sleeping through it.
+- **Honest waiting (no more phantom retry time).** The long-outage line now shows
+  the **real** earliest-recovery wall-clock (`now + soonest_eta`), not the next
+  60s re-check, and emits a **periodic heartbeat** (~every 5 min) instead of one
+  line then full silence — so a healthy cooldown is never mistaken for a hang.
+- **Gentler per-minute backoff (less over-cooling).** Per-minute escalation now
+  has its **own** lower ceiling (`_KAME_RL_BACKOFF_CAP_S`, 5 min) and trusts the
+  provider's honest delay on the first strike (no 20s floor). Only *daily /
+  account* limits floor at the 1h `daily_quota_cooldown_seconds`. A healthy-but-
+  busy RPM key is never escalated toward an hour.
+- **Empty-stream guard.** An empty stream now rests the key 3s before rotating,
+  so an all-empty pool can't tight-spin with no cooldown.
+
+### Explicitly NOT changed
+
+- Key **selection** (RPM-aware predictive + anti-dogpile + anti-thundering-herd),
+  the eternal carousel, the ETA-driven-sleep *trigger*, identity-aware health,
+  the rate-limiter lock fix, clean uninstall, key fingerprinting — all identical.
+- The v1.0.1 streaming intervention passthrough and `got_any_chunk` guard are
+  kept as-is; v1.0.2 only adds the cooling-path intervention check on top.
+
+### Files changed
+
+| File | Change |
+| ---- | ------ |
+| `kame_engine.py` | `_classify_error` server-first; `_mark_key_health` split per-minute vs daily escalation + new `_KAME_RL_BACKOFF_CAP_S`; `set_current_agent` + `_kame_honor_intervention` + `_KAME_CURRENT_AGENT` contextvar; sliced interruptible cooling sleep + real-recovery clock + `_KAME_LONG_HEARTBEAT_S` heartbeat; empty-stream rest; version strings. |
+| `extensions/.../monologue/start/_10_kame_api_rotation.py` | stashes the live agent via `set_current_agent(self.agent)` each monologue start. |
+| `plugin.yaml` | version → 1.0.2. |
+| `README.md` | version badge / active banner / Evolution row; corrected the nudge claim, the daily-quota FAQ, and the ETA example to match real behavior. |
+| `CHANGELOG.md` | this entry. |
+| `tests/test_v1_0_2_fixes.py` | NEW — regression cases (5xx→server, per-minute escalation cap, empty-stream guard, recovery-clock messaging). |
+
+### Verified
+
+- `_classify_error`: 503/500/502/504/529 → `server` (5s) even with
+  quota / daily / `resource_exhausted` / `PerDay` text in the body; real 429
+  daily/account still → `daily` / `insufficient_quota` (1h floor); 429 per-minute
+  still → honest parsed delay.
+- `_mark_key_health`: per-minute escalation trusts the first delay and caps at
+  5 min; daily/account caps at the 1h daily ceiling; server caps at 90s; success
+  resets both counters.
+- Engine compiles; selection path unchanged.
+
+---
+
+## v1.0.1
 
 **Multi-provider daily-quota & account-limit awareness + a full log overhaul.**
 A focused, additive release that fixes a real-world failure mode *and* makes the

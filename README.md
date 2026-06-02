@@ -4,7 +4,7 @@
 
 ### KAME — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B-purple.svg)](https://github.com/frdel/agent-zero)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
@@ -163,7 +163,7 @@ Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.0.1 — ACTIVE
+  🐢⚡ KAME v1.0.2 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -353,16 +353,16 @@ KAME stays out of the log entirely: no banner, no per-call line, no rotation or 
 
 ### Sleep is always visible (except in `silent`)
 
-When the whole pool is cooling, KAME never goes dark without telling you. Near a recovery it logs each cycle (throttled); on a long outage (e.g. a full daily quota) it announces **once**, then waits quietly instead of spamming the log:
+When the whole pool is cooling, KAME never goes dark without telling you. Near a recovery it logs each cycle (throttled); on a long outage it announces the **real** earliest-recovery time, then keeps a heartbeat (~every 5 min) so you never mistake a healthy cooldown for a hang:
 
 ```
-[KAME] Chat|gemini-2.5-flash 💤 All keys cooling. Sleeping 7.7s (no API calls) — next key in ~7s (wake 18:09:00)
+[KAME] Chat|gemini-2.5-flash 💤 All keys cooling. Sleeping 7.7s (no API calls) — earliest recovery ~7s.
 ```
 ```
-[KAME] Chat|gemini-2.5-flash 💤 All keys cooling — next recovery in ~1h. Waiting quietly (no API calls), retry around 19:05:00.
+[KAME] Chat|gemini-2.5-flash 💤 All keys cooling — earliest recovery in ~1h (around 19:05:00). Re-checking every ~60s, no API calls.
 ```
 
-> The sleep notice means KAME is **intentionally** waiting, not stuck — so you never mistake a healthy cooldown for a hang.
+> The clock shown is the **true** earliest recovery (not the next 60s re-check), and the sleep is **interruptible** — a message or *nudge* during a cooldown is honored immediately (v1.0.2). So you never mistake a healthy cooldown for a hang.
 
 ---
 
@@ -412,7 +412,7 @@ Likely not. If you have only 2-3 keys and one just succeeded with fresh RPM capa
 <details>
 <summary><b>I'm seeing "429 daily-quota → cooling 1h" — is this a bug?</b></summary>
 
-No — that's the v1.0.1 daily-quota shield working. KAME detected a daily-quota or out-of-credit error and is resting that key for a real cooldown (default 1h, set by `daily_quota_cooldown_seconds`) instead of trusting a misleadingly short retry and hammering a dead key once per second. Your other keys keep working; the rested key is re-tried after the cooldown.
+No — a **429** daily-quota line is the daily-quota shield working: KAME detected a daily or out-of-credit limit and is resting that key for a real cooldown (default 1h, set by `daily_quota_cooldown_seconds`) instead of trusting a misleadingly short retry and hammering a dead key once per second. Your other keys keep working; the rested key is re-tried after the cooldown. (As of **v1.0.2**, a **5xx** server error — e.g. a transient Gemini `503` — is always treated as a short `server-busy` retry, *never* a daily quota, even if its body mentions "quota" — so a server blip can't cool a healthy key for an hour.)
 </details>
 
 <details>
@@ -478,7 +478,8 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
-| **v1.0.1** | Quota awareness + reliability fixes + log overhaul | Google sends a misleading `retryDelay: 1s` on a *daily* 429 — trusting it re-probed a dead key once per second. Fixed with strict daily/account detection + a provider-agnostic adaptive backoff, plus honest per-call error reporting. Three reliability fixes: a mid-run chat message is now received **without** pressing *nudge agent* (KAME stopped swallowing A0's `InterventionException`); a stream that fails after emitting content no longer re-generates from scratch on another key (`got_any_chunk` guard, mirroring vanilla A0); and a sustained `503 server-busy` outage on a big pool now escalates gently instead of spinning forever. The logs were reworked into a clear `silent`/`normal`/`verbose` tri-state with self-explanatory wording (no more cryptic "N attempts"). Engine selection path unchanged. |
+| **v1.0.2** | Critical 5xx-misclassification fix + deeper nudge + honest waiting | A real ~6-hour Gemini run froze the chat ~38 min: transient `503`s whose bodies mentioned quota/daily were misclassified as a *daily* quota and cooled the whole pool for 1h. Fixed by classifying **any 5xx as a short `server` retry before** the quota-text check (a real daily quota is a 429, never a 5xx). Plus the *deeper* nudge fix — while the whole pool is cooling there's no stream to carry A0's intervention check, so the sleep is now **sliced and interruptible** (honors a message/nudge mid-cooldown); the long-outage line shows the **true** recovery clock + a heartbeat instead of a misleading "retry around" then silence; and per-minute backoff got its own lower ceiling so a busy RPM key is never over-cooled toward 1h. Engine selection path unchanged. |
+| **v1.0.1** | Quota awareness + reliability fixes + log overhaul | Google sends a misleading `retryDelay: 1s` on a *daily* 429 — trusting it re-probed a dead key once per second. Fixed with strict daily/account detection + a provider-agnostic adaptive backoff, plus honest per-call error reporting. Three reliability fixes: a mid-run chat message sent **while a response is streaming** is received without pressing *nudge agent* (KAME stopped swallowing A0's `InterventionException`) — extended in v1.0.2 to also cover the all-keys-cooling sleep; a stream that fails after emitting content no longer re-generates from scratch on another key (`got_any_chunk` guard, mirroring vanilla A0); and a sustained `503 server-busy` outage on a big pool now escalates gently instead of spinning forever. The logs were reworked into a clear `silent`/`normal`/`verbose` tri-state with self-explanatory wording (no more cryptic "N attempts"). Engine selection path unchanged. |
 | **v1.0.0** | First stable release | Engine validated: 1,163 ops / 117 rate limits / 0 crashes. ETA-driven sleep proven in production. |
 | v0.5.8.0 | The ETA Fix | Real log revealed: pulsing every 2s against sick keys burned ~45 wasted 429s in 26s. Fixed by sleeping exactly until next recovery. |
 | v0.5.7.4 | Verbose Trace | Added opt-in observability: key short id, selection latency, pool snapshot, cascade summary, compression-aware filter. |
@@ -506,7 +507,7 @@ If KAME made your agent less frustrating, drop a star ⭐ — it costs you nothi
 
 <div align="center">
 
-🐢⚡ **KAME v1.0.1** — *because round-robin was never enough*
+🐢⚡ **KAME v1.0.2** — *because round-robin was never enough*
 
 **Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
 

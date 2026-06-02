@@ -8,6 +8,9 @@ replaces the old ``verbose_trace`` checkbox with a tri-state ``kame_log_level``
 "verbose" so existing configs keep working. All settings are cheap setters
 applied on every monologue start, so changing them in the UI takes effect on
 the next turn (no patch re-apply needed).
+v1.0.2: also stashes the live agent (``set_current_agent``) each monologue
+start, so the engine's all-keys-cooling sleep can honor a user message /
+"nudge" instead of sleeping through it.
 """
 
 from helpers.extension import Extension
@@ -23,6 +26,7 @@ class KameActivation(Extension):
                 set_verbose_trace,
                 set_daily_cooldown,
                 set_key_log_style,
+                set_current_agent,
             )
 
             # Pick up plugin settings (best-effort; defaults preserve behavior).
@@ -44,6 +48,15 @@ class KameActivation(Extension):
                 set_key_log_style(cfg.get("key_log_style", "fingerprint"))
             except Exception:
                 # Older A0 versions may lack get_plugin_config; fall back to defaults.
+                pass
+
+            # v1.0.2: stash the live agent so the engine's all-keys-cooling
+            # sleep can honor a queued user message / "nudge" instead of
+            # sleeping through it. Task-local (contextvar) — safe under
+            # concurrent agents. Best-effort; never blocks activation.
+            try:
+                set_current_agent(self.agent)
+            except Exception:
                 pass
 
             apply_kame_patch()

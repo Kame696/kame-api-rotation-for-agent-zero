@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.1.
+"""KAME API Rotation & Stability Engine v1.0.2.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -14,6 +14,30 @@ Full-Spectrum Protections:
 11. Friendly Error Reporting (clean messages, honest status, real error class)
 12. Daily-Quota & Account-Limit Aware (multi-provider, v1.0.1)
 13. Adaptive Backoff (provider-agnostic safety net, v1.0.1)
+
+v1.0.2 FIXES (cooldown / classification / logging / interruption only — the
+engine SELECTION/ROTATION path is STILL UNCHANGED; behavior with >=1 healthy
+key is identical to v1.0.0/1.0.1):
+- 5xx is ALWAYS classified 'server' (short, escalating), regardless of the
+  error body. A transient Gemini 503 whose verbose body happened to carry
+  quota/resource_exhausted/daily tokens was being routed into the daily-quota
+  branch and cooling a HEALTHY key for 1h — taking the whole chat pool cold
+  while the same keys stayed healthy on other models. A real daily quota is a
+  429, never a 5xx, so the status code now wins.
+- Interruptible cooling (the deeper "nudge" fix): while the WHOLE pool is
+  cooling there is no active stream to carry A0's handle_intervention() check,
+  so a user message / "nudge" was slept through. The activation extension now
+  stashes the live agent; the all-keys-sick sleep is sliced and honors an
+  intervention between slices, so KAME yields immediately.
+- Honest waiting: the long-outage line shows the REAL earliest-recovery clock
+  (not the next 60s re-check, which the old "retry around" misleadingly showed)
+  and emits a periodic heartbeat instead of going fully silent.
+- Gentler per-minute backoff: per-minute escalation has its OWN lower ceiling
+  and trusts the provider's honest first delay; only daily/account limits floor
+  at the configured daily cooldown. A healthy-but-busy RPM key is never cooled
+  toward 1h.
+- Empty-stream guard: an empty stream rests the key briefly before rotating, so
+  an all-empty pool can't tight-spin.
 
 v1.0.1 BEHAVIORAL ADDITIONS (engine selection/rotation path UNCHANGED):
 - Daily-quota / account-limit awareness. Some providers (notably Google)
@@ -119,6 +143,10 @@ _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_u
 _KAME_LOCK = threading.Lock()
 _KAME_PATCHED = False
 _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
+# v1.0.2: the live A0 agent for the current async task, stashed by the activation
+# extension at monologue start. Lets the all-keys-cooling sleep honor a user
+# message / "nudge" (InterventionException) instead of sleeping through it.
+_KAME_CURRENT_AGENT = contextvars.ContextVar('kame_agent', default=None)
 
 # --- v1.0.1: log verbosity level (replaces the old verbose_trace toggle) ---
 # Set by the activation extension from the `kame_log_level` plugin setting:
@@ -160,6 +188,18 @@ _KAME_HARD_DELAY_CAP_S = 86400.0  # 24h
 # cold so the ETA-driven sleep takes over; any success resets it, so transient
 # blips never escalate.
 _KAME_SERVER_BACKOFF_CAP_S = 90.0
+
+# --- v1.0.2: per-minute adaptive-backoff ceiling (separate from the daily one) ---
+# Per-minute (RPM) limits recover in ~60s. The blind-daily safety net may still
+# escalate a key that keeps failing, but a genuinely per-minute key must NOT climb
+# toward the 1h daily ceiling. Cap per-minute escalation here instead.
+_KAME_RL_BACKOFF_CAP_S = 300.0  # 5 min
+
+# --- v1.0.2: heartbeat cadence while the WHOLE pool cools for a long outage
+# (longer than the 60s re-check). Instead of one line then full silence, KAME
+# re-states "still cooling, ~Xm left, recovery around HH:MM" this often, so the
+# operator never mistakes a healthy cooldown for a hang.
+_KAME_LONG_HEARTBEAT_S = 300.0  # 5 min
 
 # Minimum real-time gap between repeated "all keys cooling" sleep log lines
 # while the soonest recovery is still near (avoids per-cycle spam).
@@ -233,6 +273,20 @@ def set_key_log_style(style) -> None:
     s = str(style or "").strip().lower()
     if s in ("fingerprint", "prefix8", "full"):
         _KAME_KEY_LOG_STYLE = s
+
+
+def set_current_agent(agent) -> None:
+    """Stash the live A0 agent for the current async task (v1.0.2).
+
+    Called by the activation extension at monologue start. Lets the
+    all-keys-cooling sleep honor a queued user message / "nudge" instead of
+    sleeping through it (see _kame_honor_intervention). Best-effort: the
+    contextvar is task-local, so concurrent agents/contexts never collide.
+    """
+    try:
+        _KAME_CURRENT_AGENT.set(agent)
+    except Exception:
+        pass
 
 
 def _key_short_id(key: str) -> str:
@@ -482,17 +536,21 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
       gives successful keys slightly heavier "weight" in the 60s window, which
       biases `_get_best_key` toward more even dispersion across the pool.
 
-    v1.0.1 adaptive backoff:
-      For rate-limit-family failures (per_minute / daily / insufficient_quota)
-      the per-key `consecutive_rl` counter escalates the cooldown
-      (20s -> 40s -> ... capped at _KAME_DAILY_COOLDOWN_S). A success resets
-      it. The escalation only ever RAISES the cooldown, so an honest
-      per-minute retryDelay is respected on the first failure; escalation only
-      bites a key that keeps failing despite waiting (the "blind daily" case).
-      v1.0.1 fix: server errors (503/500) get their own gentler escalation
-      (5s -> 10s -> ... capped at _KAME_SERVER_BACKOFF_CAP_S) via a separate
-      `consecutive_server` counter, so a sustained outage on a big pool stops
-      spinning and lets the ETA-driven sleep take over.
+    Adaptive backoff (v1.0.2 — per-kind ceilings):
+      The per-key `consecutive_rl` / `consecutive_server` counters escalate
+      cooldowns and reset on any success.
+      - daily / insufficient_quota: escalate 20s -> 40s -> ... capped at
+        _KAME_DAILY_COOLDOWN_S (the classifier already floors these at the daily
+        cooldown; the escalation is just a belt-and-suspenders net).
+      - per_minute: the FIRST strike trusts the provider's honest retryDelay (no
+        floor); repeats escalate only up to the much lower _KAME_RL_BACKOFF_CAP_S,
+        so a healthy-but-busy RPM key is never cooled toward the 1h daily ceiling
+        (the v1.0.1 bug). The "blind daily" case — a daily-dead key with no
+        marker, classified per_minute — still escalates, just bounded here.
+      - server (5xx): a separate `consecutive_server` counter escalates
+        5s -> 10s -> ... capped at _KAME_SERVER_BACKOFF_CAP_S, so a sustained
+        outage on a big pool stops spinning and lets the ETA-driven sleep take
+        over. A transient blip still recovers in ~5s.
     """
     global _KAME_KEY_HEALTH, _KAME_CALL_COUNT
     now = time.time()
@@ -514,13 +572,29 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
             _KAME_CALL_COUNT += 1
         else:
             applied = float(delay)
-            if kind in ("per_minute", "daily", "insufficient_quota"):
+            if kind in ("daily", "insufficient_quota"):
+                # Real daily / account limit: the classifier already floored this
+                # at the daily cooldown; the escalation is a belt-and-suspenders
+                # safety net, capped at the SAME daily ceiling.
                 cnt = int(kd.get("consecutive_rl", 0)) + 1
                 kd["consecutive_rl"] = cnt
                 escalated = min(20.0 * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S)
                 applied = max(applied, escalated)
+            elif kind == "per_minute":
+                # v1.0.2: per-minute (RPM) keys recover in ~60s. Trust the
+                # provider's honest delay on the FIRST strike (no 20s floor), and
+                # if the SAME key keeps failing, escalate only up to the
+                # per-minute ceiling (NOT the 1h daily one) — so a healthy-but-
+                # busy RPM key is never cooled toward an hour. (The blind-daily
+                # case — a daily-dead key with no marker — still escalates here,
+                # just bounded at _KAME_RL_BACKOFF_CAP_S instead of 1h.)
+                cnt = int(kd.get("consecutive_rl", 0)) + 1
+                kd["consecutive_rl"] = cnt
+                if cnt >= 2:
+                    escalated = min(20.0 * (2 ** (cnt - 2)), _KAME_RL_BACKOFF_CAP_S)
+                    applied = max(applied, escalated)
             elif kind == "server":
-                # v1.0.1 fix: gentle escalation for a SUSTAINED 503/500 outage.
+                # v1.0.1 fix: gentle escalation for a SUSTAINED 5xx outage.
                 # First failure stays ~5s; a key that keeps failing climbs
                 # 5 -> 10 -> 20 -> 40 -> 80 (capped) so the pool eventually goes
                 # cold and the EXHAUSTED_RETRY ETA-sleep takes over instead of
@@ -631,7 +705,21 @@ def _classify_error(exc):
 
     status_code = getattr(exc, "status_code", None)
 
-    # Rate limits / quota
+    # Server / transient errors FIRST (v1.0.2). A 5xx is the provider being
+    # momentarily overloaded, NOT the key being spent. Some providers (notably
+    # Google) put quota / resource_exhausted / daily text in a 503 body; the
+    # v1.0.1 order checked that text BEFORE the status code, so such a 503 fell
+    # into the daily-quota branch and cooled a HEALTHY key for an hour — taking
+    # the whole pool cold while the same keys stayed healthy on other models. A
+    # real daily quota is a 429, never a 5xx, so the status code wins here. The
+    # 'server' kind gets the gentle escalating cooldown, not the 1h daily floor.
+    if status_code in (500, 502, 503, 504, 529) \
+            or "service unavailable" in err_msg or "serviceunavailable" in err_msg \
+            or "internal server error" in err_msg or "bad gateway" in err_msg \
+            or "gateway timeout" in err_msg:
+        return 5, "server", (status_code or 503)
+
+    # Rate limits / quota (only when it is NOT an explicit server 5xx above)
     if status_code == 429 or any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
         parsed = _extract_retry_delay(exc)
         if _is_daily_or_account_limit(exc):
@@ -639,12 +727,6 @@ def _classify_error(exc):
             delay = max(parsed, _KAME_DAILY_COOLDOWN_S)
             return delay, kind, (status_code or 429)
         return parsed, "per_minute", (status_code or 429)
-
-    # Server errors: API temporarily busy, doesn't cost RPM, recovers fast
-    if status_code == 503 or "service unavailable" in err_msg or "serviceunavailable" in err_msg:
-        return 5, "server", (status_code or 503)
-    if status_code == 500 or "internal server error" in err_msg:
-        return 5, "server", (status_code or 500)
 
     # Everything else
     return 20, "other", status_code
@@ -790,6 +872,38 @@ def _get_all_api_keys(model_instance) -> list:
         return []
 
 
+# --- v1.0.2: honor user intervention / "nudge" during retries & cooling ---
+
+async def _kame_honor_intervention():
+    """Let A0's InterventionException surface during retries / cooling (v1.0.2).
+
+    When the user sends a message or presses "nudge" while KAME is rotating or
+    sleeping on a cold pool, there is no active stream to carry A0's
+    handle_intervention() check — so the message was slept through. We call it
+    here against the agent stashed at monologue start, so the carousel yields
+    immediately. ONLY A0 control-flow exceptions propagate; any other error from
+    the check is swallowed so it can never break rotation. No-op when there is
+    no agent handle or A0 lacks the method (e.g. a standalone test harness).
+    """
+    if not _KAME_PASSTHROUGH_EXC:
+        return
+    try:
+        agent = _KAME_CURRENT_AGENT.get()
+    except Exception:
+        agent = None
+    if agent is None:
+        return
+    handler = getattr(agent, "handle_intervention", None)
+    if handler is None:
+        return
+    try:
+        await handler()
+    except _KAME_PASSTHROUGH_EXC:
+        raise
+    except Exception:
+        return
+
+
 # --- THE COMMANDER ---
 
 async def _kame_unified_call(
@@ -861,19 +975,26 @@ async def _kame_unified_call(
     _call_started_at = time.perf_counter()
     _cooldown_overhead_s = 0.0
     _sleep_count = 0
-    _long_cool_logged = False   # v1.0.1: dedupe long-outage sleep logging
-    _last_sleep_log_at = 0.0    # v1.0.1: throttle near-recovery sleep logging
+    _long_cool_logged = False        # v1.0.1: dedupe long-outage sleep logging
+    _last_sleep_log_at = 0.0         # v1.0.1: throttle near-recovery sleep logging
+    _last_long_heartbeat_at = 0.0    # v1.0.2: throttle long-outage heartbeat
 
     attempt_no = 0
     while True:  # ETERNAL CAROUSEL - all call types use same robust rotation
         attempt_no += 1
+
+        # v1.0.2: once past the clean first attempt (i.e. we are rotating or
+        # cooling), honor a queued user message / "nudge" so KAME never sleeps
+        # through an intervention. The happy path (first attempt) is untouched.
+        if attempt_no > 1:
+            await _kame_honor_intervention()
 
         _select_t0 = time.perf_counter()
         key, status = _get_best_key(identity, all_keys)
         _select_ms = (time.perf_counter() - _select_t0) * 1000.0
 
         if status == "EXHAUSTED_RETRY":
-            # v0.5.8.0 ETA-driven sleep (v1.0.1 quieter logging).
+            # v0.5.8.0 ETA-driven sleep (v1.0.2: honest logging + interruptible).
             # All keys sick. Sleep until the SOONEST key recovers (capped)
             # instead of pulsing. After sleep we `continue` so we re-select -
             # we NEVER call acompletion() with a sick key. Jitter preserved.
@@ -891,23 +1012,37 @@ async def _kame_unified_call(
             _now_t = time.time()
             _eta_known = _soonest_eta is not None
             _is_long = _eta_known and _soonest_eta > 120.0
-            _wake_at = time.strftime("%H:%M:%S", time.localtime(_now_t + wait))
             _eta_label = _fmt_duration(_soonest_eta) if _eta_known else "unknown"
+            # v1.0.2: the REAL earliest-recovery wall-clock. The old line showed
+            # "retry around {now+wait}" — but wait is capped at ~60s, so it
+            # advertised the next re-check, NOT the recovery, then went silent;
+            # users waited past it and saw nothing happen. Show the truth.
+            _recovery_at = (
+                time.strftime("%H:%M:%S", time.localtime(_now_t + _soonest_eta))
+                if _eta_known else "unknown"
+            )
 
             if _is_long:
-                # Long outage (e.g. daily quota): announce ONCE, then wait
-                # quietly. Avoids ~120 log lines/hour while still showing the
-                # operator that KAME is intentionally waiting (not stuck).
-                if not _long_cool_logged:
+                # Long outage (e.g. a real daily quota): announce once, then a
+                # periodic heartbeat (NOT full silence) with the true recovery
+                # time, so the operator can see KAME is intentionally waiting.
+                _need_announce = not _long_cool_logged
+                _need_heartbeat = (
+                    _long_cool_logged
+                    and (_now_t - _last_long_heartbeat_at) >= _KAME_LONG_HEARTBEAT_S
+                )
+                if _need_announce:
                     _long_cool_logged = True
                     with _KAME_LOCK:
                         _KAME_STATS["long_sleeps"] += 1
-                    if _lvl_normal():
-                        PrintStyle.warning(
-                            f"[KAME] {call_type}|{model_short} \U0001f4a4 All keys cooling — "
-                            f"next recovery in ~{_eta_label}. Waiting quietly (no API calls), "
-                            f"retry around {_wake_at}."
-                        )
+                if (_need_announce or _need_heartbeat) and _lvl_normal():
+                    _last_long_heartbeat_at = _now_t
+                    _verb = "All keys cooling" if _need_announce else "Still cooling"
+                    PrintStyle.warning(
+                        f"[KAME] {call_type}|{model_short} \U0001f4a4 {_verb} — earliest "
+                        f"recovery in ~{_eta_label} (around {_recovery_at}). Re-checking "
+                        f"every ~60s, no API calls."
+                    )
             else:
                 # Near recovery: log each cycle but throttle to avoid spam.
                 _long_cool_logged = False
@@ -915,11 +1050,18 @@ async def _kame_unified_call(
                     _last_sleep_log_at = _now_t
                     PrintStyle.warning(
                         f"[KAME] {call_type}|{model_short} \U0001f4a4 All keys cooling. "
-                        f"Sleeping {wait:.1f}s (no API calls) — next key in ~{_eta_label} "
-                        f"(wake {_wake_at})"
+                        f"Sleeping {wait:.1f}s (no API calls) — earliest recovery ~{_eta_label}."
                     )
 
-            await asyncio.sleep(wait)
+            # v1.0.2: interruptible sleep. Sleep in short slices and honor a
+            # queued user message / "nudge" between them, so KAME yields at once
+            # instead of sleeping through an intervention on a cold pool.
+            _slept = 0.0
+            while _slept < wait:
+                _slice = min(1.0, wait - _slept)
+                await asyncio.sleep(_slice)
+                _slept += _slice
+                await _kame_honor_intervention()
             _cooldown_overhead_s += (time.perf_counter() - _sleep_started)
             continue   # re-select after sleep; never call API with a sick key.
         elif _lvl_verbose():
@@ -972,8 +1114,16 @@ async def _kame_unified_call(
                                     approximate_tokens(output["response_delta"]),
                                 )
 
-                    # If stream completed but produced no content, retry with next key
+                    # If stream completed but produced no content, rest the key
+                    # briefly (v1.0.2: avoid a tight no-cooldown spin if every key
+                    # returns empty) and rotate to the next key.
                     if not result.response and not result.reasoning:
+                        _mark_key_health(identity, key, False, 3, "other")
+                        if _lvl_verbose():
+                            PrintStyle.warning(
+                                f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                                f"⚠️ empty stream → rest 3s · next key..."
+                            )
                         continue
 
                 except Exception as stream_err:
@@ -1184,7 +1334,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.1] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.2] Patch Failed: {e}")
         return False
 
 
@@ -1214,7 +1364,7 @@ def remove_kame_patch():
 
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.1 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.2 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",
