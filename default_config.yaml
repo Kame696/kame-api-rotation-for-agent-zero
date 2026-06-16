@@ -20,3 +20,22 @@ daily_quota_cooldown_seconds: 3600
 #   prefix8     — first 8 chars of the key (mild partial leak)
 #   full        — the entire key (debug only; writes the secret to the log)
 key_log_style: fingerprint
+
+# Show the ENTIRE raw error on every failed call (debug). Off by default.
+# When true, each failure ALSO logs the raw exception — its type, status code,
+# retry attributes and the FULL untruncated message — right beside the
+# classification KAME gave it (kind + applied cooldown). Use this to VERIFY
+# there is no misclassification (e.g. a "503 server-busy" that is really a
+# quota or network error). Independent of kame_log_level (works even with
+# 'silent'), and it never changes rotation/cooldown behavior — pure data.
+kame_log_full_errors: false
+
+# Collapse repetitive 503-storm logs. On by default. During a sustained outage
+# the per-rotation failure lines are near-identical and can number in the
+# hundreds (one real Gemini outage logged 1,063 of them in 83 min). When true,
+# at 'normal' level KAME prints the FIRST failure of a storm, then collapses the
+# repeats into ONE aggregate line every ~20s plus a "storm over" recap on
+# recovery — so the log stays readable. 'verbose' still prints every line, and
+# kame_log_full_errors overrides this (shows every line). Set false to restore
+# one line per failure at 'normal'. Pure observability — rotation is unchanged.
+kame_collapse_storm_logs: true

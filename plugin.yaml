@@ -1,7 +1,7 @@
 name: api_rotation_by_kame
 title: Key-Aware Management Engine (API Rotation)
 description: KAME rotates API keys to avoid 429 errors, cooldown exhausted keys, respect retry delays, and route around provider outages during long agent runs.
-version: 1.0.2
+version: 1.0.3
 settings_sections:
   - agent
 per_project_config: false

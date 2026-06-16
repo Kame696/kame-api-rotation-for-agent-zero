@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.2.
+"""KAME API Rotation & Stability Engine v1.0.3.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -14,6 +14,28 @@ Full-Spectrum Protections:
 11. Friendly Error Reporting (clean messages, honest status, real error class)
 12. Daily-Quota & Account-Limit Aware (multi-provider, v1.0.1)
 13. Adaptive Backoff (provider-agnostic safety net, v1.0.1)
+
+v1.0.3 ADDITIONS (observability + faster outage recovery — the SELECTION path
+``_get_best_key`` is STILL UNCHANGED; the happy path is identical to v1.0.2):
+- Full raw-error log toggle (``kame_log_full_errors``, off by default): every
+  failed call can ALSO print the raw exception (type, status code, retry attrs,
+  FULL untruncated message) beside the classification KAME assigned (kind +
+  cooldown), so the operator can VERIFY there is no misclassification (e.g. a
+  503 that is really a quota/network error). Orthogonal to ``kame_log_level``
+  (prints even in ``silent``); pure observability, zero behavior change.
+- Precise durations: ``_fmt_duration`` now shows the seconds component under an
+  hour (``90s`` / ``1m30s``) instead of rounding to the nearest minute. The old
+  rounding showed the 90s server-backoff cap as a misleading "2m" (and 80s as
+  "1m"); the log now states the true cooldown. Clearer failure/outage wording
+  ("key cooled 1m30s · rotating to next key", "Provider outage — … will resume
+  the instant a key answers").
+- Fast pool recovery: when a call succeeds right after KAME had to sleep on a
+  fully-cold pool (an outage just ended), the other 5xx-cooled keys are thawed
+  forward to a few seconds from now, so the pool snaps back to healthy at once
+  instead of trickling back one ~90s cooldown at a time ("rotate for hours, but
+  resume ASAP"). Scoped to ``server`` cooldowns ONLY — daily / quota / auth
+  cooldowns are never cleared by another key's success; it only ever SHORTENS a
+  cooldown, never extends one or makes a key sick.
 
 v1.0.2 FIXES (cooldown / classification / logging / interruption only — the
 engine SELECTION/ROTATION path is STILL UNCHANGED; behavior with >=1 healthy
@@ -211,6 +233,34 @@ _KAME_SLEEP_LOG_MIN_INTERVAL_S = 5.0
 # "full": the whole key (debug only; leaks the secret into logs).
 _KAME_KEY_LOG_STYLE = "fingerprint"
 
+# --- v1.0.3: full raw-error logging (configurable, debug) ---
+# Off by default. When ON, every failed call ALSO prints the RAW error — the
+# exception type, status code, structured retry attributes, and the full
+# (untruncated) message — right beside the classification KAME gave it
+# (kind + applied cooldown). This is the precise-data escape hatch: it lets the
+# operator VERIFY there is no misclassification (e.g. a 503 that is really a
+# quota / network error). Orthogonal to `kame_log_level` and printed regardless
+# of it (so `silent` + full-errors yields errors-only), since it is an explicit
+# opt-in. It does NOT change any rotation/cooldown behavior — pure observability.
+_KAME_LOG_FULL_ERRORS = False
+
+# --- v1.0.3: 503-storm log collapse (configurable) ---
+# On by default. During a sustained error storm (e.g. a provider-wide 503
+# outage) the per-rotation failure lines are near-identical and can number in
+# the hundreds (one real Gemini outage logged 1,063 of them in 83 minutes).
+# When ON, at `normal` level KAME prints the FIRST failure of a storm verbatim,
+# then counts repeats silently and emits ONE throttled aggregate line at most
+# every _KAME_STORM_LOG_INTERVAL_S, plus one "storm over" recap on recovery.
+# `verbose` still prints every line; `kame_log_full_errors` bypasses the
+# collapse (you asked for everything); `auth` lines are never collapsed. PURE
+# observability — the rotation/cooldown/selection path is UNCHANGED.
+_KAME_COLLAPSE_STORM_LOGS = True
+_KAME_STORM_LOG_INTERVAL_S = 20.0   # at most one aggregate line per storm per this
+_KAME_STORM_GAP_S = 30.0            # a quiet gap longer than this ends a storm
+_KAME_STORM_MIN_FOR_SUMMARY = 3     # only recap a storm that had >= this many fails
+# identity -> {count, first_at, last_err_at, last_emit_at, kinds:{kind:count}}
+_KAME_STORM = {}
+
 # --- v1.0.1: lightweight in-memory session stats (for verbose summary) ---
 _KAME_STATS = {
     "ok": 0, "per_minute": 0, "daily": 0, "insufficient_quota": 0,
@@ -275,6 +325,35 @@ def set_key_log_style(style) -> None:
         _KAME_KEY_LOG_STYLE = s
 
 
+def set_log_full_errors(enabled) -> None:
+    """Enable/disable raw full-error logging (v1.0.3, debug).
+
+    Called by the activation extension from the `kame_log_full_errors` plugin
+    setting. Accepts a bool or a truthy string ('true'/'1'/'yes'/'on'). Pure
+    observability — never changes rotation or cooldown behavior.
+    """
+    global _KAME_LOG_FULL_ERRORS
+    if isinstance(enabled, str):
+        _KAME_LOG_FULL_ERRORS = enabled.strip().lower() in ("true", "1", "yes", "on")
+    else:
+        _KAME_LOG_FULL_ERRORS = bool(enabled)
+
+
+def set_collapse_storm_logs(enabled) -> None:
+    """Enable/disable 503-storm log collapse (v1.0.3).
+
+    Called by the activation extension from the `kame_collapse_storm_logs`
+    plugin setting. Accepts a bool or a truthy string ('true'/'1'/'yes'/'on').
+    Pure observability — never changes rotation or cooldown behavior; only how
+    many near-identical storm lines reach the log at `normal` level.
+    """
+    global _KAME_COLLAPSE_STORM_LOGS
+    if isinstance(enabled, str):
+        _KAME_COLLAPSE_STORM_LOGS = enabled.strip().lower() in ("true", "1", "yes", "on")
+    else:
+        _KAME_COLLAPSE_STORM_LOGS = bool(enabled)
+
+
 def set_current_agent(agent) -> None:
     """Stash the live A0 agent for the current async task (v1.0.2).
 
@@ -316,7 +395,13 @@ def _key_display(key: str) -> str:
 
 
 def _fmt_duration(seconds) -> str:
-    """Human-friendly compact duration: 45s / 6m / 2h."""
+    """Human-friendly PRECISE duration: 45s / 1m30s / 2m / 1h / 1.5h.
+
+    v1.0.3: shows the seconds component under an hour instead of rounding to the
+    nearest minute. The old code rounded 90s -> "2m" and 80s -> "1m", which hid
+    the true cooldown during log analysis (the 90s server-backoff cap looked
+    like a deliberate "2 minutes"). Now the log states the real value.
+    """
     try:
         s = float(seconds)
     except (ValueError, TypeError):
@@ -324,8 +409,10 @@ def _fmt_duration(seconds) -> str:
     if s < 60:
         return f"{s:.0f}s"
     if s < 3600:
-        return f"{s / 60:.0f}m"
-    return f"{s / 3600:.0f}h"
+        m, sec = divmod(int(round(s)), 60)
+        return f"{m}m{sec}s" if sec else f"{m}m"
+    hrs = s / 3600.0
+    return f"{hrs:.0f}h" if abs(hrs - round(hrs)) < 0.05 else f"{hrs:.1f}h"
 
 
 def _pool_snapshot(identity: str, all_keys: list) -> str:
@@ -609,6 +696,46 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
     return applied
 
 
+def _thaw_server_cooled_keys(identity, exclude_key, new_cooldown=3.0):
+    """Fast pool recovery after a server outage (v1.0.3).
+
+    Called when a call SUCCEEDS right after KAME had to sleep on a fully-cold
+    pool — i.e. an outage just ended. It brings every OTHER still-cooling key
+    that was cooled by a 5xx (``consecutive_server > 0``) FORWARD to a few
+    seconds from now, so the whole pool snaps back to healthy almost at once
+    instead of trickling back one ~90s cooldown at a time. "Rotate for hours,
+    but resume as soon as possible."
+
+    Strictly scoped + conservative:
+      * Only ``server``-cooled keys (consecutive_server > 0) are touched —
+        daily / per-minute / quota / auth cooldowns (which are REAL per-key
+        limits, tracked separately) are NEVER cleared by another key's success.
+      * It only ever SHORTENS a cooldown (``min`` with the current value), never
+        extends one, and never makes a key sick.
+      * The SELECTION path (``_get_best_key``) is untouched. Worst case if the
+        recovery was a fluke: a few keys get re-probed a bit early and re-cool —
+        bounded, self-correcting.
+
+    Returns the number of keys thawed.
+    """
+    now = time.time()
+    thawed = 0
+    with _KAME_LOCK:
+        state = _KAME_KEY_HEALTH.get(identity)
+        if not state:
+            return 0
+        for i, (k, kd) in enumerate(state["keys"].items()):
+            if k == exclude_key:
+                continue
+            if int(kd.get("consecutive_server", 0)) > 0 and float(kd.get("sick_until", 0) or 0) > now:
+                # small per-key stagger so they don't all re-probe in lockstep
+                target = now + new_cooldown + (i % 5) * 0.4
+                if target < float(kd["sick_until"]):
+                    kd["sick_until"] = target
+                    thawed += 1
+    return thawed
+
+
 def _extract_retry_delay(exc):
     """Extract retry-after from an API error. Falls back to 20s default.
 
@@ -747,22 +874,167 @@ def _friendly_error_msg(kind, delay, status_code=None, exc=None):
     """
     d = _fmt_duration(delay)
     if kind == "timeout":
-        return f"⏳ timeout → retry {d} · next key..."
+        return f"⏳ timeout → key cooled {d} · rotating to next key..."
     if kind == "per_minute":
         sc = status_code or 429
-        return f"⏳ {sc} per-minute → wait {d} · next key..."
+        return f"⏳ {sc} per-minute → key waits {d} · rotating to next key..."
     if kind == "daily":
         sc = status_code or 429
-        return f"⏳ {sc} daily-quota → cooling {d} · next key..."
+        return f"⏳ {sc} daily-quota → key cooled {d} · rotating to next key..."
     if kind == "insufficient_quota":
-        return f"⏳ insufficient_quota → cooling {d} · next key..."
+        return f"⏳ insufficient_quota → key cooled {d} · rotating to next key..."
     if kind == "server":
         sc = status_code or 503
-        return f"⏳ {sc} server-busy → retry {d} · next key..."
+        return f"⏳ {sc} server-busy → key cooled {d} · rotating to next key..."
     if kind == "auth":
         return f"\U0001f512 invalid key → quarantined {d}"
     name = type(exc).__name__ if exc is not None else "error"
     return f"⚠️ {name} → cooling {d} · next key..."
+
+
+def _raw_error_detail(exc, kind=None, applied=None, status_code=None) -> str:
+    """Full, untruncated raw-error dump for the debug log (v1.0.3).
+
+    Shows the exception TYPE, status code, any structured retry attributes, and
+    the COMPLETE message — beside the classification KAME assigned (kind +
+    applied cooldown). Reading the raw error next to the verdict is how you spot
+    a MISCLASSIFICATION (e.g. a 503 that is really a quota / network error).
+    Never raises (best-effort; logging must not break rotation).
+    """
+    try:
+        parts = [f"type={type(exc).__name__}"]
+        sc = status_code if status_code is not None else getattr(exc, "status_code", None)
+        if sc is not None:
+            parts.append(f"status={sc}")
+        if kind is not None:
+            parts.append(f"classified={kind}")
+        if applied is not None:
+            parts.append(f"cooled={_fmt_duration(applied)}")
+        for attr in ("retry_after", "retry_delay", "code"):
+            v = getattr(exc, attr, None)
+            if v is not None:
+                parts.append(f"{attr}={v!r}")
+        head = " | ".join(parts)
+        body = str(exc)  # FULL — the whole point is to see everything, untruncated
+        return f"{head}\n      raw: {body}"
+    except Exception:
+        return f"type={type(exc).__name__ if exc is not None else 'error'} (raw detail unavailable)"
+
+
+def _maybe_log_full_error(call_type, model_short, key, exc, kind=None, applied=None, status_code=None) -> None:
+    """Print the raw error when `kame_log_full_errors` is on (v1.0.3).
+
+    Gated PURELY on the toggle (independent of `kame_log_level`), so it is a true
+    debug escape hatch — `silent` + full-errors yields errors-only. Best-effort.
+    """
+    if not _KAME_LOG_FULL_ERRORS:
+        return
+    try:
+        PrintStyle.warning(
+            f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+            f"\U0001f50d RAW: {_raw_error_detail(exc, kind, applied, status_code)}"
+        )
+    except Exception:
+        pass
+
+
+def _storm_tick(identity, kind) -> str:
+    """Count one failure into the per-identity storm; decide what to log.
+
+    Returns 'first' (a storm just began or resumed after a quiet gap — print the
+    line verbatim), 'summary' (enough time elapsed — print one aggregate line),
+    or 'suppress' (collapsed — print nothing). Lock-guarded and fast; the
+    aggregate text is built by the caller OUTSIDE the lock, because the pool
+    snapshot takes this same (non-reentrant) lock.
+    """
+    now = time.time()
+    with _KAME_LOCK:
+        st = _KAME_STORM.get(identity)
+        if st is None or (now - st["last_err_at"]) > _KAME_STORM_GAP_S:
+            _KAME_STORM[identity] = {
+                "count": 1, "first_at": now, "last_err_at": now,
+                "last_emit_at": now, "kinds": {kind: 1},
+            }
+            return "first"
+        st["count"] += 1
+        st["last_err_at"] = now
+        st["kinds"][kind] = st["kinds"].get(kind, 0) + 1
+        if (now - st["last_emit_at"]) >= _KAME_STORM_LOG_INTERVAL_S:
+            st["last_emit_at"] = now
+            return "summary"
+        return "suppress"
+
+
+def _storm_summary_line(identity, all_keys, call_type, model_short):
+    """Build the throttled aggregate line for an ongoing storm (call OUTSIDE lock)."""
+    now = time.time()
+    with _KAME_LOCK:
+        st = _KAME_STORM.get(identity)
+        if not st:
+            return None
+        count = st["count"]
+        span = now - st["first_at"]
+        kinds = dict(st["kinds"])
+    top = max(kinds, key=kinds.get) if kinds else "error"  # dominant error kind
+    eta = _next_recovery_seconds(identity, all_keys)
+    eta_s = _fmt_duration(eta) if eta is not None else "?"
+    snap = _pool_snapshot(identity, all_keys)
+    return (
+        f"[KAME] {call_type}|{model_short} \U0001f300 {top} storm "
+        f"×{count} in {_fmt_duration(span)} · {snap} · "
+        f"earliest recovery ~{eta_s} · (collapsed — verbose or "
+        f"kame_log_full_errors shows every line)"
+    )
+
+
+def _storm_end(identity):
+    """Close any active storm for this identity (called on a success).
+
+    Always pops the state (so it never leaks across modes). Returns
+    (count, span_seconds) when the storm that just ended had at least
+    _KAME_STORM_MIN_FOR_SUMMARY failures, so the caller can print a one-line
+    recovery recap; otherwise None.
+    """
+    now = time.time()
+    with _KAME_LOCK:
+        st = _KAME_STORM.pop(identity, None)
+    if st and st["count"] >= _KAME_STORM_MIN_FOR_SUMMARY:
+        return st["count"], now - st["first_at"]
+    return None
+
+
+def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, all_keys):
+    """Single funnel for a per-rotation failure line (v1.0.3 storm-collapse).
+
+    Always runs the raw-error dump (its own toggle). Then, for the human line:
+      * silent  -> nothing.
+      * verbose -> every line, verbatim (full diagnostics, no collapse).
+      * normal + collapse OFF (or kame_log_full_errors ON) -> every line.
+      * normal + collapse ON -> first failure of a storm verbatim, repeats
+        collapsed into a throttled aggregate. `auth` is never collapsed (an
+        invalid key is rare and worth seeing every time).
+    The rotation/cooldown decision already happened in the caller; this only
+    decides what reaches the log.
+    """
+    _maybe_log_full_error(call_type, model_short, key, exc, kind, applied, sc)
+    if not _lvl_normal():
+        return
+    line = (
+        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+        f"{_friendly_error_msg(kind, applied, sc, exc)}"
+    )
+    if (_lvl_verbose() or not _KAME_COLLAPSE_STORM_LOGS
+            or _KAME_LOG_FULL_ERRORS or kind == "auth"):
+        PrintStyle.warning(line)
+        return
+    decision = _storm_tick(identity, kind)
+    if decision == "first":
+        PrintStyle.warning(line)
+    elif decision == "summary":
+        summary = _storm_summary_line(identity, all_keys, call_type, model_short)
+        if summary:
+            PrintStyle.warning(summary)
+    # 'suppress' -> collapsed; print nothing
 
 
 def _get_best_key(identity, all_keys):
@@ -821,11 +1093,54 @@ def _get_best_key(identity, all_keys):
         return best_key, "SUCCESS"
 
 
+# --- v1.0.3: invalid / expired KEY markers (provider-agnostic) ---
+# A bad key is "terminal for the KEY", NOT for the RUN: KAME must quarantine it
+# and rotate to the next key, never abort the whole run. The catch: most
+# providers DON'T use 401 for this. Google/Gemini packs an invalid or expired
+# key into a 400 (status INVALID_ARGUMENT, reason API_KEY_INVALID, message
+# "API key not valid. Please pass a valid API key." or "API key expired. Please
+# renew the API key."). A status-code-only check (401) misses these, and
+# _is_terminal_error would then treat the 400 as terminal and ABORT the run on a
+# single bad key in the pool. These text markers route them to the auth path.
+_INVALID_KEY_INDICATORS = (
+    "api key not valid",
+    "api key expired",
+    "api_key_invalid",
+    "api key not found",
+    "invalid api key",
+    "invalid_api_key",
+    "please renew the api key",
+    "unauthorized",
+)
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Check if this is an authentication / invalid-key error (THIS key is bad).
+
+    Covers a real 401 PLUS the provider variants that do NOT use 401 — notably
+    Google/Gemini, which returns a 400 (reason API_KEY_INVALID, message "API key
+    not valid" / "API key expired. Please renew the API key.") for a bad or
+    expired key. Such a call must be handled as auth (quarantine the key + rotate
+    to the next), NOT as a terminal 400 that aborts the run. (v1.0.3)
+    """
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code == 401:
+        return True
+    err_msg = str(exc).lower()
+    return any(ind in err_msg for ind in _INVALID_KEY_INDICATORS)
+
+
 def _is_terminal_error(exc: Exception) -> bool:
     """Classify errors as terminal (don't retry) or transient (rotate key)."""
     err_msg = str(exc).lower()
     # Rate-limit indicators always mean "try another key", never terminal
     if any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
+        return False
+    # v1.0.3: an invalid/expired KEY is terminal for the key, not the run. Gemini
+    # packs it into a 400; without this check the 400 branch below would abort the
+    # whole run on one bad key instead of quarantining it and rotating. Let it
+    # fall through to the auth path. (Checked BEFORE the 400 -> terminal rule.)
+    if _is_auth_error(exc):
         return False
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
@@ -837,15 +1152,6 @@ def _is_terminal_error(exc: Exception) -> bool:
     if "content_policy" in err_msg or "content filter" in err_msg:
         return True
     return False
-
-
-def _is_auth_error(exc: Exception) -> bool:
-    """Check if this is an authentication error (invalid key)."""
-    status_code = getattr(exc, "status_code", None)
-    if isinstance(status_code, int) and status_code == 401:
-        return True
-    err_msg = str(exc).lower()
-    return "unauthorized" in err_msg or "invalid api key" in err_msg or "invalid_api_key" in err_msg
 
 
 def _get_all_api_keys(model_instance) -> list:
@@ -1037,11 +1343,11 @@ async def _kame_unified_call(
                         _KAME_STATS["long_sleeps"] += 1
                 if (_need_announce or _need_heartbeat) and _lvl_normal():
                     _last_long_heartbeat_at = _now_t
-                    _verb = "All keys cooling" if _need_announce else "Still cooling"
+                    _verb = "Provider outage — all keys cooling" if _need_announce else "Still cooling"
                     PrintStyle.warning(
                         f"[KAME] {call_type}|{model_short} \U0001f4a4 {_verb} — earliest "
                         f"recovery in ~{_eta_label} (around {_recovery_at}). Re-checking "
-                        f"every ~60s, no API calls."
+                        f"every ~60s (no API calls); will resume the instant a key answers."
                     )
             else:
                 # Near recovery: log each cycle but throttle to avoid spam.
@@ -1145,17 +1451,36 @@ async def _kame_unified_call(
                     # Mid-stream failure before any content: smart quarantine.
                     delay, kind, sc = _classify_error(stream_err)
                     applied = _mark_key_health(identity, key, False, delay, kind)
-                    if _lvl_normal():
-                        PrintStyle.warning(
-                            f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                            f"{_friendly_error_msg(kind, applied, sc, stream_err)}"
-                        )
+                    _log_failure(call_type, model_short, key, stream_err,
+                                 kind, applied, sc, identity, all_keys)
                     continue
             else:
                 parsed = _parse_chunk(_completion)
                 result.add_chunk(parsed)
 
             _mark_key_health(identity, key, True)
+            # v1.0.3: a success ends any error storm — close it and, in collapse
+            # mode, print a one-line recap so the operator sees how big it was.
+            # (_storm_end always pops the state; it returns a recap only for a
+            # storm of >= _KAME_STORM_MIN_FOR_SUMMARY failures.)
+            _storm_recap = _storm_end(identity)
+            if (_storm_recap and _lvl_normal() and not _lvl_verbose()
+                    and _KAME_COLLAPSE_STORM_LOGS and not _KAME_LOG_FULL_ERRORS):
+                _sc_n, _sc_span = _storm_recap
+                PrintStyle.success(
+                    f"[KAME] {call_type}|{model_short} ☀️ storm over — "
+                    f"{_sc_n} failures over {_fmt_duration(_sc_span)} · resuming"
+                )
+            # v1.0.3: if this success ended an outage (we slept on a fully-cold
+            # pool at least once), thaw the other server-cooled keys so the pool
+            # snaps back fast instead of trickling. Scoped to 5xx cooldowns only.
+            if _sleep_count > 0:
+                _thawed = _thaw_server_cooled_keys(identity, key)
+                if _thawed and _lvl_normal():
+                    PrintStyle.success(
+                        f"[KAME] {call_type}|{model_short} ☀️ recovery — thawed "
+                        f"{_thawed} server-cooled key{'s' if _thawed != 1 else ''} for fast pool refill"
+                    )
             _ctx = _KAME_CALL_CONTEXT.get()
             _ctx_label = f" {_ctx}" if _ctx else ""
             _cascade = _cascade_str(attempt_no, _sleep_count, _cooldown_overhead_s)
@@ -1198,20 +1523,19 @@ async def _kame_unified_call(
 
             # Auth errors: quarantine the key for a long time (likely permanently bad)
             if _is_auth_error(e):
+                _auth_sc = getattr(e, "status_code", None)
                 applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
                 if _lvl_normal():
                     PrintStyle.warning(
                         f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                        f"{_friendly_error_msg('auth', applied, getattr(e, 'status_code', None), e)}"
+                        f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
                     )
+                _maybe_log_full_error(call_type, model_short, key, e, "auth", applied, _auth_sc)
             else:
                 delay, kind, sc = _classify_error(e)
                 applied = _mark_key_health(identity, key, False, delay, kind)
-                if _lvl_normal():
-                    PrintStyle.warning(
-                        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                        f"{_friendly_error_msg(kind, applied, sc, e)}"
-                    )
+                _log_failure(call_type, model_short, key, e,
+                             kind, applied, sc, identity, all_keys)
 
             await asyncio.sleep(0.05)
             continue
@@ -1334,7 +1658,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.2] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.3] Patch Failed: {e}")
         return False
 
 
@@ -1364,7 +1688,7 @@ def remove_kame_patch():
 
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.2 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.3 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

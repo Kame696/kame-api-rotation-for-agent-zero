@@ -21,7 +21,68 @@ graph LR
 
 ---
 
-## v1.0.2 — current
+## v1.0.3 — current
+
+**Observability + faster outage recovery. The selection/rotation path
+(`_get_best_key`) is UNCHANGED — the happy path is identical to v1.0.2.**
+Driven by analysis of two real Gemini-503 outages (`docker log 15/16-06-26.txt`),
+including an 83-minute stretch where `gemini-3.5-flash` returned 503 to every
+chat call. Confirmed KAME handled it correctly; these additions make it
+clearer to read and quicker to come back.
+
+- **Full raw-error log toggle** (`kame_log_full_errors`, off by default). Every
+  failed call can now ALSO print the raw exception — type, status code, retry
+  attributes, and the FULL untruncated message — right beside the classification
+  KAME assigned (kind + applied cooldown). This lets the operator VERIFY there is
+  no misclassification (e.g. a "503 server-busy" that is really a quota/network
+  error). Orthogonal to `kame_log_level` (prints even in `silent`). Pure
+  observability — zero behavior change. Wired: engine `set_log_full_errors` /
+  `_raw_error_detail`; `default_config.yaml`; the activation extension.
+- **Precise durations.** `_fmt_duration` now shows the seconds component under an
+  hour (`90s` / `1m30s`) instead of rounding to the nearest minute. The old
+  rounding displayed the 90s server-backoff cap as a misleading "2m" (and 80s as
+  "1m") — which read like a deliberate "2-minute cooldown" in the logs. Failure
+  and outage lines are also clearer ("key cooled 1m30s · rotating to next key";
+  "Provider outage — … will resume the instant a key answers").
+- **Fast pool recovery (`_thaw_server_cooled_keys`).** When a call succeeds right
+  after KAME had to sleep on a fully-cold pool (an outage just ended), the other
+  5xx-cooled keys are thawed forward to a few seconds from now — so the pool
+  snaps back to healthy at once instead of trickling back one ~90s cooldown at a
+  time ("rotate for hours, but resume as soon as possible"). Strictly scoped to
+  `server` cooldowns: daily / per-minute / quota / auth cooldowns are NEVER
+  cleared by another key's success; it only ever SHORTENS a cooldown, never
+  extends one or makes a key sick.
+- **503-storm log collapse (`kame_collapse_storm_logs`, on by default).** During
+  a sustained outage the per-rotation failure lines are near-identical and can
+  number in the hundreds (the 83-min outage logged **1,063** of them). At
+  `normal` level KAME now prints the FIRST failure of a storm verbatim, then
+  collapses the repeats into ONE throttled aggregate line every ~20s
+  (`🌀 503 server-busy storm ×47 in 32s · pool 0/15 · earliest recovery ~1m30s …`)
+  and a single "storm over" recap when a key answers again. `verbose` still
+  prints every line; `kame_log_full_errors` overrides the collapse; `auth` lines
+  are never collapsed. Pure logging — implemented as a `_log_failure` funnel over
+  the existing error sites (`_storm_tick` / `_storm_summary_line` / `_storm_end`),
+  lock-safe, with the rotation/cooldown/selection path UNCHANGED.
+- **Invalid / expired KEY is no longer fatal to the run.** A bad key is terminal
+  for the KEY, not the run — KAME should quarantine it and rotate. The catch:
+  Google/Gemini does NOT use 401 for this; it returns a **400** (reason
+  `API_KEY_INVALID`, message "API key not valid" / "API key expired. Please renew
+  the API key."). The previous `_is_terminal_error` treated every 400 as terminal,
+  so one expired/typo'd key in the pool could `raise` and **abort the whole run**
+  the moment rotation landed on it. Now invalid-key text (provider-agnostic
+  markers) routes to the auth path (quarantine + rotate to the next key); a
+  genuine malformed-request 400 still aborts as before (rotating wouldn't help).
+  Never triggered in the 15/16-06 logs (all keys were valid) — a latent gap found
+  while auditing KAME's coverage against the official Gemini error taxonomy.
+  (`_INVALID_KEY_INDICATORS`, `_is_auth_error`, `_is_terminal_error`.)
+- **Tests:** `tests/test_v1_0_3.py` (49 checks) — toggle/raw-detail, duration
+  precision, the thaw scoping (server-only, never extend, exclude the succeeding
+  key), the invalid-key routing (Gemini 400 → auth/rotate; malformed 400 → still
+  terminal), and the storm collapse (first/summary/suppress decisions, gap
+  restart, recovery recap threshold, auth never collapsed). v1.0.2 regression
+  suite (26 checks) still green.
+
+## v1.0.2
 
 **Critical fix: a transient 5xx could be misclassified as a daily quota and cool
 the whole pool for an hour — plus a deeper "nudge" fix and honest waiting.**

@@ -26,6 +26,8 @@ class KameActivation(Extension):
                 set_verbose_trace,
                 set_daily_cooldown,
                 set_key_log_style,
+                set_log_full_errors,
+                set_collapse_storm_logs,
                 set_current_agent,
             )
 
@@ -46,6 +48,10 @@ class KameActivation(Extension):
 
                 set_daily_cooldown(cfg.get("daily_quota_cooldown_seconds", 3600))
                 set_key_log_style(cfg.get("key_log_style", "fingerprint"))
+                # v1.0.3: optional raw full-error logging (debug; off by default).
+                set_log_full_errors(cfg.get("kame_log_full_errors", False))
+                # v1.0.3: collapse repetitive 503-storm logs (on by default).
+                set_collapse_storm_logs(cfg.get("kame_collapse_storm_logs", True))
             except Exception:
                 # Older A0 versions may lack get_plugin_config; fall back to defaults.
                 pass
