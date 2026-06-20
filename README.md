@@ -2,7 +2,7 @@
 
 # \\\ ~ 🐢⚡ Key-Aware Management Engine ⚡🐢 ~ // (API Rotation Plugin) for Agent Zero
 
-### KAME — the learning carousel that keeps your AI agent alive
+### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
 [![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
