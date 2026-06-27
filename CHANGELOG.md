@@ -45,9 +45,42 @@ The rotation / health / cooldown carousel is **UNCHANGED**; only the per-attempt
 
 **ONE engine, BOTH A0 majors.** Behavior on A0 v1.x is byte-for-byte identical to 1.0.3.
 Tests: `tests/test_v1_0_4.py` (detection + both chunk modes — all pass); the v1.0.2/1.0.3
-suites still pass. Verified locally with stubs; the live A0 V2 end-to-end is the owner's
-smoke test. Also: README reorganized (Install→Settings→Logging first; the production-
-validation block moved below the version history; donate moved down) for first-time clarity.
+suites still pass.
+
+### v1.0.4 (cont.) — Agent Zero **V2.1**: the real break (`unified_turn` + free-tier caching)
+
+The first 1.0.4 above was diagnosed against an early V2 build. A real V2.1 run
+(`models.py:702 unified_turn → transport.astream()`, **zero `[KAME]` lines, zero
+`unified_call`**) exposed two deeper changes that the chunk-parse fix alone did NOT
+cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
+
+1. **A0 split the model entry point.** V2.1 has BOTH `unified_call` (now "public
+   plugin-facing", returns a tuple) **and `unified_turn`** (core orchestration, returns
+   an `LLMResult`) — and the **agent monologue calls `unified_turn`** (`agent.py →
+   call_chat_model_turn → unified_turn`). KAME patched only `unified_call`, so the whole
+   loop ran through the **un-patched** `unified_turn` and **rotation never engaged**.
+   Fix: KAME now also patches `unified_turn` (when present — skipped on A0 v1.x). Instead
+   of re-implementing its body (the brittle path that broke twice), `_kame_unified_turn`
+   **WRAPS the original**: the carousel picks a key, calls the original with
+   `api_key=<rotated>` + `a0_retry_attempts=0` (KAME owns the retry loop), and on a
+   connect-time failure classifies / cools / rotates / ETA-sleeps exactly like the
+   `unified_call` carousel. A0 keeps doing its own streaming + `LLMResult` construction →
+   KAME never touches transport internals and **survives future refactors**. The
+   got-any-chunk contract is preserved (content already streamed → re-raise, never
+   re-stream a duplicate on another key).
+2. **Free-tier context-caching 429.** V2.1 turns on Gemini/Vertex prompt caching for big
+   prompts (e.g. a 40k-token persona). Free-tier keys have **zero** cached-content storage,
+   so the cache-create call 429s (`TotalCachedContentStorageTokensPerModelFreeTier
+   limit=0, requested=43347`) on **every** key — rotation can't help. KAME now forces
+   `explicit_caching=False` on both the `unified_call` and `unified_turn` paths (free-tier
+   never caches; this is exactly how the pre-V2 path behaved — the prompt is sent fresh).
+
+Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry injection, no-pool
+delegation, got-any-chunk re-raise — all pass) + an installer-wiring check (patches &
+reverts `unified_turn` on V2.1; untouched on v1.x). README reorganized
+(Install→Settings→Logging first; validation moved below the version history). Verified
+locally against the cloned A0 **v2.1 tag** source; the live container is the owner's smoke
+test.
 
 ## v1.0.3
 

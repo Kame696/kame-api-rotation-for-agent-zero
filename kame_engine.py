@@ -1314,6 +1314,84 @@ async def _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, stream):
 
 # --- THE COMMANDER ---
 
+
+class _KameSleepState:
+    """Carries the cross-iteration sleep/cascade bookkeeping for one carousel run
+    (so the ETA-driven sleep can be shared between the unified_call and the V2.1
+    unified_turn carousels without duplicating the logic)."""
+    __slots__ = ("sleep_count", "cooldown_overhead_s", "long_cool_logged",
+                 "last_sleep_log_at", "last_long_heartbeat_at")
+
+    def __init__(self):
+        self.sleep_count = 0
+        self.cooldown_overhead_s = 0.0
+        self.long_cool_logged = False
+        self.last_sleep_log_at = 0.0
+        self.last_long_heartbeat_at = 0.0
+
+
+async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st):
+    """ETA-driven, interruptible sleep when every key is cooling (v0.5.8.0 / v1.0.2).
+
+    Sleeps until the SOONEST key recovers (capped at 60s, re-checked after) instead
+    of pulsing the API with sick keys. Honors a queued user message / nudge between
+    short slices. Mutates `st` (a _KameSleepState). Behavior is byte-identical to the
+    block originally inlined in _kame_unified_call — extracted in v1.0.4 so the new
+    unified_turn carousel reuses the exact same recovery logic."""
+    import random
+    _soonest_eta = _next_recovery_seconds(identity, all_keys)
+    if _soonest_eta is not None and _soonest_eta > 3.0:
+        wait = min(_soonest_eta + 0.5, 60.0) + random.uniform(0.1, 1.5)
+    else:
+        wait = 2.0 + random.uniform(0.1, 1.5)
+    st.sleep_count += 1
+    _sleep_started = time.perf_counter()
+
+    _now_t = time.time()
+    _eta_known = _soonest_eta is not None
+    _is_long = _eta_known and _soonest_eta > 120.0
+    _eta_label = _fmt_duration(_soonest_eta) if _eta_known else "unknown"
+    _recovery_at = (
+        time.strftime("%H:%M:%S", time.localtime(_now_t + _soonest_eta))
+        if _eta_known else "unknown"
+    )
+
+    if _is_long:
+        _need_announce = not st.long_cool_logged
+        _need_heartbeat = (
+            st.long_cool_logged
+            and (_now_t - st.last_long_heartbeat_at) >= _KAME_LONG_HEARTBEAT_S
+        )
+        if _need_announce:
+            st.long_cool_logged = True
+            with _KAME_LOCK:
+                _KAME_STATS["long_sleeps"] += 1
+        if (_need_announce or _need_heartbeat) and _lvl_normal():
+            st.last_long_heartbeat_at = _now_t
+            _verb = "Provider outage — all keys cooling" if _need_announce else "Still cooling"
+            PrintStyle.warning(
+                f"[KAME] {call_type}|{model_short} \U0001f4a4 {_verb} — earliest "
+                f"recovery in ~{_eta_label} (around {_recovery_at}). Re-checking "
+                f"every ~60s (no API calls); will resume the instant a key answers."
+            )
+    else:
+        st.long_cool_logged = False
+        if _lvl_normal() and (_now_t - st.last_sleep_log_at) >= _KAME_SLEEP_LOG_MIN_INTERVAL_S:
+            st.last_sleep_log_at = _now_t
+            PrintStyle.warning(
+                f"[KAME] {call_type}|{model_short} \U0001f4a4 All keys cooling. "
+                f"Sleeping {wait:.1f}s (no API calls) — earliest recovery ~{_eta_label}."
+            )
+
+    _slept = 0.0
+    while _slept < wait:
+        _slice = min(1.0, wait - _slept)
+        await asyncio.sleep(_slice)
+        _slept += _slice
+        await _kame_honor_intervention()
+    st.cooldown_overhead_s += (time.perf_counter() - _sleep_started)
+
+
 async def _kame_unified_call(
     self,
     system_message="",
@@ -1359,7 +1437,14 @@ async def _kame_unified_call(
     if user_message:
         active_msgs.append(HumanMessage(content=user_message))
 
-    msgs_conv = self._convert_messages(active_msgs, explicit_caching=explicit_caching)
+    # v1.0.4 (A0 V2.1): force explicit_caching OFF. A0 V2.1 turns on Gemini/Vertex
+    # context caching for big prompts (e.g. a 40k-token persona) — but free-tier
+    # keys have ZERO cached-content storage, so the cache-create call 429s
+    # ("TotalCachedContentStorageTokensPerModelFreeTier limit=0") on EVERY key and
+    # rotation can't help. KAME's whole audience is free-tier rotation, so we never
+    # cache (this is exactly how the pre-V2 path behaved). The incoming flag is
+    # ignored; the prompt is sent fresh, which free-tier handles fine.
+    msgs_conv = self._convert_messages(active_msgs, explicit_caching=False)
     stream = (reasoning_callback is not None or response_callback is not None or tokens_callback is not None)
 
     # Logging labels - Chat streams, Utility doesn't
@@ -1655,6 +1740,201 @@ async def _kame_unified_call(
             continue
 
 
+# --- THE COMMANDER (A0 V2.1): unified_turn ---
+#
+# A0 V2.1 split the model entry point: `unified_call` is the "public plugin-facing"
+# method (returns a (response, reasoning) tuple), while `unified_turn` is what the
+# core agent monologue actually calls (it returns a richer LLMResult with response
+# ids / capability metadata). KAME 1.0.3/early-1.0.4 patched only `unified_call`, so
+# on V2.1 the whole agent loop went through the UN-patched `unified_turn` and KAME's
+# rotation never engaged (logs showed unified_turn → transport.astream() with zero
+# [KAME] lines).
+#
+# Rather than re-implement unified_turn's body (the brittle approach that broke twice
+# across A0 refactors), KAME now WRAPS the original method: the carousel picks a key,
+# calls the *original* unified_turn with `api_key=<rotated>` (free-tier keys, injected
+# via kwargs which override self.kwargs) + `explicit_caching=False` (free tier can't
+# cache) + `a0_retry_attempts=0` (KAME owns the retry loop), and on a connect-time
+# failure classifies / cools / rotates / ETA-sleeps exactly like the unified_call
+# carousel. A0 keeps doing its own streaming + chunk parsing + LLMResult construction,
+# so KAME never touches transport internals and survives future refactors.
+
+async def _kame_unified_turn(
+    self,
+    system_message="",
+    user_message="",
+    messages: List[Any] | None = None,
+    response_callback=None,
+    reasoning_callback=None,
+    tokens_callback=None,
+    rate_limiter_callback=None,
+    explicit_caching=False,
+    **kwargs,
+):
+    from models import turn_off_logging
+    turn_off_logging()
+    litellm.suppress_debug_info = True
+    logging.getLogger("litellm").setLevel(logging.CRITICAL)
+    logging.getLogger("openai").setLevel(logging.CRITICAL)
+
+    provider = (self.a0_model_conf.provider if self.a0_model_conf else "unknown").lower()
+    model = (self.model_name or "unknown").lower()
+    identity = f"{provider}:{model}"
+
+    all_keys = _get_all_api_keys(self)
+
+    # No multi-key config → behave exactly like vanilla A0 (no rotation to do).
+    if not all_keys:
+        return await self._kame_original_unified_turn(
+            system_message=system_message, user_message=user_message,
+            messages=messages, response_callback=response_callback,
+            reasoning_callback=reasoning_callback, tokens_callback=tokens_callback,
+            rate_limiter_callback=rate_limiter_callback,
+            explicit_caching=explicit_caching, **kwargs,
+        )
+
+    stream = (
+        reasoning_callback is not None
+        or response_callback is not None
+        or tokens_callback is not None
+    )
+    call_type = "Chat" if stream else "Util"
+    model_short = model.split("/")[-1][:25]
+
+    # Track whether any content has been streamed to the live view in THIS attempt.
+    # A connect-time failure (429/503/auth) fires before any delta → safe to rotate.
+    # A mid-stream failure after real content fired → re-raise so A0 restarts the
+    # turn cleanly instead of KAME re-streaming a duplicate on another key (mirrors
+    # vanilla A0's got_any_chunk contract + KAME's unified_call behavior).
+    _delivered = {"any": False}
+
+    async def _resp_cb(delta, full):
+        _delivered["any"] = True
+        if response_callback is not None:
+            return await response_callback(delta, full)
+        return None
+
+    async def _reason_cb(delta, full):
+        _delivered["any"] = True
+        if reasoning_callback is not None:
+            await reasoning_callback(delta, full)
+
+    async def _tok_cb(text, count):
+        _delivered["any"] = True
+        if tokens_callback is not None:
+            await tokens_callback(text, count)
+
+    _ctx = _KAME_CALL_CONTEXT.get()
+    _ctx_label = f" {_ctx}" if _ctx else ""
+    if _lvl_verbose():
+        PrintStyle(font_color="#85C1E9").print(
+            f"[KAME] {call_type}|{model_short}{_ctx_label} ➡ Calling... (turn)"
+        )
+
+    _call_started_at = time.perf_counter()
+    _sleep_state = _KameSleepState()
+    attempt_no = 0
+    while True:  # ETERNAL CAROUSEL — identical recovery behavior to unified_call
+        attempt_no += 1
+        if attempt_no > 1:
+            await _kame_honor_intervention()
+
+        _select_t0 = time.perf_counter()
+        key, status = _get_best_key(identity, all_keys)
+        _select_ms = (time.perf_counter() - _select_t0) * 1000.0
+
+        if status == "EXHAUSTED_RETRY":
+            await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, _sleep_state)
+            continue
+        elif _lvl_verbose():
+            PrintStyle(font_color="#85C1E9").print(
+                f"[KAME] {call_type}|{model_short}{_ctx_label} ➡ "
+                f"{_key_display(key)} picked in {_select_ms:.2f}ms"
+            )
+
+        _delivered["any"] = False
+        try:
+            llm_result = await self._kame_original_unified_turn(
+                system_message=system_message,
+                user_message=user_message,
+                messages=messages,
+                response_callback=(_resp_cb if response_callback is not None else None),
+                reasoning_callback=(_reason_cb if reasoning_callback is not None else None),
+                tokens_callback=(_tok_cb if tokens_callback is not None else None),
+                rate_limiter_callback=rate_limiter_callback,
+                explicit_caching=False,        # KAME: free-tier keys cannot cache
+                api_key=key,                    # KAME: force the rotated key
+                a0_retry_attempts=0,            # KAME owns the retry/rotation loop
+                **kwargs,
+            )
+
+            _mark_key_health(identity, key, True)
+            # success ends any error storm (recap recap in collapse mode)
+            _storm_recap = _storm_end(identity)
+            if (_storm_recap and _lvl_normal() and not _lvl_verbose()
+                    and _KAME_COLLAPSE_STORM_LOGS and not _KAME_LOG_FULL_ERRORS):
+                _sc_n, _sc_span = _storm_recap
+                PrintStyle.success(
+                    f"[KAME] {call_type}|{model_short} ☀️ storm over — "
+                    f"{_sc_n} failures over {_fmt_duration(_sc_span)} · resuming"
+                )
+            # fast pool refill after an outage we slept through
+            if _sleep_state.sleep_count > 0:
+                _thawed = _thaw_server_cooled_keys(identity, key)
+                if _thawed and _lvl_normal():
+                    PrintStyle.success(
+                        f"[KAME] {call_type}|{model_short} ☀️ recovery — thawed "
+                        f"{_thawed} server-cooled key{'s' if _thawed != 1 else ''} for fast pool refill"
+                    )
+            _ctx = _KAME_CALL_CONTEXT.get()
+            _ctx_label = f" {_ctx}" if _ctx else ""
+            _cascade = _cascade_str(attempt_no, _sleep_state.sleep_count, _sleep_state.cooldown_overhead_s)
+            if _lvl_verbose():
+                _total_s = time.perf_counter() - _call_started_at
+                _snap = _pool_snapshot(identity, all_keys)
+                _tail = f" | {_cascade}" if _cascade else ""
+                PrintStyle(font_color="#85C1E9").print(
+                    f"[KAME] {call_type}|{model_short}{_ctx_label} ✅ {_key_display(key)} "
+                    f"in {_total_s:.1f}s | {_snap}{_tail}"
+                )
+                if _KAME_CALL_COUNT > 0 and _KAME_CALL_COUNT % 100 == 0:
+                    PrintStyle(font_color="#85C1E9").print(_session_summary_line())
+            elif _lvl_normal():
+                _bits = [b for b in (_cascade, _pool_snapshot_if_degraded(identity, all_keys)) if b]
+                _tail = (" · " + " · ".join(_bits)) if _bits else ""
+                PrintStyle(font_color="#85C1E9").print(
+                    f"[KAME] {call_type}|{model_short}{_ctx_label} ✅ {_key_display(key)}{_tail}"
+                )
+            return llm_result
+
+        except Exception as e:
+            # A0 control-flow (InterventionException etc.) must propagate, never retry.
+            if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
+                raise
+            # Content already streamed this attempt → clean restart, don't re-stream.
+            if _delivered["any"]:
+                raise
+            if _is_terminal_error(e):
+                raise e
+            # Auth / invalid-key: quarantine the key for a long time, rotate.
+            if _is_auth_error(e):
+                _auth_sc = getattr(e, "status_code", None)
+                applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
+                if _lvl_normal():
+                    PrintStyle.warning(
+                        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                        f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
+                    )
+                _maybe_log_full_error(call_type, model_short, key, e, "auth", applied, _auth_sc)
+                continue
+            # Rate-limit / daily / server: classify, cool the key, rotate.
+            delay, kind, sc = _classify_error(e)
+            applied = _mark_key_health(identity, key, False, delay, kind)
+            _log_failure(call_type, model_short, key, e, kind, applied, sc, identity, all_keys)
+            await asyncio.sleep(0.05)
+            continue
+
+
 # --- SHIELDS: COMPRESSION TIMEOUT GUARD ---
 
 async def _kame_summarize_messages(self, messages):
@@ -1755,6 +2035,14 @@ def apply_kame_patch():
             LiteLLMChatWrapper._kame_original_unified_call = LiteLLMChatWrapper.unified_call
         LiteLLMChatWrapper.unified_call = _kame_unified_call
 
+        # v1.0.4 (A0 V2.1): the agent monologue now calls `unified_turn`, not
+        # `unified_call`. Patch it too when present so rotation actually engages on
+        # V2.1. Absent on A0 v1.x / early V2 → skipped (those route via unified_call).
+        if hasattr(LiteLLMChatWrapper, "unified_turn"):
+            if not hasattr(LiteLLMChatWrapper, "_kame_original_unified_turn"):
+                LiteLLMChatWrapper._kame_original_unified_turn = LiteLLMChatWrapper.unified_turn
+            LiteLLMChatWrapper.unified_turn = _kame_unified_turn
+
         # Shield 5: Compression Timeout Guard (summarize calls only)
         if not hasattr(Topic, "_kame_original_summarize_messages"):
             Topic._kame_original_summarize_messages = Topic.summarize_messages
@@ -1784,6 +2072,8 @@ def remove_kame_patch():
         from helpers.history import Topic, Bulk
         if hasattr(LiteLLMChatWrapper, "_kame_original_unified_call"):
             LiteLLMChatWrapper.unified_call = LiteLLMChatWrapper._kame_original_unified_call
+        if hasattr(LiteLLMChatWrapper, "_kame_original_unified_turn"):
+            LiteLLMChatWrapper.unified_turn = LiteLLMChatWrapper._kame_original_unified_turn
         if hasattr(Topic, "_kame_original_summarize_messages"):
             Topic.summarize_messages = Topic._kame_original_summarize_messages
         if hasattr(Bulk, "_kame_original_summarize"):
@@ -1814,6 +2104,7 @@ def _print_shield_status():
         "Hybrid Learning (Parsed retry-delay + ETA-driven sleep)",
         "Daily-Quota & Account-Limit Aware (multi-provider)",
         "Adaptive Backoff (provider-agnostic safety net)",
+        "Agent Zero V2.1 Aware (unified_turn + free-tier cache-safe)",
         "Rate Limiter Lock Fix",
         "Token Callback Support",
         "Friendly Error Reporting (real status + kind)",
