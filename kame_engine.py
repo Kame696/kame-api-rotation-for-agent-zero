@@ -1455,6 +1455,10 @@ async def _kame_unified_call(
     call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
     call_kwargs.pop("a0_retry_attempts", None)
     call_kwargs.pop("a0_retry_delay_seconds", None)
+    # v1.0.4 (A0 V2.1): never let prompt caching reach the transport — free-tier
+    # keys have zero cache storage and 429 on cache-create. Stripping the flag makes
+    # the transport build the request cache-free, exactly like the pre-V2 path.
+    call_kwargs.pop("a0_explicit_prompt_caching", None)
 
     # "Calling..." heartbeat - VERBOSE only. It shows KAME is alive during the
     # gap before a slow call returns; in normal mode we stay quiet until the
@@ -1863,6 +1867,7 @@ async def _kame_unified_turn(
                 tokens_callback=(_tok_cb if tokens_callback is not None else None),
                 rate_limiter_callback=rate_limiter_callback,
                 explicit_caching=False,        # KAME: free-tier keys cannot cache
+                a0_explicit_prompt_caching=False,  # belt+suspenders: override any flag
                 api_key=key,                    # KAME: force the rotated key
                 a0_retry_attempts=0,            # KAME owns the retry/rotation loop
                 **kwargs,

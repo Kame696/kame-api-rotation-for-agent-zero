@@ -107,6 +107,8 @@ check("made >= 2 attempts (rotated to a fresh key after the 429)",
       len(fw_a.calls) >= 2)
 check("every attempt injected explicit_caching=False (free-tier cache-safe)",
       all(c.get("explicit_caching") is False for c in fw_a.calls))
+check("every attempt also forced a0_explicit_prompt_caching=False (override any flag)",
+      all(c.get("a0_explicit_prompt_caching") is False for c in fw_a.calls))
 check("every attempt disabled the inner retry (a0_retry_attempts=0)",
       all(c.get("a0_retry_attempts") == 0 for c in fw_a.calls))
 check("every attempt forced a rotated api_key from the pool",
