@@ -23,105 +23,55 @@ graph LR
 
 ## v1.0.4 — current
 
-**Agent Zero V2 compatibility.** A0 V2 refactored model streaming into a transport
-layer and REMOVED `models._parse_chunk` — which KAME 1.0.3 hard-imported on the first
-line of every patched `unified_call`. On A0 V2 the patch still "installed" (KAME printed
-ACTIVE), then **every** chat/utility call raised `ImportError` — "loads but stopped
-working." Diagnosed against a fresh A0 V2 clone (`notes/v1.0.4-a0v2-break-diagnosis.md`).
+**One job: make KAME 1.0.3 work again on Agent Zero, after A0 went 1.2 → V2.0 → V2.1.**
+KAME's rotation engine (`_get_best_key`, cooldowns, ETA-sleep, the 13 shields) is the
+proven 1.0.3 logic, UNCHANGED. v1.0.4 only re-adapts the thin layer that broke as A0
+refactored its model layer — and keeps KAME calling the model **directly**, the 1.0.3 way.
 
-The rotation / health / cooldown carousel is **UNCHANGED**; only the per-attempt connect
-+ chunk-parse became version-aware:
-1. **Version detection** (`_kame_detect_chunk_mode`, cached once): `models._parse_chunk`
-   present → A0 v1.x path; else `helpers.litellm_transport.LiteLLMTransport` → A0 V2 path.
-2. **Version-aware chunk source** (`_kame_chunk_aiter`): A0 V2 streams via
-   `LiteLLMTransport.astream()/acomplete()` (it strips `stream` + handles caching/policy
-   itself; KAME injects only the api_key); A0 v1.x keeps `acompletion()+_parse_chunk`. In
-   both, the yielded dict feeds `result.add_chunk()` unchanged, so every callback / health
-   / cooldown line is identical. The fatal `from models import _parse_chunk` is removed.
-3. **Stream-path auth/terminal awareness**: on V2 the connect happens on the first
-   transport chunk, so a connect-time invalid-key / terminal error now surfaces in the
-   stream handler — KAME mirrors the outer handling there (quarantine+rotate a bad key;
-   abort cleanly on terminal). Harmless no-op on v1.x.
+What A0 changed, and what KAME does about it:
 
-**ONE engine, BOTH A0 majors.** Behavior on A0 v1.x is byte-for-byte identical to 1.0.3.
-Tests: `tests/test_v1_0_4.py` (detection + both chunk modes — all pass); the v1.0.2/1.0.3
-suites still pass.
+1. **A0 V2 removed `models._parse_chunk`** (the raw-chunk parser KAME used). KAME now
+   detects the right parser once — `models._parse_chunk` on A0 v1.x, or
+   `helpers.litellm_transport.ChatCompletionsTransport.parse` (a pure static method) on
+   A0 V2/V2.1 — and uses it. Same `acompletion` call, just the matching parser.
+2. **A0 V2.1 split the model entry point**: the agent monologue now calls `unified_turn`
+   (returns an `LLMResult`), not `unified_call` (returns a tuple). KAME 1.0.3 patched only
+   `unified_call`, so on V2.1 the whole loop ran un-patched and rotation never engaged.
+   KAME now patches `unified_turn` too — running the SAME direct-acompletion carousel and
+   wrapping its (response, reasoning) in the `LLMResult` V2.1 callers read.
+3. **KAME calls the model DIRECTLY — it does NOT delegate to A0's `unified_turn`/transport.**
+   This is the big fix behind the "it gets an error and takes ~40s to try the next key"
+   report. A0 V2.1 defaults to its new "Responses" API mode; for Gemini that runs through
+   A0's `LiteLLMTransport`, whose `TransportPolicy.recover` does an **internal retry/fallback
+   loop on failure** (`RETRY_RESPONSES` / `FALLBACK_TO_CHAT`) that hangs a *failing* call for
+   ~30-40s before it raises — so KAME couldn't rotate for ~40s per key. By calling
+   `litellm.acompletion` directly (exactly like 1.0.3) and parsing chunks itself, KAME
+   removes that loop entirely: a 503 returns in ~1s and the carousel rotates instantly.
+   (A0-internal `a0_*` / `responses_*` kwargs are stripped before the plain chat call.)
+   *Correction to earlier 1.0.4 notes:* there is NO separate, slower `vertex_ai_beta`
+   endpoint — both modes hit the same Google server; `"vertex"` is only litellm's shared
+   error-class name. The 503 "high demand" storms are Google throttling the **model**
+   (newest free-tier preview models like `gemini-3.5-flash`), independent of KAME — use a
+   stable model (`gemini-2.5-flash`, `gemini-3.1-flash-lite`) for fast, reliable chat.
+4. **Free-tier cache-safe**: V2.1 turns on prompt caching for big prompts, which free-tier
+   keys 429 on. KAME sends the prompt fresh (`explicit_caching=False`), as the pre-V2 path did.
+5. **No error ever surfaces (the eternal-carousel promise).** A transient mid-stream drop
+   (a 503 after a few streamed tokens) is now cooled + rotated + retried like any failure —
+   KAME returns the complete answer from the key that finally works, instead of letting a
+   traceback reach the chat. Only a genuinely terminal error (4xx / content policy) or an
+   intervention/nudge surfaces (so it never spins forever).
+6. **New log level `verbose+errors`**: `kame_log_level` now accepts a 4th value —
+   `silent | normal | verbose | verbose+errors` — the last being full `verbose` plus the
+   complete raw exception per failure in the Docker log (it flips `kame_log_full_errors` on).
 
-### v1.0.4 (cont.) — Agent Zero **V2.1**: the real break (`unified_turn` + free-tier caching)
+Removed: the short-lived `kame_force_chat_completions` setting (KAME now always calls
+chat-completions directly — it is intrinsic to how it stays fast, not a toggle).
 
-The first 1.0.4 above was diagnosed against an early V2 build. A real V2.1 run
-(`models.py:702 unified_turn → transport.astream()`, **zero `[KAME]` lines, zero
-`unified_call`**) exposed two deeper changes that the chunk-parse fix alone did NOT
-cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
-
-1. **A0 split the model entry point.** V2.1 has BOTH `unified_call` (now "public
-   plugin-facing", returns a tuple) **and `unified_turn`** (core orchestration, returns
-   an `LLMResult`) — and the **agent monologue calls `unified_turn`** (`agent.py →
-   call_chat_model_turn → unified_turn`). KAME patched only `unified_call`, so the whole
-   loop ran through the **un-patched** `unified_turn` and **rotation never engaged**.
-   Fix: KAME now also patches `unified_turn` (when present — skipped on A0 v1.x). Instead
-   of re-implementing its body (the brittle path that broke twice), `_kame_unified_turn`
-   **WRAPS the original**: the carousel picks a key, calls the original with
-   `api_key=<rotated>` + `a0_retry_attempts=0` (KAME owns the retry loop), and on a
-   connect-time failure classifies / cools / rotates / ETA-sleeps exactly like the
-   `unified_call` carousel. A0 keeps doing its own streaming + `LLMResult` construction →
-   KAME never touches transport internals and **survives future refactors**. The
-   got-any-chunk contract is preserved (content already streamed → re-raise, never
-   re-stream a duplicate on another key).
-2. **Free-tier context-caching 429.** V2.1 turns on Gemini/Vertex prompt caching for big
-   prompts (e.g. a 40k-token persona). Free-tier keys have **zero** cached-content storage,
-   so the cache-create call 429s (`TotalCachedContentStorageTokensPerModelFreeTier
-   limit=0, requested=43347`) on **every** key — rotation can't help. KAME now forces
-   `explicit_caching=False` on both the `unified_call` and `unified_turn` paths (free-tier
-   never caches; this is exactly how the pre-V2 path behaved — the prompt is sent fresh).
-3. **OPT-IN `kame_force_chat_completions` (default OFF) — KAME stays transparent.** A0 V2.1
-   changed the default API mode to its new **Responses API** (`a0_api_mode="responses"`,
-   `agent.py:876/920`). Gemini has no native Responses endpoint, so litellm *emulates* it
-   (`litellm_completion_transformation`). **Correction to earlier 1.0.4 notes:** I first
-   claimed this routed Gemini to a *different, ~5× slower* `vertex_ai_beta` endpoint and
-   shipped the toggle **ON by default**. Verifying in-container proved that wrong —
-   **both modes call plain `acompletion` on the SAME Google endpoint** (provider `gemini`);
-   `"vertex"` is only litellm's shared error-class *name*, not a separate server. Responses
-   mode just adds a translation *wrapper* (which is also where the `MidStreamFallbackError`
-   originates — now handled by #4). The `503 "high demand"` storms come from the **model**
-   (newest free-tier preview models), not the endpoint, and happen either way. So the
-   toggle is now **OFF by default**: KAME uses whatever mode A0 picks — transparent, works
-   on any provider, never overrides the framework. Turn it ON only if you want to skip the
-   wrapper (leaner path; not a speed cure, won't stop throttling); never turn it on for a
-   model that's genuinely better on Responses (newest OpenAI / Fable). Endpoint/mode only.
-4. **Mid-stream drops no longer escape as a traceback (KAME's eternal-carousel promise
-   restored).** The `unified_turn` wrapper re-raised whenever any content had already
-   streamed (a `got_any_chunk` guard, to avoid re-generating on a new key). On A0 V2.1 a
-   busy preview model (`gemini-3.5-flash`) often dies MID-stream — a `503` /
-   `ServiceUnavailable` / `MidStreamFallbackError` right after emitting a few tokens like
-   `{"thoughts":` — so re-raising let the **error reach the chat as a traceback**, exactly
-   what KAME exists to prevent (it made 1.0.4 feel like a *degraded* KAME). Now a
-   mid-stream **transient** drop is treated like any other transient failure: cool the
-   key, rotate, retry — riding out the storm and returning the COMPLETE response from the
-   attempt that finally succeeds (a few already-streamed tokens may briefly flicker in the
-   live view before the full answer). Only a genuinely **terminal** error (4xx / content
-   policy) or an intervention/nudge still surfaces — so KAME never spins forever on an
-   unfixable request. This is the carousel behaving the way it did before V2.1 made
-   mid-stream failures common.
-5. **New log level `verbose+errors`.** `kame_log_level` now accepts a 4th value:
-   `silent` | `normal` | `verbose` | **`verbose+errors`**. The new one is full `verbose`
-   output **plus** the complete raw exception dumped on every failure (it flips
-   `kame_log_full_errors` on for you) — so the actual error shows in the Docker log, not
-   just KAME's one-line classification. Plain `verbose` is unchanged. (The standalone
-   `kame_log_full_errors` boolean still exists and is read *before* the level, so the level
-   can override it.)
-
-**Net 1.0.4 design (what "make 1.0.3 work on V2.1" actually needed):** the two *core*,
-transparent fixes — **hook the renamed `unified_turn`** (so rotation runs) and **ride out
-mid-stream drops** (#4, so no error ever surfaces) — plus **cache-safety** so free-tier
-keys don't choke. The endpoint toggle (#3) is now a clearly-labeled opt-in, off by default.
-KAME adapts to A0 V2.1 instead of forcing it back to v1.x behavior.
-
-Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry injection, **transparent
-default = no a0_api_mode forced**, opt-in ON pins it, no-pool delegation, **mid-stream drop
-→ retried not surfaced**, terminal error still surfaces — all pass) + an installer-wiring
-check (patches & reverts `unified_turn` on V2.1; untouched on v1.x). Verified locally
-against the cloned A0 **v2.1 tag** source AND live in the owner's `vault0` container.
+Tests: `tests/test_v1_0_4.py` (parser detection + direct-acompletion chunk iterator + kwarg
+stripping) and `tests/test_v1_0_4_v21.py` (unified_turn → LLMResult, fast rotation on a
+connect 503 via direct acompletion, mid-stream drop ridden out, terminal still surfaces) +
+the v1.0.2/1.0.3 suites — all green. Root cause (`TransportPolicy.recover` retry loop)
+verified against the cloned A0 **v2.1 tag** source and the owner's live container.
 
 ## v1.0.3
 

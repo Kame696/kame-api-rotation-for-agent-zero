@@ -194,8 +194,8 @@ _KAME_CURRENT_AGENT = contextvars.ContextVar('kame_agent', default=None)
 # the legacy acompletion()+_parse_chunk path when _parse_chunk exists, and V2's
 # LiteLLMTransport.astream()/acomplete() when it does not. Detected once, lazily,
 # and cached — the engine still imports cleanly in a no-A0 test harness.
-_KAME_PARSE_CHUNK = None      # models._parse_chunk on A0 v1.x, else None
-_KAME_V2_TRANSPORT = None     # helpers.litellm_transport.LiteLLMTransport on A0 V2, else None
+_KAME_PARSE_CHUNK = None      # the chunk parser: models._parse_chunk (v1.x) OR
+                              # ChatCompletionsTransport.parse (V2/V2.1). Detected once.
 _KAME_CHUNK_MODE = None       # 'v1' | 'v2' once detected
 
 # --- v1.0.1: log verbosity level (replaces the old verbose_trace toggle) ---
@@ -288,27 +288,6 @@ _KAME_STORM_GAP_S = 30.0            # a quiet gap longer than this ends a storm
 _KAME_STORM_MIN_FOR_SUMMARY = 3     # only recap a storm that had >= this many fails
 # identity -> {count, first_at, last_err_at, last_emit_at, kinds:{kind:count}}
 _KAME_STORM = {}
-
-# v1.0.4 — OPT-IN: force plain chat-completions instead of A0 V2.1's "Responses"
-# mode. OFF by default: KAME stays transparent and uses whatever API mode A0 picks,
-# so it works on ANY provider/model and never overrides the framework.
-#
-# Background (verified in-container): A0 V2.1 defaults to its new Responses API. For
-# Gemini there's no native Responses endpoint, so litellm *emulates* it — under the
-# hood it still calls plain chat-completions on the SAME Google endpoint, just wrapped
-# in a translation layer (that wrapper is where the mid-stream MidStreamFallbackError
-# comes from; KAME's carousel now rides those out either way). It is NOT a different
-# or slower Google server — earlier notes that claimed a separate "vertex_ai_beta"
-# endpoint were wrong; "vertex" is only litellm's shared error-class name.
-#
-# When ON (kame_force_chat_completions: true), KAME passes a0_api_mode="chat_completions"
-# so the call skips that translation wrapper and goes straight to chat-completions (the
-# leaner 1.0.3-style path). It can shave a little overhead on Gemini, but it is NOT a
-# magic speed fix and won't stop a model's own "high demand" 503s. Leave it OFF unless
-# you specifically want the direct path — and never turn it on globally if you use a
-# model that's genuinely better on Responses (newest OpenAI / Fable). Endpoint/mode
-# only; never touches rotation/cooldown/selection.
-_KAME_FORCE_CHAT_COMPLETIONS = False
 
 # --- v1.0.1: lightweight in-memory session stats (for verbose summary) ---
 _KAME_STATS = {
@@ -408,23 +387,6 @@ def set_collapse_storm_logs(enabled) -> None:
         _KAME_COLLAPSE_STORM_LOGS = enabled.strip().lower() in ("true", "1", "yes", "on")
     else:
         _KAME_COLLAPSE_STORM_LOGS = bool(enabled)
-
-
-def set_force_chat_completions(enabled) -> None:
-    """Pin KAME's calls to the chat-completions endpoint (v1.0.4, A0 V2.1).
-
-    Called by the activation extension from the `kame_force_chat_completions`
-    plugin setting (default true). When on, KAME passes a0_api_mode=
-    "chat_completions" so Gemini calls use the standard AI-Studio endpoint that
-    KAME 1.0.3 used, instead of A0 V2.1's Responses-API default that routes
-    through the overload-prone `vertex_ai_beta` endpoint. Only changes which
-    Google endpoint is hit — never the rotation/cooldown/selection logic.
-    """
-    global _KAME_FORCE_CHAT_COMPLETIONS
-    if isinstance(enabled, str):
-        _KAME_FORCE_CHAT_COMPLETIONS = enabled.strip().lower() in ("true", "1", "yes", "on")
-    else:
-        _KAME_FORCE_CHAT_COMPLETIONS = bool(enabled)
 
 
 def set_current_agent(agent) -> None:
@@ -1286,13 +1248,16 @@ async def _kame_honor_intervention():
 # --- v1.0.4: version-aware chunk source (A0 v1.x acompletion vs A0 V2 transport) ---
 
 def _kame_detect_chunk_mode() -> str:
-    """Detect ONCE how to stream/parse model chunks for the installed A0 version.
+    """Detect ONCE the chunk PARSER for the installed A0 version (cached).
 
-    A0 v1.x exposes ``models._parse_chunk`` (used with ``acompletion``); A0 V2
-    removed it and streams via ``helpers.litellm_transport.LiteLLMTransport``.
-    Result is cached in module globals. Returns ``'v1'`` or ``'v2'``.
+    KAME calls litellm ``acompletion`` DIRECTLY (the 1.0.3 mechanism) on every A0
+    version; only the raw-chunk → {reasoning_delta, response_delta} parser differs:
+      * A0 v1.x  → ``models._parse_chunk``
+      * A0 V2/V2.1 → ``helpers.litellm_transport.ChatCompletionsTransport.parse``
+        (a pure static method; A0 V2 removed the old ``_parse_chunk``).
+    Returns ``'v1'`` or ``'v2'`` and stores the parser in ``_KAME_PARSE_CHUNK``.
     """
-    global _KAME_PARSE_CHUNK, _KAME_V2_TRANSPORT, _KAME_CHUNK_MODE
+    global _KAME_PARSE_CHUNK, _KAME_CHUNK_MODE
     if _KAME_CHUNK_MODE is not None:
         return _KAME_CHUNK_MODE
     try:
@@ -1303,8 +1268,8 @@ def _kame_detect_chunk_mode() -> str:
     except Exception:
         pass
     try:
-        from helpers.litellm_transport import LiteLLMTransport as _T  # A0 V2
-        _KAME_V2_TRANSPORT = _T
+        from helpers.litellm_transport import ChatCompletionsTransport as _CCT  # A0 V2/V2.1
+        _KAME_PARSE_CHUNK = _CCT.parse  # static: raw chunk/response -> ChatChunk dict
         _KAME_CHUNK_MODE = "v2"
         return "v2"
     except Exception:
@@ -1314,41 +1279,35 @@ def _kame_detect_chunk_mode() -> str:
     return _KAME_CHUNK_MODE
 
 
+# A0-internal kwargs that must NOT be forwarded to a plain litellm chat call.
+# (A0's transport strips these; KAME bypasses the transport, so it strips them too.)
+def _kame_clean_call_kwargs(call_kwargs: dict) -> dict:
+    return {
+        k: v for k, v in call_kwargs.items()
+        if not (k.startswith("a0_") or k.startswith("responses_"))
+        and k not in ("previous_response_id", "reasoning")
+    }
+
+
 async def _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, stream):
     """Yield parsed ChatChunk dicts ({reasoning_delta, response_delta}) for ONE
-    attempt on ONE key — works on A0 v1.x AND A0 V2 (v1.0.4).
+    attempt on ONE key — A0 v1.x AND A0 V2/V2.1. (v1.0.4)
 
-    * A0 V2: ``LiteLLMTransport(model, messages, kwargs).astream()`` (streaming) or
-      ``.acomplete()`` (non-stream). The transport strips ``stream`` and handles
-      prompt-caching / responses-vs-chat policy itself, so KAME passes only the
-      api_key alongside its existing call kwargs.
-    * A0 v1.x: ``acompletion(..., stream=...)`` + ``models._parse_chunk(chunk)``.
+    KAME calls litellm ``acompletion`` **DIRECTLY** (chat-completions) and parses each
+    chunk with the installed A0's parser. This is the 1.0.3 mechanism: KAME owns the
+    call, so a 503 comes straight back and the carousel rotates in milliseconds.
 
-    In BOTH cases the yielded dict feeds ``result.add_chunk()`` unchanged, so all
-    the rotation / health / callback / cooldown logic in the carousel is identical
-    across A0 versions. Connect-time errors propagate to the caller (the carousel's
-    auth/terminal/classify handling), exactly as before.
+    It deliberately does NOT route through A0's ``LiteLLMTransport``: in A0 V2.1's
+    default "Responses" mode that transport runs an INTERNAL retry/fallback loop
+    (``TransportPolicy.recover`` → RETRY_RESPONSES / FALLBACK_TO_CHAT) that hangs a
+    FAILING call for ~30-40s before it raises — so KAME couldn't rotate for 40s per
+    key. Calling acompletion directly removes that loop entirely. Connect-time errors
+    propagate to the carousel's auth/terminal/classify handling, exactly as before.
     """
-    mode = _kame_detect_chunk_mode()
-    if mode == "v2":
-        _v2_kwargs = {**call_kwargs, "api_key": key}
-        if _KAME_FORCE_CHAT_COMPLETIONS:
-            # Pin to the AI-Studio chat-completions endpoint (1.0.3 path), off the
-            # overload-prone vertex_ai_beta Responses route A0 V2.1 defaults to.
-            _v2_kwargs["a0_api_mode"] = "chat_completions"
-        transport = _KAME_V2_TRANSPORT(
-            model=self.model_name,
-            messages=msgs_conv,
-            kwargs=_v2_kwargs,
-        )
-        if stream:
-            async for parsed in transport.astream():
-                yield parsed
-        else:
-            yield await transport.acomplete()
-        return
-    # --- A0 v1.x legacy path (behavior identical to v1.0.3) ---
-    cur = {**call_kwargs, "api_key": key, "stream": stream}
+    _kame_detect_chunk_mode()  # ensures _KAME_PARSE_CHUNK is set
+    cur = _kame_clean_call_kwargs(call_kwargs)
+    cur["api_key"] = key
+    cur["stream"] = stream
     completion = await acompletion(model=self.model_name, messages=msgs_conv, **cur)
     if stream:
         _it = completion.__aiter__()
@@ -1670,24 +1629,26 @@ async def _kame_unified_call(
                     # message is honored without the "nudge agent" button.
                     if _KAME_PASSTHROUGH_EXC and isinstance(stream_err, _KAME_PASSTHROUGH_EXC):
                         raise
-                    # Fix C (v1.0.1): if content was already streamed to the live
-                    # view, a mid-stream failure must NOT rotate-and-re-stream
-                    # (that re-generates the whole response from scratch on
-                    # another key). Mirror vanilla A0's got_any_chunk contract:
-                    # re-raise so A0 restarts the turn cleanly with intact
-                    # history. Rate-limit / 503 storms fail at connect time
-                    # (outer except, before any chunk), so the carousel stays
-                    # fully intact for them.
-                    if got_any_chunk:
-                        raise
-                    # v1.0.4: on A0 V2 the connect happens on the FIRST transport
-                    # chunk, so a connect-time terminal/auth error surfaces HERE
-                    # rather than in the outer except. Mirror the outer handling so
-                    # a bad key is still quarantined+rotated and a terminal error
-                    # aborts cleanly. On v1.x this is a harmless no-op (there the
-                    # connect error hits the outer except before any chunk).
+                    # A genuinely TERMINAL error (bad request / content policy / 4xx)
+                    # won't be fixed by another key — surface it. (With a DIRECT
+                    # acompletion call the connect-time 503 raises before any chunk and
+                    # lands in the OUTER except below; reaching HERE with got_any_chunk
+                    # means the stream dropped MID-way after real content.)
                     if _is_terminal_error(stream_err):
                         raise stream_err
+                    # v1.0.4 — KAME's eternal-carousel promise: a TRANSIENT mid-stream
+                    # drop is never surfaced. Earlier KAME re-raised whenever any content
+                    # had streamed (got_any_chunk), so on A0 V2.1 a 503 mid-stream escaped
+                    # as a traceback in the chat. Now it is cooled + rotated like any
+                    # other failure; KAME returns the COMPLETE answer from the key that
+                    # finally works (a few already-streamed tokens may briefly flicker in
+                    # the live view before the full answer). Only terminal errors and
+                    # interventions ever surface.
+                    if got_any_chunk and _lvl_normal():
+                        PrintStyle.warning(
+                            f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                            f"⚠️ mid-stream drop after partial output → rotating + retrying"
+                        )
                     if _is_auth_error(stream_err):
                         _auth_sc = getattr(stream_err, "status_code", None)
                         applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
@@ -1766,13 +1727,17 @@ async def _kame_unified_call(
             # also catches a passthrough re-raised from the stream block above.
             if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
                 raise
-            # Fix C (v1.0.1): a got_any_chunk re-raise from the stream block lands
-            # here; if content was already streamed, propagate (clean restart)
-            # instead of rotating-and-re-streaming.
-            if got_any_chunk:
-                raise
+            # Only a genuinely TERMINAL error surfaces — everything else (incl. a
+            # transient mid-stream drop) is cooled + rotated, never re-raised (v1.0.4
+            # eternal-carousel promise). With a direct acompletion call a connect-time
+            # 503 lands here with got_any_chunk=False and rotates fast.
             if _is_terminal_error(e):
                 raise e
+            if got_any_chunk and _lvl_normal():
+                PrintStyle.warning(
+                    f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                    f"⚠️ mid-stream drop after partial output → rotating + retrying"
+                )
 
             # Auth errors: quarantine the key for a long time (likely permanently bad)
             if _is_auth_error(e):
@@ -1796,22 +1761,20 @@ async def _kame_unified_call(
 
 # --- THE COMMANDER (A0 V2.1): unified_turn ---
 #
-# A0 V2.1 split the model entry point: `unified_call` is the "public plugin-facing"
-# method (returns a (response, reasoning) tuple), while `unified_turn` is what the
-# core agent monologue actually calls (it returns a richer LLMResult with response
-# ids / capability metadata). KAME 1.0.3/early-1.0.4 patched only `unified_call`, so
-# on V2.1 the whole agent loop went through the UN-patched `unified_turn` and KAME's
-# rotation never engaged (logs showed unified_turn → transport.astream() with zero
-# [KAME] lines).
+# A0 V2.1 split the model entry point: `unified_call` returns a (response, reasoning)
+# tuple; `unified_turn` is what the agent monologue calls and returns a richer
+# LLMResult. KAME 1.0.3 patched only unified_call, so on V2.1 the whole loop ran
+# through the UN-patched unified_turn and rotation never engaged.
 #
-# Rather than re-implement unified_turn's body (the brittle approach that broke twice
-# across A0 refactors), KAME now WRAPS the original method: the carousel picks a key,
-# calls the *original* unified_turn with `api_key=<rotated>` (free-tier keys, injected
-# via kwargs which override self.kwargs) + `explicit_caching=False` (free tier can't
-# cache) + `a0_retry_attempts=0` (KAME owns the retry loop), and on a connect-time
-# failure classifies / cools / rotates / ETA-sleeps exactly like the unified_call
-# carousel. A0 keeps doing its own streaming + chunk parsing + LLMResult construction,
-# so KAME never touches transport internals and survives future refactors.
+# KAME does NOT delegate to A0's native unified_turn. Delegating routes the call
+# through A0's LiteLLMTransport, whose V2.1-default "Responses" mode runs an INTERNAL
+# retry/fallback loop that hangs a FAILING call ~30-40s before it raises — so KAME
+# could not rotate for ~40s per key (the "takes hell time to try the next key"
+# report). Instead KAME runs the SAME proven, direct-acompletion carousel as
+# unified_call (the 1.0.3 mechanism — KAME owns the call, a 503 returns instantly,
+# rotation is immediate), then wraps the (response, reasoning) it produced in the
+# LLMResult that V2.1 callers read (.response / .reasoning). One carousel, both entry
+# points; nothing delegated to A0.
 
 async def _kame_unified_turn(
     self,
@@ -1825,193 +1788,30 @@ async def _kame_unified_turn(
     explicit_caching=False,
     **kwargs,
 ):
-    from models import turn_off_logging
-    turn_off_logging()
-    litellm.suppress_debug_info = True
-    logging.getLogger("litellm").setLevel(logging.CRITICAL)
-    logging.getLogger("openai").setLevel(logging.CRITICAL)
-
-    provider = (self.a0_model_conf.provider if self.a0_model_conf else "unknown").lower()
-    model = (self.model_name or "unknown").lower()
-    identity = f"{provider}:{model}"
-
-    all_keys = _get_all_api_keys(self)
-
-    # No multi-key config → behave exactly like vanilla A0 (no rotation to do).
-    if not all_keys:
-        return await self._kame_original_unified_turn(
-            system_message=system_message, user_message=user_message,
-            messages=messages, response_callback=response_callback,
-            reasoning_callback=reasoning_callback, tokens_callback=tokens_callback,
-            rate_limiter_callback=rate_limiter_callback,
-            explicit_caching=explicit_caching, **kwargs,
-        )
-
-    # v1.0.4 (A0 V2.1): pin to chat-completions so the call uses the same fast
-    # AI-Studio endpoint KAME 1.0.3 used, instead of A0 V2.1's Responses default
-    # (which routes Gemini through the overload-prone vertex_ai_beta endpoint).
-    # A0 drops the responses-only kwargs itself in chat-completions mode.
-    if _KAME_FORCE_CHAT_COMPLETIONS:
-        kwargs = {**kwargs, "a0_api_mode": "chat_completions"}
-
-    stream = (
-        reasoning_callback is not None
-        or response_callback is not None
-        or tokens_callback is not None
+    # Reuse the proven, direct-call rotation carousel (returns response, reasoning),
+    # then wrap it in the LLMResult A0 V2.1 callers read. a0_* / responses_* kwargs
+    # are stripped inside _kame_chunk_aiter before the plain chat acompletion call.
+    response, reasoning = await _kame_unified_call(
+        self,
+        system_message=system_message,
+        user_message=user_message,
+        messages=messages,
+        response_callback=response_callback,
+        reasoning_callback=reasoning_callback,
+        tokens_callback=tokens_callback,
+        rate_limiter_callback=rate_limiter_callback,
+        explicit_caching=explicit_caching,
+        **kwargs,
     )
-    call_type = "Chat" if stream else "Util"
-    model_short = model.split("/")[-1][:25]
-
-    # Track whether any content has been streamed to the live view in THIS attempt.
-    # A connect-time failure (429/503/auth) fires before any delta → safe to rotate.
-    # A mid-stream failure after real content fired → re-raise so A0 restarts the
-    # turn cleanly instead of KAME re-streaming a duplicate on another key (mirrors
-    # vanilla A0's got_any_chunk contract + KAME's unified_call behavior).
-    _delivered = {"any": False}
-
-    async def _resp_cb(delta, full):
-        _delivered["any"] = True
-        if response_callback is not None:
-            return await response_callback(delta, full)
-        return None
-
-    async def _reason_cb(delta, full):
-        _delivered["any"] = True
-        if reasoning_callback is not None:
-            await reasoning_callback(delta, full)
-
-    async def _tok_cb(text, count):
-        _delivered["any"] = True
-        if tokens_callback is not None:
-            await tokens_callback(text, count)
-
-    _ctx = _KAME_CALL_CONTEXT.get()
-    _ctx_label = f" {_ctx}" if _ctx else ""
-    if _lvl_verbose():
-        PrintStyle(font_color="#85C1E9").print(
-            f"[KAME] {call_type}|{model_short}{_ctx_label} ➡ Calling... (turn)"
-        )
-
-    _call_started_at = time.perf_counter()
-    _sleep_state = _KameSleepState()
-    attempt_no = 0
-    while True:  # ETERNAL CAROUSEL — identical recovery behavior to unified_call
-        attempt_no += 1
-        if attempt_no > 1:
-            await _kame_honor_intervention()
-
-        _select_t0 = time.perf_counter()
-        key, status = _get_best_key(identity, all_keys)
-        _select_ms = (time.perf_counter() - _select_t0) * 1000.0
-
-        if status == "EXHAUSTED_RETRY":
-            await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, _sleep_state)
-            continue
-        elif _lvl_verbose():
-            PrintStyle(font_color="#85C1E9").print(
-                f"[KAME] {call_type}|{model_short}{_ctx_label} ➡ "
-                f"{_key_display(key)} picked in {_select_ms:.2f}ms"
-            )
-
-        _delivered["any"] = False
-        try:
-            llm_result = await self._kame_original_unified_turn(
-                system_message=system_message,
-                user_message=user_message,
-                messages=messages,
-                response_callback=(_resp_cb if response_callback is not None else None),
-                reasoning_callback=(_reason_cb if reasoning_callback is not None else None),
-                tokens_callback=(_tok_cb if tokens_callback is not None else None),
-                rate_limiter_callback=rate_limiter_callback,
-                explicit_caching=False,        # KAME: free-tier keys cannot cache
-                a0_explicit_prompt_caching=False,  # belt+suspenders: override any flag
-                api_key=key,                    # KAME: force the rotated key
-                a0_retry_attempts=0,            # KAME owns the retry/rotation loop
-                **kwargs,
-            )
-
-            _mark_key_health(identity, key, True)
-            # success ends any error storm (recap recap in collapse mode)
-            _storm_recap = _storm_end(identity)
-            if (_storm_recap and _lvl_normal() and not _lvl_verbose()
-                    and _KAME_COLLAPSE_STORM_LOGS and not _KAME_LOG_FULL_ERRORS):
-                _sc_n, _sc_span = _storm_recap
-                PrintStyle.success(
-                    f"[KAME] {call_type}|{model_short} ☀️ storm over — "
-                    f"{_sc_n} failures over {_fmt_duration(_sc_span)} · resuming"
-                )
-            # fast pool refill after an outage we slept through
-            if _sleep_state.sleep_count > 0:
-                _thawed = _thaw_server_cooled_keys(identity, key)
-                if _thawed and _lvl_normal():
-                    PrintStyle.success(
-                        f"[KAME] {call_type}|{model_short} ☀️ recovery — thawed "
-                        f"{_thawed} server-cooled key{'s' if _thawed != 1 else ''} for fast pool refill"
-                    )
-            _ctx = _KAME_CALL_CONTEXT.get()
-            _ctx_label = f" {_ctx}" if _ctx else ""
-            _cascade = _cascade_str(attempt_no, _sleep_state.sleep_count, _sleep_state.cooldown_overhead_s)
-            if _lvl_verbose():
-                _total_s = time.perf_counter() - _call_started_at
-                _snap = _pool_snapshot(identity, all_keys)
-                _tail = f" | {_cascade}" if _cascade else ""
-                PrintStyle(font_color="#85C1E9").print(
-                    f"[KAME] {call_type}|{model_short}{_ctx_label} ✅ {_key_display(key)} "
-                    f"in {_total_s:.1f}s | {_snap}{_tail}"
-                )
-                if _KAME_CALL_COUNT > 0 and _KAME_CALL_COUNT % 100 == 0:
-                    PrintStyle(font_color="#85C1E9").print(_session_summary_line())
-            elif _lvl_normal():
-                _bits = [b for b in (_cascade, _pool_snapshot_if_degraded(identity, all_keys)) if b]
-                _tail = (" · " + " · ".join(_bits)) if _bits else ""
-                PrintStyle(font_color="#85C1E9").print(
-                    f"[KAME] {call_type}|{model_short}{_ctx_label} ✅ {_key_display(key)}{_tail}"
-                )
-            return llm_result
-
-        except Exception as e:
-            # A0 control-flow (InterventionException etc.) must propagate, never retry.
-            if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
-                raise
-            # A genuinely TERMINAL error (bad request / content policy / 4xx) is not
-            # fixed by another key — surface it. Everything else is transient.
-            if _is_terminal_error(e):
-                raise e
-            # KAME's promise is the ETERNAL CAROUSEL: a transient failure is rotated +
-            # retried until it succeeds or the outage is slept out — it NEVER surfaces
-            # as an error. Earlier this re-raised whenever any content had already
-            # streamed (a got_any_chunk guard, to avoid re-generating on a new key).
-            # But on A0 V2.1 a busy preview model frequently dies MID-stream (503 /
-            # ServiceUnavailable / MidStreamFallbackError) right after emitting a few
-            # tokens like '{"thoughts":' — and re-raising let that escape as a
-            # TRACEBACK in the chat, the exact thing KAME exists to prevent. So a
-            # mid-stream transient drop is now treated like any other transient
-            # failure: cool the key, rotate, retry. KAME returns the COMPLETE response
-            # from the attempt that finally succeeds (a few already-streamed tokens may
-            # briefly flicker in the live view before the full answer arrives). Only a
-            # terminal error or an intervention ever surfaces.
-            if _delivered["any"] and _lvl_normal():
-                PrintStyle.warning(
-                    f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                    f"⚠️ mid-stream drop after partial output → rotating + retrying (no error surfaced)"
-                )
-            # Auth / invalid-key: quarantine the key for a long time, rotate.
-            if _is_auth_error(e):
-                _auth_sc = getattr(e, "status_code", None)
-                applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
-                if _lvl_normal():
-                    PrintStyle.warning(
-                        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                        f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
-                    )
-                _maybe_log_full_error(call_type, model_short, key, e, "auth", applied, _auth_sc)
-                continue
-            # Rate-limit / daily / server: classify, cool the key, rotate.
-            delay, kind, sc = _classify_error(e)
-            applied = _mark_key_health(identity, key, False, delay, kind)
-            _log_failure(call_type, model_short, key, e, kind, applied, sc, identity, all_keys)
-            await asyncio.sleep(0.05)
-            continue
+    try:
+        from models import LLMResult
+    except Exception:
+        from helpers.llm_result import LLMResult
+    return LLMResult.from_chat(
+        response=response or "",
+        reasoning=reasoning or "",
+        provider_model_key=self.model_name,
+    )
 
 
 # --- SHIELDS: COMPRESSION TIMEOUT GUARD ---

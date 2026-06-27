@@ -1,8 +1,12 @@
-"""v1.0.4 tests — Agent Zero V2 compatibility (version-aware chunk source).
+"""v1.0.4 — A0 V2 / V2.1 chunk handling.
 
-Verifies the new capability detection (_kame_detect_chunk_mode) and the
-version-aware chunk generator (_kame_chunk_aiter) for BOTH A0 majors, using
-stubs (no real A0 / litellm needed). Same stub strategy as the v1.0.2/1.0.3 suites.
+KAME calls litellm ``acompletion`` DIRECTLY on every A0 version (the 1.0.3
+mechanism); only the raw-chunk PARSER differs:
+  * A0 v1.x   → models._parse_chunk
+  * A0 V2/V2.1 → ChatCompletionsTransport.parse (a static method)
+KAME does NOT route through A0's LiteLLMTransport (whose Responses-mode retry
+loop hangs a failing call ~40s). It also strips A0-internal a0_*/responses_*
+kwargs before the plain chat call. Tested with stubs (no real A0/litellm).
 """
 import sys, types, os, asyncio
 
@@ -16,16 +20,14 @@ def _stub(name):
 _stub("openai")
 _litellm = _stub("litellm")
 _litellm.suppress_debug_info = False
-def _acompletion(*a, **k):
-    raise RuntimeError("acompletion stub should not be called")
-_litellm.acompletion = _acompletion
+_litellm.acompletion = lambda *a, **k: None
 _stub("langchain_core")
-_lc_msg = _stub("langchain_core.messages")
+_lc = _stub("langchain_core.messages")
 class _Msg:
     def __init__(self, content=""):
         self.content = content
-_lc_msg.SystemMessage = _Msg
-_lc_msg.HumanMessage = _Msg
+_lc.SystemMessage = _Msg
+_lc.HumanMessage = _Msg
 _stub("helpers")
 _ps = _stub("helpers.print_style")
 class _PrintStyle:
@@ -39,12 +41,9 @@ class _PrintStyle:
     def success(*a, **k): pass
 _ps.PrintStyle = _PrintStyle
 _errs = _stub("helpers.errors")
-class InterventionException(Exception): pass
-class RepairableException(Exception): pass
-class HandledException(Exception): pass
-_errs.InterventionException = InterventionException
-_errs.RepairableException = RepairableException
-_errs.HandledException = HandledException
+for _n in ("InterventionException", "RepairableException", "HandledException"):
+    setattr(_errs, _n, type(_n, (Exception,), {}))
+_models = _stub("models")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import kame_engine as K  # noqa: E402
@@ -56,102 +55,73 @@ def check(name, cond):
         _failures.append(name)
 
 
-def _reset_detect():
+def _reset():
     K._KAME_CHUNK_MODE = None
     K._KAME_PARSE_CHUNK = None
-    K._KAME_V2_TRANSPORT = None
 
 
-class FakeSelf:
-    model_name = "gemini/gemini-2.5-flash"
-
-
-_captured_kwargs = {}
-class FakeTransport:
-    """Mimics A0 V2's LiteLLMTransport(model, messages, kwargs)."""
-    def __init__(self, model, messages, kwargs):
-        self.model = model
-        _captured_kwargs.clear()
-        _captured_kwargs.update(kwargs)
-    async def astream(self):
-        for d in ({"reasoning_delta": "", "response_delta": "He"},
-                  {"reasoning_delta": "", "response_delta": "llo"}):
-            yield d
-    async def acomplete(self):
-        return {"reasoning_delta": "", "response_delta": "Done"}
-
-
-# --- detection ---------------------------------------------------------------
-
-# models is only imported INSIDE engine functions, so we create the stub here.
-_models = _stub("models")
-
-# A0 v1.x: models._parse_chunk present -> mode 'v1'
+# --- detection: v1.x uses models._parse_chunk -------------------------------
 _models._parse_chunk = lambda c: {"reasoning_delta": "", "response_delta": c}
-_reset_detect()
-m1 = K._kame_detect_chunk_mode()
-check("detect v1 when models._parse_chunk present", m1 == "v1" and K._KAME_PARSE_CHUNK is not None)
+_reset()
+check("v1 detected when models._parse_chunk present",
+      K._kame_detect_chunk_mode() == "v1" and K._KAME_PARSE_CHUNK is _models._parse_chunk)
 
-# A0 V2: no models._parse_chunk, but helpers.litellm_transport.LiteLLMTransport present -> 'v2'
+# --- detection: V2/V2.1 uses ChatCompletionsTransport.parse -------------------
 del _models._parse_chunk
 _lt = _stub("helpers.litellm_transport")
-_lt.LiteLLMTransport = FakeTransport
-_reset_detect()
-m2 = K._kame_detect_chunk_mode()
-check("detect v2 when _parse_chunk absent + transport present", m2 == "v2" and K._KAME_V2_TRANSPORT is FakeTransport)
+class _CCT:
+    @staticmethod
+    def parse(chunk):
+        return {"reasoning_delta": "", "response_delta": str(chunk)}
+_lt.ChatCompletionsTransport = _CCT
+_reset()
+check("v2 detected -> parser is ChatCompletionsTransport.parse",
+      K._kame_detect_chunk_mode() == "v2" and K._KAME_PARSE_CHUNK is _CCT.parse)
+check("detection is cached", K._kame_detect_chunk_mode() == "v2")
 
-# detection is cached (second call returns the same without re-importing)
-check("detect mode is cached", K._kame_detect_chunk_mode() == "v2")
 
+# --- _kame_chunk_aiter: DIRECT acompletion + parse + strip a0_*/responses_* --
+_captured = {}
+class _FakeStream:
+    def __init__(self, items): self._i = list(items)
+    def __aiter__(self): return self
+    async def __anext__(self):
+        if not self._i:
+            raise StopAsyncIteration
+        return self._i.pop(0)
 
-# --- V2 chunk generator ------------------------------------------------------
+async def _fake_acompletion(model=None, messages=None, **kw):
+    _captured.clear(); _captured.update(kw); _captured["_model"] = model
+    return _FakeStream(["X", "Y"]) if kw.get("stream") else "Z"
 
+K.acompletion = _fake_acompletion
 K._KAME_CHUNK_MODE = "v2"
-K._KAME_V2_TRANSPORT = FakeTransport
-K._KAME_PARSE_CHUNK = None
+K._KAME_PARSE_CHUNK = lambda raw: {"reasoning_delta": "", "response_delta": raw}
+
+class _Self:
+    model_name = "gemini/gemini-3.5-flash"
 
 async def _collect(stream):
     out = []
-    async for p in K._kame_chunk_aiter(FakeSelf(), [], {"temperature": 0}, "key123", stream):
+    call_kwargs = {"temperature": 0, "a0_responses_function_tools": [1],
+                   "responses_state": "x", "a0_retry_attempts": 2, "previous_response_id": "r1"}
+    async for p in K._kame_chunk_aiter(_Self(), [], call_kwargs, "KEY7", stream):
         out.append(p)
     return out
 
-v2_stream = asyncio.run(_collect(True))
-check("v2 stream yields transport chunks in order",
-      [r["response_delta"] for r in v2_stream] == ["He", "llo"])
-check("v2 injects api_key into transport kwargs (alongside existing kwargs)",
-      _captured_kwargs.get("api_key") == "key123" and _captured_kwargs.get("temperature") == 0)
+_s = asyncio.run(_collect(True))
+check("chunk_aiter yields parsed chunks in order (direct acompletion)",
+      [r["response_delta"] for r in _s] == ["X", "Y"])
+check("chunk_aiter calls acompletion DIRECTLY with the rotated api_key + model",
+      _captured.get("api_key") == "KEY7" and _captured.get("_model") == "gemini/gemini-3.5-flash")
+check("chunk_aiter STRIPS a0_* / responses_* / previous_response_id before the chat call",
+      not any(k in _captured for k in
+              ("a0_responses_function_tools", "responses_state", "a0_retry_attempts", "previous_response_id")))
+check("chunk_aiter keeps normal kwargs (temperature)", _captured.get("temperature") == 0)
+check("chunk_aiter set stream=True", _captured.get("stream") is True)
 
-v2_nostream = asyncio.run(_collect(False))
-check("v2 non-stream yields exactly one acomplete chunk",
-      len(v2_nostream) == 1 and v2_nostream[0]["response_delta"] == "Done")
-
-
-# --- V1 chunk generator ------------------------------------------------------
-
-class FakeStream:
-    def __init__(self, items): self._items = list(items)
-    def __aiter__(self): return self
-    async def __anext__(self):
-        if not self._items:
-            raise StopAsyncIteration
-        return self._items.pop(0)
-
-async def _fake_acompletion(model=None, messages=None, **kw):
-    return FakeStream(["A", "B"]) if kw.get("stream") else "C"
-
-K._KAME_CHUNK_MODE = "v1"
-K._KAME_PARSE_CHUNK = lambda raw: {"reasoning_delta": "", "response_delta": raw}
-K._KAME_V2_TRANSPORT = None
-K.acompletion = _fake_acompletion  # the engine's module-level acompletion
-
-v1_stream = asyncio.run(_collect(True))
-check("v1 stream uses acompletion + _parse_chunk",
-      [r["response_delta"] for r in v1_stream] == ["A", "B"])
-
-v1_nostream = asyncio.run(_collect(False))
-check("v1 non-stream parses the single completion",
-      len(v1_nostream) == 1 and v1_nostream[0]["response_delta"] == "C")
+_ns = asyncio.run(_collect(False))
+check("chunk_aiter non-stream parses the single response", len(_ns) == 1 and _ns[0]["response_delta"] == "Z")
 
 
 print("=" * 60)

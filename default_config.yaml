@@ -43,21 +43,3 @@ kame_log_full_errors: false
 # kame_log_full_errors overrides this (shows every line). Set false to restore
 # one line per failure at 'normal'. Pure observability — rotation is unchanged.
 kame_collapse_storm_logs: true
-
-# OPT-IN (default OFF): force plain chat-completions instead of A0 V2.1's new
-# "Responses" API mode. OFF keeps KAME transparent — it uses whatever mode A0 picks,
-# so it works on any provider/model and never overrides the framework.
-#
-# What it actually does: A0 V2.1 defaults to Responses mode. Gemini has no native
-# Responses endpoint, so litellm *emulates* it — under the hood it still calls plain
-# chat-completions on the SAME Google server, just wrapped in a translation layer.
-# (It is NOT a different/slower "vertex_ai_beta" server — that's only litellm's error
-# name.) Turning this ON makes KAME skip that wrapper and call chat-completions
-# directly (the leaner 1.0.3-style path). It may shave a little overhead on Gemini,
-# but it is NOT a magic speed fix and won't stop a model's own "high demand" 503s.
-#
-# Leave OFF unless you specifically want the direct path. Do NOT turn it on if you run
-# a model that's genuinely better on Responses (newest OpenAI / Fable) — it would
-# disable their server-side state + native tools. Endpoint/mode only; never touches
-# rotation/cooldown/selection.
-kame_force_chat_completions: false
