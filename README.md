@@ -128,6 +128,7 @@ Look for this banner on startup:
 | `daily_quota_cooldown_seconds` | `3600` | How long to rest a key after a **daily-quota / out-of-credit** error (any provider). Also the adaptive-backoff ceiling. Clamped 1–86400. |
 | `key_log_style` | `fingerprint` | How keys appear in logs: `fingerprint` (anonymized id, never leaks the secret), `prefix8` (first 8 chars), or `full` (debug only). |
 | `kame_collapse_storm_logs` | `true` | Collapse a repetitive 503/error **storm** at `normal` level into one aggregate line every ~20s (+ a "storm over" recap) instead of hundreds of identical warnings. `verbose` always prints every line. Pure logging. (v1.0.3) |
+| `kame_force_chat_completions` | `true` | **(A0 V2.1)** Pin KAME's calls to the chat-completions endpoint. A0 V2.1 defaults to its new Responses API, which for Gemini routes through the overload-prone `vertex_ai_beta` endpoint (`503 "high demand"`, ~5× slower) — KAME 1.0.3 used the standard AI-Studio endpoint. This passes `a0_api_mode="chat_completions"` to restore that fast path. Set `false` to use A0's V2.1 Responses default. Only changes the endpoint, never rotation logic. (v1.0.4) |
 | `kame_log_full_errors` | `false` | Debug escape hatch: ALSO print the **raw** exception (type, status, retry attrs, full body) beside KAME's classification, so you can verify there's no misclassification. Independent of `kame_log_level`; overrides the storm collapse (shows every line). (v1.0.3) |
 
 Everything else is opinionated and validated in production — the algorithm, sleep timing, jitter range, 60s RPM window, and quarantine logic are all tuned and tested. If you really want to tweak, the code in `kame_engine.py` is well-commented.
@@ -346,6 +347,12 @@ Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made
 3. **Free-tier prompt caching** — V2.1 tries to cache big prompts (e.g. a 40k-token persona), but free-tier Gemini keys have zero cache storage and 429 on it. 1.0.4 disables explicit caching for its calls (free tier never cached anyway), so the persona is just sent fresh.
 
 Behavior on A0 v1.x is unchanged. If you're on V2 or V2.1, just install 1.0.4.
+</details>
+
+<details>
+<summary><b>On Agent Zero V2.1 everything feels slow — even "hello" takes a while. Why?</b></summary>
+
+That's an A0 V2.1 change, and **v1.0.4 fixes it by default.** V2.1 switched the default API mode to its new **Responses API**. Gemini has no native Responses endpoint, so litellm *emulates* it through the **`vertex_ai_beta`** endpoint — which is frequently overloaded and returns `ServiceUnavailable / "This model is currently experiencing high demand"` (503). That endpoint is both slower (measured ~5× on `gemini-3.5-flash`) and prone to 503-storms, so even a one-word prompt could take tens of seconds. KAME 1.0.3 (on A0 v1.x) always used plain **chat-completions** (the standard Google AI-Studio endpoint), which doesn't touch `vertex_ai_beta`. v1.0.4 pins KAME's calls back to that endpoint via the **`kame_force_chat_completions`** setting (ON by default), restoring 1.0.3 speed. If you'd rather use A0's V2.1 Responses default, set it to `false`.
 </details>
 
 <details>

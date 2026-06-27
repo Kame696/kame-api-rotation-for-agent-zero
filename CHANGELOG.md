@@ -74,8 +74,25 @@ cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
    limit=0, requested=43347`) on **every** key — rotation can't help. KAME now forces
    `explicit_caching=False` on both the `unified_call` and `unified_turn` paths (free-tier
    never caches; this is exactly how the pre-V2 path behaved — the prompt is sent fresh).
+3. **The big one — V2.1 routes Gemini onto a slow/overloaded endpoint.** A0 V2.1 changed
+   the default API mode to its new **Responses API** (`a0_api_mode="responses"`,
+   `agent.py:876/920`). For Gemini, litellm has no native Responses endpoint, so it
+   *emulates* it via `litellm_completion_transformation` → the **`vertex_ai_beta`**
+   endpoint. Under load that endpoint returns `ServiceUnavailable / "This model is
+   currently experiencing high demand"` (503) — so even a trivial "hello" went through
+   503-storms and 30–250s waits, making V2.1 feel far slower than 1.0.3. **KAME 1.0.3 on
+   A0 v1.x always used plain chat-completions** (the standard Google **AI-Studio**
+   endpoint), which never touches `vertex_ai_beta`. Measured back-to-back in the owner's
+   container (`gemini-3.5-flash`, same keys): Responses/`vertex_ai_beta` **avg 12.2s** (and
+   full 503-storms under load) vs chat-completions/AI-Studio **avg 2.5s, zero errors** —
+   ~5× faster. **Fix:** new setting **`kame_force_chat_completions` (default ON)** — KAME
+   passes `a0_api_mode="chat_completions"` on both the `unified_turn` wrapper and the V2
+   `unified_call` transport path, pinning calls to the AI-Studio endpoint 1.0.3 used.
+   A0 drops the responses-only kwargs itself in chat mode. Only changes WHICH Google
+   endpoint is hit — never the rotation/cooldown/selection logic. Set the setting `false`
+   to restore A0's V2.1 Responses default.
 
-Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry injection, no-pool
+Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry/api-mode injection, no-pool
 delegation, got-any-chunk re-raise — all pass) + an installer-wiring check (patches &
 reverts `unified_turn` on V2.1; untouched on v1.x). README reorganized
 (Install→Settings→Logging first; validation moved below the version history). Verified

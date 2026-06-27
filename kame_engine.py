@@ -289,6 +289,19 @@ _KAME_STORM_MIN_FOR_SUMMARY = 3     # only recap a storm that had >= this many f
 # identity -> {count, first_at, last_err_at, last_emit_at, kinds:{kind:count}}
 _KAME_STORM = {}
 
+# v1.0.4 (A0 V2.1): force the chat-completions endpoint, ON by default.
+# A0 V2.1 defaults every model call to its new "Responses API" mode
+# (a0_api_mode="responses"). For Gemini that routes through litellm's Responses
+# *emulation* → the `vertex_ai_beta` endpoint, which under load returns
+# "ServiceUnavailable / This model is currently experiencing high demand" (503).
+# KAME 1.0.3 on A0 v1.x always used plain chat-completions (the standard Google
+# AI-Studio endpoint), which does NOT hit vertex_ai_beta and stays fast/reliable.
+# So KAME pins its calls back to chat-completions (a0_api_mode="chat_completions")
+# to restore the 1.0.3 path. Set kame_force_chat_completions: false to let A0 use
+# its V2.1 Responses default. Does NOT touch rotation/cooldown logic — only which
+# Google endpoint the request goes to.
+_KAME_FORCE_CHAT_COMPLETIONS = True
+
 # --- v1.0.1: lightweight in-memory session stats (for verbose summary) ---
 _KAME_STATS = {
     "ok": 0, "per_minute": 0, "daily": 0, "insufficient_quota": 0,
@@ -380,6 +393,23 @@ def set_collapse_storm_logs(enabled) -> None:
         _KAME_COLLAPSE_STORM_LOGS = enabled.strip().lower() in ("true", "1", "yes", "on")
     else:
         _KAME_COLLAPSE_STORM_LOGS = bool(enabled)
+
+
+def set_force_chat_completions(enabled) -> None:
+    """Pin KAME's calls to the chat-completions endpoint (v1.0.4, A0 V2.1).
+
+    Called by the activation extension from the `kame_force_chat_completions`
+    plugin setting (default true). When on, KAME passes a0_api_mode=
+    "chat_completions" so Gemini calls use the standard AI-Studio endpoint that
+    KAME 1.0.3 used, instead of A0 V2.1's Responses-API default that routes
+    through the overload-prone `vertex_ai_beta` endpoint. Only changes which
+    Google endpoint is hit — never the rotation/cooldown/selection logic.
+    """
+    global _KAME_FORCE_CHAT_COMPLETIONS
+    if isinstance(enabled, str):
+        _KAME_FORCE_CHAT_COMPLETIONS = enabled.strip().lower() in ("true", "1", "yes", "on")
+    else:
+        _KAME_FORCE_CHAT_COMPLETIONS = bool(enabled)
 
 
 def set_current_agent(agent) -> None:
@@ -1286,10 +1316,15 @@ async def _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, stream):
     """
     mode = _kame_detect_chunk_mode()
     if mode == "v2":
+        _v2_kwargs = {**call_kwargs, "api_key": key}
+        if _KAME_FORCE_CHAT_COMPLETIONS:
+            # Pin to the AI-Studio chat-completions endpoint (1.0.3 path), off the
+            # overload-prone vertex_ai_beta Responses route A0 V2.1 defaults to.
+            _v2_kwargs["a0_api_mode"] = "chat_completions"
         transport = _KAME_V2_TRANSPORT(
             model=self.model_name,
             messages=msgs_conv,
-            kwargs={**call_kwargs, "api_key": key},
+            kwargs=_v2_kwargs,
         )
         if stream:
             async for parsed in transport.astream():
@@ -1796,6 +1831,13 @@ async def _kame_unified_turn(
             rate_limiter_callback=rate_limiter_callback,
             explicit_caching=explicit_caching, **kwargs,
         )
+
+    # v1.0.4 (A0 V2.1): pin to chat-completions so the call uses the same fast
+    # AI-Studio endpoint KAME 1.0.3 used, instead of A0 V2.1's Responses default
+    # (which routes Gemini through the overload-prone vertex_ai_beta endpoint).
+    # A0 drops the responses-only kwargs itself in chat-completions mode.
+    if _KAME_FORCE_CHAT_COMPLETIONS:
+        kwargs = {**kwargs, "a0_api_mode": "chat_completions"}
 
     stream = (
         reasoning_callback is not None

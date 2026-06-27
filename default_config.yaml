@@ -39,3 +39,16 @@ kame_log_full_errors: false
 # kame_log_full_errors overrides this (shows every line). Set false to restore
 # one line per failure at 'normal'. Pure observability — rotation is unchanged.
 kame_collapse_storm_logs: true
+
+# Pin KAME's model calls to the chat-completions endpoint. ON by default (A0 V2.1).
+# Agent Zero V2.1 changed the default API mode to its new "Responses API", which
+# for Gemini routes through litellm's Responses emulation → the `vertex_ai_beta`
+# endpoint. Under load that endpoint returns "ServiceUnavailable / this model is
+# experiencing high demand" (503), which made V2.1 feel far slower than KAME 1.0.3
+# on A0 v1.x — even for a trivial "hello". KAME 1.0.3 always used plain chat
+# completions (the standard Google AI-Studio endpoint), which does not hit
+# vertex_ai_beta. With this ON, KAME passes a0_api_mode="chat_completions" so its
+# calls use that same fast/reliable endpoint. Set false to let A0 use its V2.1
+# Responses default. Only changes WHICH Google endpoint is used — never the
+# rotation/cooldown/selection logic.
+kame_force_chat_completions: true
