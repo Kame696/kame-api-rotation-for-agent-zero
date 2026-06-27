@@ -91,13 +91,28 @@ cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
    A0 drops the responses-only kwargs itself in chat mode. Only changes WHICH Google
    endpoint is hit — never the rotation/cooldown/selection logic. Set the setting `false`
    to restore A0's V2.1 Responses default.
+4. **Mid-stream drops no longer escape as a traceback (KAME's eternal-carousel promise
+   restored).** The `unified_turn` wrapper re-raised whenever any content had already
+   streamed (a `got_any_chunk` guard, to avoid re-generating on a new key). On A0 V2.1 a
+   busy preview model (`gemini-3.5-flash`) often dies MID-stream — a `503` /
+   `ServiceUnavailable` / `MidStreamFallbackError` right after emitting a few tokens like
+   `{"thoughts":` — so re-raising let the **error reach the chat as a traceback**, exactly
+   what KAME exists to prevent (it made 1.0.4 feel like a *degraded* KAME). Now a
+   mid-stream **transient** drop is treated like any other transient failure: cool the
+   key, rotate, retry — riding out the storm and returning the COMPLETE response from the
+   attempt that finally succeeds (a few already-streamed tokens may briefly flicker in the
+   live view before the full answer). Only a genuinely **terminal** error (4xx / content
+   policy) or an intervention/nudge still surfaces — so KAME never spins forever on an
+   unfixable request. This is the carousel behaving the way it did before V2.1 made
+   mid-stream failures common.
 
 Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry/api-mode injection, no-pool
-delegation, got-any-chunk re-raise — all pass) + an installer-wiring check (patches &
-reverts `unified_turn` on V2.1; untouched on v1.x). README reorganized
-(Install→Settings→Logging first; validation moved below the version history). Verified
-locally against the cloned A0 **v2.1 tag** source; the live container is the owner's smoke
-test.
+delegation, **mid-stream drop → retried not surfaced**, terminal error still surfaces —
+all pass) + an installer-wiring check (patches & reverts `unified_turn` on V2.1; untouched
+on v1.x). README reorganized (Install→Settings→Logging first; validation moved below the
+version history). Verified locally against the cloned A0 **v2.1 tag** source AND live in
+the owner's `vault0` container (the endpoint pin flips `using_responses` to False through
+the real `unified_turn` flow; chat-completions/AI-Studio ~5× faster than Responses/vertex).
 
 ## v1.0.3
 

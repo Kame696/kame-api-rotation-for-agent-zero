@@ -1958,11 +1958,28 @@ async def _kame_unified_turn(
             # A0 control-flow (InterventionException etc.) must propagate, never retry.
             if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
                 raise
-            # Content already streamed this attempt → clean restart, don't re-stream.
-            if _delivered["any"]:
-                raise
+            # A genuinely TERMINAL error (bad request / content policy / 4xx) is not
+            # fixed by another key — surface it. Everything else is transient.
             if _is_terminal_error(e):
                 raise e
+            # KAME's promise is the ETERNAL CAROUSEL: a transient failure is rotated +
+            # retried until it succeeds or the outage is slept out — it NEVER surfaces
+            # as an error. Earlier this re-raised whenever any content had already
+            # streamed (a got_any_chunk guard, to avoid re-generating on a new key).
+            # But on A0 V2.1 a busy preview model frequently dies MID-stream (503 /
+            # ServiceUnavailable / MidStreamFallbackError) right after emitting a few
+            # tokens like '{"thoughts":' — and re-raising let that escape as a
+            # TRACEBACK in the chat, the exact thing KAME exists to prevent. So a
+            # mid-stream transient drop is now treated like any other transient
+            # failure: cool the key, rotate, retry. KAME returns the COMPLETE response
+            # from the attempt that finally succeeds (a few already-streamed tokens may
+            # briefly flicker in the live view before the full answer arrives). Only a
+            # terminal error or an intervention ever surfaces.
+            if _delivered["any"] and _lvl_normal():
+                PrintStyle.warning(
+                    f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                    f"⚠️ mid-stream drop after partial output → rotating + retrying (no error surfaced)"
+                )
             # Auth / invalid-key: quarantine the key for a long time, rotate.
             if _is_auth_error(e):
                 _auth_sc = getattr(e, "status_code", None)

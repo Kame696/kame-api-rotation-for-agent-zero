@@ -136,7 +136,10 @@ check("delegation passes the caller's explicit_caching through unchanged",
       _b["explicit"] is True)
 
 
-# --- Test C: got-any-chunk contract (content streamed -> re-raise, no re-stream)
+# --- Test C: a MID-STREAM transient drop is rotated + retried, NEVER surfaced ----
+# KAME's eternal-carousel promise: a 503 that hits AFTER a few tokens streamed must
+# not escape as a traceback (the V2.1 degradation) — it's cooled, rotated, retried,
+# and the complete response from the successful attempt is returned.
 K._KAME_KEY_HEALTH = {}
 K._get_all_api_keys = lambda self: ["AAA", "BBB"]
 _c = {"calls": 0, "deltas": []}
@@ -145,9 +148,14 @@ fw_c = FakeWrapper()
 async def _orig_turn_c(**kw):
     _c["calls"] += 1
     cb = kw.get("response_callback")
+    if _c["calls"] == 1:
+        if cb is not None:
+            await cb("{\"thoughts\":", "{\"thoughts\":")  # stream a bit, THEN drop
+        raise _rl_429()                                    # transient (429) mid-stream
+    # the retry on a fresh key succeeds with the COMPLETE answer
     if cb is not None:
-        await cb("hello", "hello")     # stream real content, THEN fail
-    raise _rl_429()
+        await cb("done", "done")
+    return ("LLM_RESULT_OK", kw.get("api_key"))
 
 fw_c._kame_original_unified_turn = _orig_turn_c
 
@@ -155,14 +163,36 @@ async def _user_cb(delta, full):
     _c["deltas"].append(delta)
     return None
 
-_raised = None
+_raised_c = None
 try:
-    asyncio.run(K._kame_unified_turn(fw_c, messages=[], response_callback=_user_cb))
+    res_c = asyncio.run(K._kame_unified_turn(fw_c, messages=[], response_callback=_user_cb))
 except Exception as e:
-    _raised = e
-check("a failure AFTER content streamed re-raises (clean A0 restart)", _raised is not None)
-check("did NOT rotate/re-stream after delivery (original called exactly once)", _c["calls"] == 1)
-check("user callback saw the chunk exactly once (no duplicate stream)", _c["deltas"] == ["hello"])
+    _raised_c = e
+check("mid-stream transient drop is NOT surfaced (no exception escapes KAME)", _raised_c is None)
+check("KAME rotated + retried after the mid-stream drop (>= 2 attempts)", _c["calls"] >= 2)
+check("returns the COMPLETE response from the successful attempt", _raised_c is None and res_c[0] == "LLM_RESULT_OK")
+
+
+# --- Test D: a genuinely TERMINAL error still surfaces (don't spin forever) -------
+K._KAME_KEY_HEALTH = {}
+K._get_all_api_keys = lambda self: ["AAA", "BBB"]
+_d = {"calls": 0}
+fw_d = FakeWrapper()
+
+async def _orig_turn_d(**kw):
+    _d["calls"] += 1
+    e = Exception("invalid request: content_policy violation")
+    e.status_code = 400
+    raise e
+
+fw_d._kame_original_unified_turn = _orig_turn_d
+_raised_d = None
+try:
+    asyncio.run(K._kame_unified_turn(fw_d, messages=[]))
+except Exception as e:
+    _raised_d = e
+check("a terminal (4xx/content-policy) error still surfaces", _raised_d is not None)
+check("terminal error is not retried in a loop (called once)", _d["calls"] == 1)
 
 
 print("=" * 60)
