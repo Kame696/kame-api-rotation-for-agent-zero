@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.3.
+"""KAME API Rotation & Stability Engine v1.0.4.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -14,6 +14,20 @@ Full-Spectrum Protections:
 11. Friendly Error Reporting (clean messages, honest status, real error class)
 12. Daily-Quota & Account-Limit Aware (multi-provider, v1.0.1)
 13. Adaptive Backoff (provider-agnostic safety net, v1.0.1)
+
+v1.0.4 — AGENT ZERO V2 COMPATIBILITY (the rotation/health/cooldown carousel is
+UNCHANGED — only the per-attempt connect+chunk-parse is now version-aware):
+- A0 V2 refactored model streaming into a transport layer and REMOVED
+  ``models._parse_chunk``. KAME 1.0.3 hard-imported it on the first line of every
+  patched call, so on A0 V2 every chat/utility call raised ImportError — the patch
+  still "installed" (KAME printed ACTIVE), then failed every call. 1.0.4 detects the
+  A0 version ONCE and uses ``helpers.litellm_transport.LiteLLMTransport`` on V2, or
+  the legacy ``acompletion()+_parse_chunk`` path on A0 v1.x. ONE engine, BOTH A0
+  majors; behavior on A0 v1.x is byte-for-byte identical to v1.0.3.
+- Stream-path auth/terminal awareness: on V2 the connect happens on the FIRST
+  transport chunk, so a connect-time invalid-key / terminal error now surfaces in
+  the stream handler — KAME mirrors the outer handling there (quarantine+rotate a
+  bad key; abort cleanly on a terminal error). Harmless no-op on v1.x.
 
 v1.0.3 ADDITIONS (observability + faster outage recovery — the SELECTION path
 ``_get_best_key`` is STILL UNCHANGED; the happy path is identical to v1.0.2):
@@ -124,7 +138,8 @@ When at least 1 key is healthy: selection/request behavior is IDENTICAL to
 v1.0.0. The v1.0.1 changes only affect cooldown duration on failures, the
 all-keys-sick sleep cadence, and log text.
 
-Compatible with Agent Zero v1.14+ (verified through v1.18).
+Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
+transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
 import asyncio, contextvars, hashlib, threading, time, logging, re
@@ -169,6 +184,19 @@ _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
 # extension at monologue start. Lets the all-keys-cooling sleep honor a user
 # message / "nudge" (InterventionException) instead of sleeping through it.
 _KAME_CURRENT_AGENT = contextvars.ContextVar('kame_agent', default=None)
+
+# --- v1.0.4: A0-version capability detection (A0 v1.x vs A0 V2) ---
+# A0 V2 refactored model streaming into a transport layer and REMOVED
+# models._parse_chunk (raw-chunk -> {reasoning_delta, response_delta} now lives in
+# helpers.litellm_transport). KAME 1.0.3 hard-imported _parse_chunk on every call,
+# so on V2 every call raised ImportError (the patch still "installed", so KAME
+# printed ACTIVE then failed every call). 1.0.4 supports BOTH A0 majors: it uses
+# the legacy acompletion()+_parse_chunk path when _parse_chunk exists, and V2's
+# LiteLLMTransport.astream()/acomplete() when it does not. Detected once, lazily,
+# and cached — the engine still imports cleanly in a no-A0 test harness.
+_KAME_PARSE_CHUNK = None      # models._parse_chunk on A0 v1.x, else None
+_KAME_V2_TRANSPORT = None     # helpers.litellm_transport.LiteLLMTransport on A0 V2, else None
+_KAME_CHUNK_MODE = None       # 'v1' | 'v2' once detected
 
 # --- v1.0.1: log verbosity level (replaces the old verbose_trace toggle) ---
 # Set by the activation extension from the `kame_log_level` plugin setting:
@@ -1210,6 +1238,80 @@ async def _kame_honor_intervention():
         return
 
 
+# --- v1.0.4: version-aware chunk source (A0 v1.x acompletion vs A0 V2 transport) ---
+
+def _kame_detect_chunk_mode() -> str:
+    """Detect ONCE how to stream/parse model chunks for the installed A0 version.
+
+    A0 v1.x exposes ``models._parse_chunk`` (used with ``acompletion``); A0 V2
+    removed it and streams via ``helpers.litellm_transport.LiteLLMTransport``.
+    Result is cached in module globals. Returns ``'v1'`` or ``'v2'``.
+    """
+    global _KAME_PARSE_CHUNK, _KAME_V2_TRANSPORT, _KAME_CHUNK_MODE
+    if _KAME_CHUNK_MODE is not None:
+        return _KAME_CHUNK_MODE
+    try:
+        from models import _parse_chunk as _pc  # A0 v1.x
+        _KAME_PARSE_CHUNK = _pc
+        _KAME_CHUNK_MODE = "v1"
+        return "v1"
+    except Exception:
+        pass
+    try:
+        from helpers.litellm_transport import LiteLLMTransport as _T  # A0 V2
+        _KAME_V2_TRANSPORT = _T
+        _KAME_CHUNK_MODE = "v2"
+        return "v2"
+    except Exception:
+        pass
+    # Neither available (unexpected). Default to legacy so the error is explicit.
+    _KAME_CHUNK_MODE = "v1"
+    return _KAME_CHUNK_MODE
+
+
+async def _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, stream):
+    """Yield parsed ChatChunk dicts ({reasoning_delta, response_delta}) for ONE
+    attempt on ONE key — works on A0 v1.x AND A0 V2 (v1.0.4).
+
+    * A0 V2: ``LiteLLMTransport(model, messages, kwargs).astream()`` (streaming) or
+      ``.acomplete()`` (non-stream). The transport strips ``stream`` and handles
+      prompt-caching / responses-vs-chat policy itself, so KAME passes only the
+      api_key alongside its existing call kwargs.
+    * A0 v1.x: ``acompletion(..., stream=...)`` + ``models._parse_chunk(chunk)``.
+
+    In BOTH cases the yielded dict feeds ``result.add_chunk()`` unchanged, so all
+    the rotation / health / callback / cooldown logic in the carousel is identical
+    across A0 versions. Connect-time errors propagate to the caller (the carousel's
+    auth/terminal/classify handling), exactly as before.
+    """
+    mode = _kame_detect_chunk_mode()
+    if mode == "v2":
+        transport = _KAME_V2_TRANSPORT(
+            model=self.model_name,
+            messages=msgs_conv,
+            kwargs={**call_kwargs, "api_key": key},
+        )
+        if stream:
+            async for parsed in transport.astream():
+                yield parsed
+        else:
+            yield await transport.acomplete()
+        return
+    # --- A0 v1.x legacy path (behavior identical to v1.0.3) ---
+    cur = {**call_kwargs, "api_key": key, "stream": stream}
+    completion = await acompletion(model=self.model_name, messages=msgs_conv, **cur)
+    if stream:
+        _it = completion.__aiter__()
+        while True:
+            try:
+                chunk = await _it.__anext__()
+            except StopAsyncIteration:
+                break
+            yield _KAME_PARSE_CHUNK(chunk)
+    else:
+        yield _KAME_PARSE_CHUNK(completion)
+
+
 # --- THE COMMANDER ---
 
 async def _kame_unified_call(
@@ -1224,9 +1326,11 @@ async def _kame_unified_call(
     explicit_caching=False,
     **kwargs,
 ):
-    from models import (
-        turn_off_logging, _parse_chunk, approximate_tokens, ChatGenerationResult,
-    )
+    # v1.0.4: do NOT hard-import models._parse_chunk — A0 V2 removed it (raw-chunk
+    # parsing moved into a transport layer). The version-aware _kame_chunk_aiter
+    # handles both A0 majors. turn_off_logging / approximate_tokens / the result
+    # class survive on both. (approximate_tokens is re-exported by models on V2.)
+    from models import turn_off_logging, approximate_tokens, ChatGenerationResult
     turn_off_logging()
     litellm.suppress_debug_info = True
     logging.getLogger("litellm").setLevel(logging.CRITICAL)
@@ -1379,25 +1483,14 @@ async def _kame_unified_call(
 
         result = ChatGenerationResult()
         got_any_chunk = False  # v1.0.1 fix: gates the re-raise in the except blocks
-        _completion = None
         try:
-            current_call_kwargs = {**call_kwargs, "api_key": key, "stream": stream}
-
-            _completion = await acompletion(
-                model=self.model_name, messages=msgs_conv, **current_call_kwargs
-            )
-
+            # v1.0.4: the per-attempt connect + chunk parsing is version-aware
+            # (A0 v1.x acompletion+_parse_chunk vs A0 V2 LiteLLMTransport). Every
+            # rotation / health / callback / cooldown line below is UNCHANGED.
             if stream:
                 try:
-                    _stream_iter = _completion.__aiter__()
-                    while True:
-                        try:
-                            chunk = await _stream_iter.__anext__()
-                        except StopAsyncIteration:
-                            break  # Stream finished normally
-
-                        got_any_chunk = True  # v1.0.1 fix: content has started
-                        parsed = _parse_chunk(chunk)
+                    async for parsed in _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, True):
+                        got_any_chunk = True  # content has started
                         output = result.add_chunk(parsed)
 
                         if output["reasoning_delta"]:
@@ -1448,6 +1541,24 @@ async def _kame_unified_call(
                     # fully intact for them.
                     if got_any_chunk:
                         raise
+                    # v1.0.4: on A0 V2 the connect happens on the FIRST transport
+                    # chunk, so a connect-time terminal/auth error surfaces HERE
+                    # rather than in the outer except. Mirror the outer handling so
+                    # a bad key is still quarantined+rotated and a terminal error
+                    # aborts cleanly. On v1.x this is a harmless no-op (there the
+                    # connect error hits the outer except before any chunk).
+                    if _is_terminal_error(stream_err):
+                        raise stream_err
+                    if _is_auth_error(stream_err):
+                        _auth_sc = getattr(stream_err, "status_code", None)
+                        applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
+                        if _lvl_normal():
+                            PrintStyle.warning(
+                                f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                                f"{_friendly_error_msg('auth', applied, _auth_sc, stream_err)}"
+                            )
+                        _maybe_log_full_error(call_type, model_short, key, stream_err, "auth", applied, _auth_sc)
+                        continue
                     # Mid-stream failure before any content: smart quarantine.
                     delay, kind, sc = _classify_error(stream_err)
                     applied = _mark_key_health(identity, key, False, delay, kind)
@@ -1455,8 +1566,11 @@ async def _kame_unified_call(
                                  kind, applied, sc, identity, all_keys)
                     continue
             else:
-                parsed = _parse_chunk(_completion)
-                result.add_chunk(parsed)
+                # v1.0.4: non-stream attempt — version-aware (one chunk on V2's
+                # acomplete(), or _parse_chunk(acompletion) on v1.x). Connect/
+                # terminal/auth errors propagate to the outer except below.
+                async for parsed in _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, False):
+                    result.add_chunk(parsed)
 
             _mark_key_health(identity, key, True)
             # v1.0.3: a success ends any error storm — close it and, in collapse
@@ -1658,7 +1772,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.3] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.4] Patch Failed: {e}")
         return False
 
 
@@ -1688,7 +1802,7 @@ def remove_kame_patch():
 
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.3 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.4 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

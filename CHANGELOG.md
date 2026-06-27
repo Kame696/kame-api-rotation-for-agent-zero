@@ -21,7 +21,35 @@ graph LR
 
 ---
 
-## v1.0.3 — current
+## v1.0.4 — current
+
+**Agent Zero V2 compatibility.** A0 V2 refactored model streaming into a transport
+layer and REMOVED `models._parse_chunk` — which KAME 1.0.3 hard-imported on the first
+line of every patched `unified_call`. On A0 V2 the patch still "installed" (KAME printed
+ACTIVE), then **every** chat/utility call raised `ImportError` — "loads but stopped
+working." Diagnosed against a fresh A0 V2 clone (`notes/v1.0.4-a0v2-break-diagnosis.md`).
+
+The rotation / health / cooldown carousel is **UNCHANGED**; only the per-attempt connect
++ chunk-parse became version-aware:
+1. **Version detection** (`_kame_detect_chunk_mode`, cached once): `models._parse_chunk`
+   present → A0 v1.x path; else `helpers.litellm_transport.LiteLLMTransport` → A0 V2 path.
+2. **Version-aware chunk source** (`_kame_chunk_aiter`): A0 V2 streams via
+   `LiteLLMTransport.astream()/acomplete()` (it strips `stream` + handles caching/policy
+   itself; KAME injects only the api_key); A0 v1.x keeps `acompletion()+_parse_chunk`. In
+   both, the yielded dict feeds `result.add_chunk()` unchanged, so every callback / health
+   / cooldown line is identical. The fatal `from models import _parse_chunk` is removed.
+3. **Stream-path auth/terminal awareness**: on V2 the connect happens on the first
+   transport chunk, so a connect-time invalid-key / terminal error now surfaces in the
+   stream handler — KAME mirrors the outer handling there (quarantine+rotate a bad key;
+   abort cleanly on terminal). Harmless no-op on v1.x.
+
+**ONE engine, BOTH A0 majors.** Behavior on A0 v1.x is byte-for-byte identical to 1.0.3.
+Tests: `tests/test_v1_0_4.py` (detection + both chunk modes — all pass); the v1.0.2/1.0.3
+suites still pass. Verified locally with stubs; the live A0 V2 end-to-end is the owner's
+smoke test. Also: README reorganized (Install→Settings→Logging first; the production-
+validation block moved below the version history; donate moved down) for first-time clarity.
+
+## v1.0.3
 
 **Observability + faster outage recovery. The selection/rotation path
 (`_get_best_key`) is UNCHANGED — the happy path is identical to v1.0.2.**
