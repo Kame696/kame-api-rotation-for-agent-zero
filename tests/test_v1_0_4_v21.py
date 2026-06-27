@@ -87,6 +87,7 @@ K._KAME_KEY_HEALTH = {}
 
 # --- Test A: rotation + kwarg injection -------------------------------------
 K._get_all_api_keys = lambda self: ["AAA", "BBB", "CCC"]
+K._KAME_FORCE_CHAT_COMPLETIONS = False   # the v1.0.4 default: transparent (don't force mode)
 
 _state_a = {"n": 0}
 fw_a = FakeWrapper()
@@ -109,12 +110,25 @@ check("every attempt injected explicit_caching=False (free-tier cache-safe)",
       all(c.get("explicit_caching") is False for c in fw_a.calls))
 check("every attempt also forced a0_explicit_prompt_caching=False (override any flag)",
       all(c.get("a0_explicit_prompt_caching") is False for c in fw_a.calls))
-check("every attempt pinned a0_api_mode=chat_completions (off vertex_ai_beta Responses route)",
-      all(c.get("a0_api_mode") == "chat_completions" for c in fw_a.calls))
+check("DEFAULT (transparent): does NOT force a0_api_mode (uses A0's own mode)",
+      all(c.get("a0_api_mode") is None for c in fw_a.calls))
 check("every attempt disabled the inner retry (a0_retry_attempts=0)",
       all(c.get("a0_retry_attempts") == 0 for c in fw_a.calls))
 check("every attempt forced a rotated api_key from the pool",
       all(c.get("api_key") in ("AAA", "BBB", "CCC") for c in fw_a.calls))
+
+# --- Test A2: when the opt-in toggle is ON, a0_api_mode IS pinned -------------
+K._KAME_FORCE_CHAT_COMPLETIONS = True
+_a2 = {"calls": []}
+fw_a2 = FakeWrapper()
+async def _orig_turn_a2(**kw):
+    _a2["calls"].append(kw)
+    return ("OK", kw.get("api_key"))
+fw_a2._kame_original_unified_turn = _orig_turn_a2
+asyncio.run(K._kame_unified_turn(fw_a2, messages=[_Msg("hi")]))
+check("opt-in ON: pins a0_api_mode=chat_completions (skip A0's Responses wrapper)",
+      all(c.get("a0_api_mode") == "chat_completions" for c in _a2["calls"]) and len(_a2["calls"]) >= 1)
+K._KAME_FORCE_CHAT_COMPLETIONS = False   # restore default for the rest of the suite
 check("the second (successful) attempt used a DIFFERENT key than the failed first",
       fw_a.calls[0].get("api_key") != fw_a.calls[1].get("api_key"))
 

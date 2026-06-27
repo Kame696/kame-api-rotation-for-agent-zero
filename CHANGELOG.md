@@ -74,23 +74,21 @@ cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
    limit=0, requested=43347`) on **every** key — rotation can't help. KAME now forces
    `explicit_caching=False` on both the `unified_call` and `unified_turn` paths (free-tier
    never caches; this is exactly how the pre-V2 path behaved — the prompt is sent fresh).
-3. **The big one — V2.1 routes Gemini onto a slow/overloaded endpoint.** A0 V2.1 changed
-   the default API mode to its new **Responses API** (`a0_api_mode="responses"`,
-   `agent.py:876/920`). For Gemini, litellm has no native Responses endpoint, so it
-   *emulates* it via `litellm_completion_transformation` → the **`vertex_ai_beta`**
-   endpoint. Under load that endpoint returns `ServiceUnavailable / "This model is
-   currently experiencing high demand"` (503) — so even a trivial "hello" went through
-   503-storms and 30–250s waits, making V2.1 feel far slower than 1.0.3. **KAME 1.0.3 on
-   A0 v1.x always used plain chat-completions** (the standard Google **AI-Studio**
-   endpoint), which never touches `vertex_ai_beta`. Measured back-to-back in the owner's
-   container (`gemini-3.5-flash`, same keys): Responses/`vertex_ai_beta` **avg 12.2s** (and
-   full 503-storms under load) vs chat-completions/AI-Studio **avg 2.5s, zero errors** —
-   ~5× faster. **Fix:** new setting **`kame_force_chat_completions` (default ON)** — KAME
-   passes `a0_api_mode="chat_completions"` on both the `unified_turn` wrapper and the V2
-   `unified_call` transport path, pinning calls to the AI-Studio endpoint 1.0.3 used.
-   A0 drops the responses-only kwargs itself in chat mode. Only changes WHICH Google
-   endpoint is hit — never the rotation/cooldown/selection logic. Set the setting `false`
-   to restore A0's V2.1 Responses default.
+3. **OPT-IN `kame_force_chat_completions` (default OFF) — KAME stays transparent.** A0 V2.1
+   changed the default API mode to its new **Responses API** (`a0_api_mode="responses"`,
+   `agent.py:876/920`). Gemini has no native Responses endpoint, so litellm *emulates* it
+   (`litellm_completion_transformation`). **Correction to earlier 1.0.4 notes:** I first
+   claimed this routed Gemini to a *different, ~5× slower* `vertex_ai_beta` endpoint and
+   shipped the toggle **ON by default**. Verifying in-container proved that wrong —
+   **both modes call plain `acompletion` on the SAME Google endpoint** (provider `gemini`);
+   `"vertex"` is only litellm's shared error-class *name*, not a separate server. Responses
+   mode just adds a translation *wrapper* (which is also where the `MidStreamFallbackError`
+   originates — now handled by #4). The `503 "high demand"` storms come from the **model**
+   (newest free-tier preview models), not the endpoint, and happen either way. So the
+   toggle is now **OFF by default**: KAME uses whatever mode A0 picks — transparent, works
+   on any provider, never overrides the framework. Turn it ON only if you want to skip the
+   wrapper (leaner path; not a speed cure, won't stop throttling); never turn it on for a
+   model that's genuinely better on Responses (newest OpenAI / Fable). Endpoint/mode only.
 4. **Mid-stream drops no longer escape as a traceback (KAME's eternal-carousel promise
    restored).** The `unified_turn` wrapper re-raised whenever any content had already
    streamed (a `got_any_chunk` guard, to avoid re-generating on a new key). On A0 V2.1 a
@@ -105,14 +103,25 @@ cover. Diagnosis: `notes/v1.0.4-a0v2.1-followup.md`.
    policy) or an intervention/nudge still surfaces — so KAME never spins forever on an
    unfixable request. This is the carousel behaving the way it did before V2.1 made
    mid-stream failures common.
+5. **New log level `verbose+errors`.** `kame_log_level` now accepts a 4th value:
+   `silent` | `normal` | `verbose` | **`verbose+errors`**. The new one is full `verbose`
+   output **plus** the complete raw exception dumped on every failure (it flips
+   `kame_log_full_errors` on for you) — so the actual error shows in the Docker log, not
+   just KAME's one-line classification. Plain `verbose` is unchanged. (The standalone
+   `kame_log_full_errors` boolean still exists and is read *before* the level, so the level
+   can override it.)
 
-Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry/api-mode injection, no-pool
-delegation, **mid-stream drop → retried not surfaced**, terminal error still surfaces —
-all pass) + an installer-wiring check (patches & reverts `unified_turn` on V2.1; untouched
-on v1.x). README reorganized (Install→Settings→Logging first; validation moved below the
-version history). Verified locally against the cloned A0 **v2.1 tag** source AND live in
-the owner's `vault0` container (the endpoint pin flips `using_responses` to False through
-the real `unified_turn` flow; chat-completions/AI-Studio ~5× faster than Responses/vertex).
+**Net 1.0.4 design (what "make 1.0.3 work on V2.1" actually needed):** the two *core*,
+transparent fixes — **hook the renamed `unified_turn`** (so rotation runs) and **ride out
+mid-stream drops** (#4, so no error ever surfaces) — plus **cache-safety** so free-tier
+keys don't choke. The endpoint toggle (#3) is now a clearly-labeled opt-in, off by default.
+KAME adapts to A0 V2.1 instead of forcing it back to v1.x behavior.
+
+Tests: `tests/test_v1_0_4_v21.py` (rotation + key/cache/retry injection, **transparent
+default = no a0_api_mode forced**, opt-in ON pins it, no-pool delegation, **mid-stream drop
+→ retried not surfaced**, terminal error still surfaces — all pass) + an installer-wiring
+check (patches & reverts `unified_turn` on V2.1; untouched on v1.x). Verified locally
+against the cloned A0 **v2.1 tag** source AND live in the owner's `vault0` container.
 
 ## v1.0.3
 

@@ -37,8 +37,11 @@ class KameActivation(Extension):
                 from helpers.plugins import get_plugin_config
                 cfg = get_plugin_config("api_rotation_by_kame", agent=self.agent) or {}
 
-                # Log verbosity: new tri-state setting, with a fallback to the
-                # legacy verbose_trace boolean for configs saved before v1.0.1.
+                # v1.0.3: optional raw full-error logging (debug; off by default).
+                # Set FIRST so the v1.0.4 'verbose+errors' log level can force it on.
+                set_log_full_errors(cfg.get("kame_log_full_errors", False))
+                # Log verbosity: silent | normal | verbose | verbose+errors (v1.0.4),
+                # with a fallback to the legacy verbose_trace boolean (pre-v1.0.1).
                 level = cfg.get("kame_log_level")
                 if level:
                     set_log_level(level)
@@ -49,13 +52,11 @@ class KameActivation(Extension):
 
                 set_daily_cooldown(cfg.get("daily_quota_cooldown_seconds", 3600))
                 set_key_log_style(cfg.get("key_log_style", "fingerprint"))
-                # v1.0.3: optional raw full-error logging (debug; off by default).
-                set_log_full_errors(cfg.get("kame_log_full_errors", False))
                 # v1.0.3: collapse repetitive 503-storm logs (on by default).
                 set_collapse_storm_logs(cfg.get("kame_collapse_storm_logs", True))
-                # v1.0.4: pin to chat-completions endpoint (A0 V2.1; on by default)
-                # — avoids the overload-prone vertex_ai_beta Responses route.
-                set_force_chat_completions(cfg.get("kame_force_chat_completions", True))
+                # v1.0.4: OPT-IN — pin to plain chat-completions (skip A0 V2.1's
+                # Responses translation wrapper). OFF by default = stay transparent.
+                set_force_chat_completions(cfg.get("kame_force_chat_completions", False))
             except Exception:
                 # Older A0 versions may lack get_plugin_config; fall back to defaults.
                 pass

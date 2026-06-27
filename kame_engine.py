@@ -289,18 +289,26 @@ _KAME_STORM_MIN_FOR_SUMMARY = 3     # only recap a storm that had >= this many f
 # identity -> {count, first_at, last_err_at, last_emit_at, kinds:{kind:count}}
 _KAME_STORM = {}
 
-# v1.0.4 (A0 V2.1): force the chat-completions endpoint, ON by default.
-# A0 V2.1 defaults every model call to its new "Responses API" mode
-# (a0_api_mode="responses"). For Gemini that routes through litellm's Responses
-# *emulation* → the `vertex_ai_beta` endpoint, which under load returns
-# "ServiceUnavailable / This model is currently experiencing high demand" (503).
-# KAME 1.0.3 on A0 v1.x always used plain chat-completions (the standard Google
-# AI-Studio endpoint), which does NOT hit vertex_ai_beta and stays fast/reliable.
-# So KAME pins its calls back to chat-completions (a0_api_mode="chat_completions")
-# to restore the 1.0.3 path. Set kame_force_chat_completions: false to let A0 use
-# its V2.1 Responses default. Does NOT touch rotation/cooldown logic — only which
-# Google endpoint the request goes to.
-_KAME_FORCE_CHAT_COMPLETIONS = True
+# v1.0.4 — OPT-IN: force plain chat-completions instead of A0 V2.1's "Responses"
+# mode. OFF by default: KAME stays transparent and uses whatever API mode A0 picks,
+# so it works on ANY provider/model and never overrides the framework.
+#
+# Background (verified in-container): A0 V2.1 defaults to its new Responses API. For
+# Gemini there's no native Responses endpoint, so litellm *emulates* it — under the
+# hood it still calls plain chat-completions on the SAME Google endpoint, just wrapped
+# in a translation layer (that wrapper is where the mid-stream MidStreamFallbackError
+# comes from; KAME's carousel now rides those out either way). It is NOT a different
+# or slower Google server — earlier notes that claimed a separate "vertex_ai_beta"
+# endpoint were wrong; "vertex" is only litellm's shared error-class name.
+#
+# When ON (kame_force_chat_completions: true), KAME passes a0_api_mode="chat_completions"
+# so the call skips that translation wrapper and goes straight to chat-completions (the
+# leaner 1.0.3-style path). It can shave a little overhead on Gemini, but it is NOT a
+# magic speed fix and won't stop a model's own "high demand" 503s. Leave it OFF unless
+# you specifically want the direct path — and never turn it on globally if you use a
+# model that's genuinely better on Responses (newest OpenAI / Fable). Endpoint/mode
+# only; never touches rotation/cooldown/selection.
+_KAME_FORCE_CHAT_COMPLETIONS = False
 
 # --- v1.0.1: lightweight in-memory session stats (for verbose summary) ---
 _KAME_STATS = {
@@ -311,13 +319,20 @@ _KAME_CALL_COUNT = 0
 
 
 def set_log_level(level) -> None:
-    """Set the log verbosity: 'silent' | 'normal' | 'verbose'.
+    """Set the log verbosity: 'silent' | 'normal' | 'verbose' | 'verbose+errors'.
 
-    Called by the activation extension from the `kame_log_level` plugin
-    setting. Invalid input is ignored (keeps the current level).
+    Called by the activation extension from the `kame_log_level` plugin setting.
+    `verbose+errors` (v1.0.4) = full verbose output PLUS the raw exception dumped
+    on every failure (it turns on _KAME_LOG_FULL_ERRORS for you), so you see the
+    actual error in the Docker log instead of only KAME's one-line classification.
+    The plain `verbose` level is unchanged. Invalid input keeps the current level.
     """
-    global _KAME_LOG_LEVEL
-    s = str(level or "").strip().lower()
+    global _KAME_LOG_LEVEL, _KAME_LOG_FULL_ERRORS
+    s = str(level or "").strip().lower().replace(" ", "")
+    if s in ("verbose+errors", "verbose_errors", "verboseerrors", "verbose+error", "debug"):
+        _KAME_LOG_LEVEL = "verbose"        # behaves exactly like verbose, plus:
+        _KAME_LOG_FULL_ERRORS = True       # also dump the full raw error per failure
+        return
     if s in ("silent", "normal", "verbose"):
         _KAME_LOG_LEVEL = s
 

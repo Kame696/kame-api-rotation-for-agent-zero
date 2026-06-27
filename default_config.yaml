@@ -2,10 +2,14 @@
 # Override in the Plugin Settings UI. These are pure configuration; the
 # rotation/selection algorithm is unaffected by them.
 
-# Log verbosity: silent | normal | verbose
-#   silent  — no routine output, hard errors only (invisible in the Docker log)
-#   normal  — one line per successful call + rotations/limits/sleeps (default)
-#   verbose — adds heartbeat, per-call timing, full pool snapshot + summary
+# Log verbosity: silent | normal | verbose | verbose+errors
+#   silent          — no routine output, hard errors only (invisible in Docker log)
+#   normal          — one line per successful call + rotations/limits/sleeps (default)
+#   verbose         — adds heartbeat, per-call timing, full pool snapshot + summary
+#   verbose+errors  — everything in verbose PLUS the full raw exception on every
+#                     failure (so the actual error shows in the Docker log, not just
+#                     KAME's one-line classification). Same as verbose with
+#                     kame_log_full_errors turned on, in one pick. (v1.0.4)
 # (Legacy "verbose_trace: true" still maps to "verbose".)
 kame_log_level: normal
 
@@ -40,15 +44,20 @@ kame_log_full_errors: false
 # one line per failure at 'normal'. Pure observability — rotation is unchanged.
 kame_collapse_storm_logs: true
 
-# Pin KAME's model calls to the chat-completions endpoint. ON by default (A0 V2.1).
-# Agent Zero V2.1 changed the default API mode to its new "Responses API", which
-# for Gemini routes through litellm's Responses emulation → the `vertex_ai_beta`
-# endpoint. Under load that endpoint returns "ServiceUnavailable / this model is
-# experiencing high demand" (503), which made V2.1 feel far slower than KAME 1.0.3
-# on A0 v1.x — even for a trivial "hello". KAME 1.0.3 always used plain chat
-# completions (the standard Google AI-Studio endpoint), which does not hit
-# vertex_ai_beta. With this ON, KAME passes a0_api_mode="chat_completions" so its
-# calls use that same fast/reliable endpoint. Set false to let A0 use its V2.1
-# Responses default. Only changes WHICH Google endpoint is used — never the
-# rotation/cooldown/selection logic.
-kame_force_chat_completions: true
+# OPT-IN (default OFF): force plain chat-completions instead of A0 V2.1's new
+# "Responses" API mode. OFF keeps KAME transparent — it uses whatever mode A0 picks,
+# so it works on any provider/model and never overrides the framework.
+#
+# What it actually does: A0 V2.1 defaults to Responses mode. Gemini has no native
+# Responses endpoint, so litellm *emulates* it — under the hood it still calls plain
+# chat-completions on the SAME Google server, just wrapped in a translation layer.
+# (It is NOT a different/slower "vertex_ai_beta" server — that's only litellm's error
+# name.) Turning this ON makes KAME skip that wrapper and call chat-completions
+# directly (the leaner 1.0.3-style path). It may shave a little overhead on Gemini,
+# but it is NOT a magic speed fix and won't stop a model's own "high demand" 503s.
+#
+# Leave OFF unless you specifically want the direct path. Do NOT turn it on if you run
+# a model that's genuinely better on Responses (newest OpenAI / Fable) — it would
+# disable their server-side state + native tools. Endpoint/mode only; never touches
+# rotation/cooldown/selection.
+kame_force_chat_completions: false
