@@ -1,7 +1,7 @@
 name: api_rotation_by_kame
 title: Key-Aware Management Engine (API Rotation)
-description: KAME rotates API keys to avoid 429 errors, cooldown exhausted keys, respect retry delays, and route around provider outages during long agent runs. v1.0.4 restores Agent Zero V2 / V2.1 compatibility — it patches the new unified_turn entry point and calls the model directly (the 1.0.3 way) for instant rotation, stays free-tier cache-safe, and never surfaces an error — while keeping the rotation engine identical.
-version: 1.0.4
+description: KAME rotates API keys to avoid 429 errors, cooldown exhausted keys, respect retry delays, and route around provider outages during long agent runs. v1.0.5 fixes daily-quota logic (always probe at the configured interval, never shorten existing cooldowns), honors chat pause, and adds a key-status panel with reset button.
+version: 1.0.5
 settings_sections:
   - agent
 per_project_config: false

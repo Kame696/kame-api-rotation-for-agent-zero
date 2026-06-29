@@ -1,8 +1,7 @@
 <!--
-  Settings UI for the api_rotation_by_kame plugin (A0 plugin settings modal).
-  Settings are re-read on each monologue start and are pure configuration —
-  the rotation/selection algorithm is unaffected. (A legacy verbose_trace: true
-  still maps to the "verbose" log level.)
+  KAME — API Rotation Settings & Key Status Panel (v1.0.5)
+  Settings re-read on each monologue start; status panel reads live in-memory
+  pool health (no disk persistence — restart resets everything).
 -->
 <html>
 <head>
@@ -10,15 +9,47 @@
   <script type="module">
     import { store } from "/components/plugins/plugin-settings-store.js";
   </script>
+  <style>
+    /* Key status panel */
+    .kame-status-panel { margin-top: 8px; }
+    .kame-pool-label { font-size: 0.8em; color: var(--color-text-secondary, #888); margin: 10px 0 4px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+    .kame-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .kame-key {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 8px; border-radius: 6px; font-size: 0.78em; font-family: monospace;
+      border: 1px solid transparent;
+    }
+    .kame-key.healthy  { background: #0d2a1a; border-color: #1a5e35; color: #4ade80; }
+    .kame-key.cooling  { background: #2a1a0d; border-color: #7a3a0a; color: #fb923c; }
+    .kame-key.daily    { background: #2a0d0d; border-color: #7a1a1a; color: #f87171; }
+    .kame-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .kame-key.healthy .kame-dot  { background: #22c55e; }
+    .kame-key.cooling .kame-dot  { background: #f97316; }
+    .kame-key.daily   .kame-dot  { background: #ef4444; }
+    .kame-eta { font-size: 0.85em; opacity: 0.75; }
+    .kame-rpm { font-size: 0.75em; opacity: 0.5; }
+    .kame-status-meta { font-size: 0.78em; color: var(--color-text-secondary, #888); margin-top: 6px; }
+    .kame-btn {
+      margin-top: 10px; padding: 5px 14px; border-radius: 6px; border: 1px solid #555;
+      background: #1a1a2e; color: #a0a0c0; cursor: pointer; font-size: 0.82em;
+      transition: background 0.15s;
+    }
+    .kame-btn:hover { background: #2a2a4a; color: #c0c0e0; }
+    .kame-btn.reset-all { border-color: #7a1a1a; color: #f87171; }
+    .kame-btn.reset-all:hover { background: #2a0d0d; }
+    .kame-legend { display: flex; gap: 12px; font-size: 0.75em; margin-top: 8px; color: var(--color-text-secondary, #888); }
+    .kame-legend span { display: flex; align-items: center; gap: 4px; }
+  </style>
 </head>
 <body>
-  <div x-data>
+  <div x-data="kamePanel()">
     <h2>KAME — API Rotation</h2>
     <p>
       Multi-key rotation with smart quarantine and an eternal carousel. The
       engine is intentionally opinionated — these are the only knobs.
     </p>
 
+    <!-- ── SETTINGS ────────────────────────────────────────────────── -->
     <h3>Logging</h3>
 
     <div class="setting-row">
@@ -27,15 +58,14 @@
         <select x-model="config.kame_log_level">
           <option value="silent">silent — no plugin output (hard errors only)</option>
           <option value="normal">normal — one line per success + events (recommended)</option>
-          <option value="verbose">verbose — full diagnostics</option>
+          <option value="verbose">verbose — full diagnostics + timing + pool snapshot</option>
+          <option value="verbose+errors">verbose+errors — verbose AND full raw exception on every failure</option>
         </select>
       </label>
       <p class="hint">
-        How much KAME writes to the Docker log; the rotation algorithm is the
-        same at every level. <strong>normal</strong> shows the pool count only
-        when degraded, <strong>silent</strong> keeps KAME out of the log
-        entirely, and <strong>verbose</strong> adds heartbeat, timing, pool
-        snapshot and a session summary.
+        How much KAME writes to the Docker log. <strong>normal</strong> shows the
+        pool count only when degraded. <strong>verbose+errors</strong> also dumps
+        the raw error body so you can verify KAME's classification is correct.
       </p>
     </div>
 
@@ -51,7 +81,6 @@
       <p class="hint">
         <strong>fingerprint</strong> is a hash like <code>k3f9a1</code> — not
         your real key, so the secret never reaches the log.
-        <strong>full</strong> writes the whole key; use only for local debugging.
       </p>
     </div>
 
@@ -70,11 +99,141 @@
       </label>
       <p class="hint">
         How long to rest a key after a <strong>daily-quota</strong> or
-        <strong>account / out-of-credit</strong> limit (any provider). Overrides
-        a misleadingly short retry hint and caps the adaptive backoff. Per-minute
-        limits are unaffected. Default <code>3600</code> (1h); range 1–86400.
+        <strong>account / out-of-credit</strong> limit. KAME probes the key
+        again after this interval — Google's own retryDelay is ignored for daily
+        quotas since it is often wrong. Default <code>3600</code> (1h).
       </p>
     </div>
+
+    <!-- ── KEY STATUS PANEL ─────────────────────────────────────────── -->
+    <h3>Key Pool Status</h3>
+    <p class="hint">
+      Live in-memory state. Only anonymized fingerprints are shown — never your
+      real keys. Status resets automatically on container restart.
+    </p>
+
+    <div class="kame-status-panel">
+      <!-- Loading / error state -->
+      <template x-if="statusLoading">
+        <span class="kame-status-meta">Loading pool status…</span>
+      </template>
+      <template x-if="statusError">
+        <span class="kame-status-meta" style="color:#f87171" x-text="'Error: ' + statusError"></span>
+      </template>
+
+      <!-- Pools -->
+      <template x-if="!statusLoading && !statusError">
+        <div>
+          <template x-for="(keys, identity) in pools" :key="identity">
+            <div>
+              <div class="kame-pool-label" x-text="identity"></div>
+              <div class="kame-keys">
+                <template x-for="key in keys" :key="key.fingerprint">
+                  <div :class="'kame-key ' + keyClass(key)">
+                    <div class="kame-dot"></div>
+                    <span x-text="key.fingerprint"></span>
+                    <template x-if="!key.healthy">
+                      <span class="kame-eta" x-text="fmtEta(key.seconds_remaining)"></span>
+                    </template>
+                    <template x-if="key.healthy && key.recent_requests > 0">
+                      <span class="kame-rpm" x-text="key.recent_requests + '/60s'"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              <!-- per-pool reset button -->
+              <button
+                class="kame-btn"
+                @click="resetPool(identity)"
+                x-text="'Reset ' + identity.split(':').pop()"
+              ></button>
+            </div>
+          </template>
+
+          <div class="kame-legend">
+            <span><div class="kame-dot" style="background:#22c55e;width:8px;height:8px;border-radius:50%"></div> Healthy</span>
+            <span><div class="kame-dot" style="background:#f97316;width:8px;height:8px;border-radius:50%"></div> Cooling (server/per-min)</span>
+            <span><div class="kame-dot" style="background:#ef4444;width:8px;height:8px;border-radius:50%"></div> Daily quota</span>
+          </div>
+
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="kame-btn" @click="loadStatus()">↻ Refresh</button>
+            <button class="kame-btn reset-all" @click="resetAll()">⚡ Reset ALL pools</button>
+          </div>
+          <div class="kame-status-meta" x-text="lastUpdated ? 'Last updated: ' + lastUpdated : ''"></div>
+          <div class="kame-status-meta" x-text="resetMsg" style="color:#4ade80"></div>
+        </div>
+      </template>
+    </div>
   </div>
+
+  <script>
+    function kamePanel() {
+      return {
+        pools: {},
+        statusLoading: true,
+        statusError: '',
+        lastUpdated: '',
+        resetMsg: '',
+
+        async init() {
+          await this.loadStatus();
+        },
+
+        async loadStatus() {
+          this.statusLoading = true;
+          this.statusError = '';
+          try {
+            const r = await fetch('/api/plugins/api_rotation_by_kame/status', { method: 'GET' });
+            const data = await r.json();
+            if (data.ok) {
+              this.pools = data.pools;
+              this.lastUpdated = new Date().toLocaleTimeString();
+            } else {
+              this.statusError = data.error || 'Unknown error';
+            }
+          } catch (e) {
+            this.statusError = e.message;
+          }
+          this.statusLoading = false;
+        },
+
+        async resetPool(identity) {
+          const r = await fetch('/api/plugins/api_rotation_by_kame/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identity })
+          });
+          const data = await r.json();
+          this.resetMsg = data.ok ? `✓ Cleared ${data.cleared} key(s) for ${identity}` : `Error: ${data.error}`;
+          await this.loadStatus();
+        },
+
+        async resetAll() {
+          const r = await fetch('/api/plugins/api_rotation_by_kame/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const data = await r.json();
+          this.resetMsg = data.ok ? `✓ Cleared ${data.cleared} key(s) across all pools` : `Error: ${data.error}`;
+          await this.loadStatus();
+        },
+
+        keyClass(key) {
+          if (key.healthy) return 'healthy';
+          if (key.consecutive_rl >= 1) return 'daily';
+          return 'cooling';
+        },
+
+        fmtEta(sec) {
+          if (sec <= 0) return '';
+          if (sec < 120) return sec + 's';
+          if (sec < 7200) return Math.round(sec / 60) + 'm';
+          return Math.round(sec / 3600) + 'h';
+        }
+      };
+    }
+  </script>
 </body>
 </html>

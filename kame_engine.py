@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.4.
+"""KAME API Rotation & Stability Engine v1.0.5.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -725,7 +725,12 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
                 kd["consecutive_server"] = cnt
                 escalated = min(5.0 * (2 ** (cnt - 1)), _KAME_SERVER_BACKOFF_CAP_S)
                 applied = max(applied, escalated)
-            kd["sick_until"] = now + applied
+            # v1.0.5: never SHORTEN an existing cooldown. A long daily-quota protection
+            # (e.g. set by a previous daily hit) must never be overwritten by a shorter
+            # server-busy (10s) or per-minute hit on the same key. Without this, a 503
+            # on a daily-exhausted key would wipe the 1h protection and the key would
+            # be re-probed 50 minutes too early (confirmed from log6 overnight analysis).
+            kd["sick_until"] = max(kd.get("sick_until", 0), now + applied)
             kd["last_sick_at"] = now
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
     return applied
@@ -886,7 +891,16 @@ def _classify_error(exc):
         parsed = _extract_retry_delay(exc)
         if _is_daily_or_account_limit(exc):
             kind = "insufficient_quota" if "insufficient" in err_msg else "daily"
-            delay = max(parsed, _KAME_DAILY_COOLDOWN_S)
+            # v1.0.5: always use the configured daily cooldown interval regardless of
+            # Google's retryDelay. The configured 1h cap is intentional — it means
+            # "test this key again every hour." Google's retryDelay for daily quotas
+            # is often misleading (too short OR too long — we saw both in production).
+            # The _KAME_DAILY_COOLDOWN_S setting is the single source of truth for how
+            # often we probe exhausted daily-quota keys. (In v1.0.1-1.0.4 we used
+            # max(parsed, _KAME_DAILY_COOLDOWN_S) which respected Google's 9h hint;
+            # that caused keys to be locked out for ~10h when probing every hour was
+            # both correct and what the setting was designed for.)
+            delay = _KAME_DAILY_COOLDOWN_S
             return delay, kind, (status_code or 429)
         return parsed, "per_minute", (status_code or 429)
 
@@ -1234,6 +1248,21 @@ async def _kame_honor_intervention():
         agent = None
     if agent is None:
         return
+
+    # v1.0.5: honor chat PAUSE. When the user pauses the chat, A0 sets
+    # context.paused = True. KAME's carousel kept running through the pause
+    # because it was mid-call inside the eternal sleep loop (log6: ran 10h
+    # overnight through a pause). We wait here — in short async slices so we
+    # stay cooperative — until the chat is unpaused, then resume normally.
+    # This never aborts the carousel or changes cooldowns; it just holds.
+    try:
+        ctx = getattr(agent, "context", None)
+        if ctx is not None and getattr(ctx, "paused", False):
+            while getattr(ctx, "paused", False):
+                await asyncio.sleep(0.5)
+    except Exception:
+        pass
+
     handler = getattr(agent, "handle_intervention", None)
     if handler is None:
         return
@@ -1939,7 +1968,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.4] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.5] Patch Failed: {e}")
         return False
 
 
@@ -1969,9 +1998,63 @@ def remove_kame_patch():
         return False
 
 
+def get_pool_status() -> dict:
+    """Return a snapshot of all key-pool health for the status panel (v1.0.5).
+
+    Returns a dict keyed by identity ('provider:model'), each value being a list
+    of per-key dicts with: fingerprint, sick_until, kind, seconds_remaining.
+    Pure read — never changes any state. Called from the webui API endpoint.
+    """
+    now = time.time()
+    result = {}
+    with _KAME_LOCK:
+        for identity, state in _KAME_KEY_HEALTH.items():
+            keys_out = []
+            for key, kd in state.get("keys", {}).items():
+                su = kd.get("sick_until", 0)
+                remaining = max(0.0, su - now)
+                keys_out.append({
+                    "fingerprint": _key_display(key),
+                    "healthy": remaining == 0,
+                    "seconds_remaining": round(remaining),
+                    "eta": time.strftime("%H:%M:%S", time.localtime(su)) if remaining > 0 else None,
+                    "consecutive_rl": kd.get("consecutive_rl", 0),
+                    "recent_requests": len([t for t in kd.get("request_log", []) if now - t <= 60]),
+                })
+            result[identity] = sorted(keys_out, key=lambda k: k["seconds_remaining"])
+    return result
+
+
+def reset_pool_health(identity: str | None = None) -> int:
+    """Clear in-memory cooldowns for one identity (or all) — v1.0.5.
+
+    Equivalent to a restart for the key-health state: every key becomes
+    immediately available again. Never changes disk state or persistent config.
+    Returns the number of keys cleared.
+    """
+    global _KAME_KEY_HEALTH
+    cleared = 0
+    with _KAME_LOCK:
+        targets = [identity] if identity and identity in _KAME_KEY_HEALTH else list(_KAME_KEY_HEALTH.keys())
+        for ident in targets:
+            for kd in _KAME_KEY_HEALTH[ident].get("keys", {}).values():
+                if kd.get("sick_until", 0) > time.time():
+                    kd["sick_until"] = 0
+                    kd["consecutive_rl"] = 0
+                    kd["consecutive_server"] = 0
+                    cleared += 1
+    if _lvl_normal():
+        scope = identity or "all identities"
+        PrintStyle(font_color="#96E").print(
+            f"[KAME] 🔄 Pool reset ({scope}) — {cleared} key{'s' if cleared != 1 else ''} thawed. "
+            f"Memory only; restart still resets everything."
+        )
+    return cleared
+
+
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.4 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.5 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

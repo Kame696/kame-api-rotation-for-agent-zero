@@ -21,7 +21,47 @@ graph LR
 
 ---
 
-## v1.0.4 — current
+## v1.0.5 — current
+
+**Daily-quota logic fix + chat pause + key-status panel.**
+
+Driven by an 18-hour real-world overnight run (`log6.txt`, 2026-06-27) that exposed two bugs
+and one missing feature. The selection/rotation/cooldown carousel is unchanged; the 13 shields
+still fire exactly as in 1.0.4. Rotation engine and A0 V2.1 compatibility are untouched.
+
+**1. Daily-quota cooldown is now always the configured interval (log6 bug #1).**
+KAME previously used `max(parsed_retryDelay, daily_quota_cooldown_seconds)` — if Google sent a
+9.1h retryDelay, the key was locked out for 9.1h instead of the configured 1h. This is wrong:
+the configured `daily_quota_cooldown_seconds` is the user's deliberate "probe this key every Nh"
+setting, and Google's retryDelay for daily quotas is often wrong or misleading. Fixed: daily-quota
+cooldowns always use exactly `daily_quota_cooldown_seconds`. (v1.0.1–v1.0.4 used `max()`.)
+
+**2. Existing cooldowns can never be shortened (log6 bug #2 — `sick_until` overwrite).**
+`_mark_key_health` always overwrote `sick_until = now + applied` regardless of whether the new
+cooldown was shorter than the existing one. A 503 server-busy (10s cooldown) on a key that was
+already on a 1h daily-quota would replace the 1h protection with 10s — the key would be
+re-probed 50 minutes early, hit daily-quota again, and get another 1h. This caused the pool to
+degrade faster than expected during heavy overnight sessions. Fixed: `sick_until = max(existing,
+now + applied)` — existing protections can only grow, never shrink. Bug present since v1.0.0.
+
+**3. Chat pause now stops the carousel (log6 overnight observation).**
+When the user clicked *Pause* in the chat menu at 00:28, KAME kept running its eternal sleep
+loop until morning (~10h later). The loop was mid-call and never saw the pause flag. Fixed:
+`_kame_honor_intervention` now checks `agent.context.paused` in short async slices before
+processing intervention. When paused it waits; when unpaused it resumes — carousel, cooldowns,
+and selections are completely unaffected. Uses the same interruptible-slice machinery as the
+v1.0.2 nudge fix.
+
+**4. Key-status panel in the KAME plugin settings (new feature).**
+The plugin config page now shows every key in every pool with live color-coded health:
+🟢 healthy · 🟠 cooling (server/per-min) · 🔴 daily-quota. Includes ETA for cooling keys and
+recent-RPM usage for healthy ones. Two reset buttons: reset one model pool, or reset all — same
+effect as a container restart for key health, without actually restarting. Memory-only: real
+restart still wipes everything. Implemented via two new plugin API endpoints
+(`/api/plugins/api_rotation_by_kame/status` and `…/reset`) and an updated `webui/config.html`.
+The `verbose+errors` log level option also appears in the config UI for the first time.
+
+## v1.0.4
 
 **One job: make KAME 1.0.3 work again on Agent Zero, after A0 went 1.2 → V2.0 → V2.1.**
 KAME's rotation engine (`_get_best_key`, cooldowns, ETA-sleep, the 13 shields) is the
