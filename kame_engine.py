@@ -429,6 +429,27 @@ def _key_display(key: str) -> str:
     return _key_short_id(key)
 
 
+def _key_display_auth(key: str) -> str:
+    """Key display for AUTH/invalid-key events specifically (v1.0.6).
+
+    A dead/expired key is a PERMANENT, actionable problem — you need to find
+    and replace it in your provider console. The default 'fingerprint' style
+    (an opaque hash like 'k3f9a1') is great for routine rotation logs (privacy)
+    but useless here: you cannot look up a hash in Google/OpenAI's dashboard.
+    So for this event ONLY, 'fingerprint' is upgraded to a partial reveal
+    (first 10 + last 4 chars — enough to recognize the real key, not the whole
+    secret). If the user already configured 'prefix8' or 'full', that choice
+    is respected as-is (no change). Never affects any other log line.
+    """
+    if not key:
+        return "------"
+    if _KAME_KEY_LOG_STYLE in ("full", "prefix8"):
+        return _key_display(key)
+    if len(key) <= 16:
+        return key
+    return f"{key[:10]}...{key[-4:]}"
+
+
 def _fmt_duration(seconds) -> str:
     """Human-friendly PRECISE duration: 45s / 1m30s / 2m / 1h / 1.5h.
 
@@ -1731,11 +1752,15 @@ async def _kame_unified_call(
                     if _is_auth_error(stream_err):
                         _auth_sc = getattr(stream_err, "status_code", None)
                         applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
-                        if _lvl_normal():
-                            PrintStyle.warning(
-                                f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                                f"{_friendly_error_msg('auth', applied, _auth_sc, stream_err)}"
-                            )
+                        # v1.0.6: an invalid/expired key is a PERMANENT, actionable
+                        # problem — always shown, even at 'silent' (matches the
+                        # documented "silent still shows hard errors" promise; this
+                        # used to be gated behind _lvl_normal() and was invisible in
+                        # silent mode, contradicting that promise).
+                        PrintStyle.warning(
+                            f"[KAME] {call_type}|{model_short} {_key_display_auth(key)} "
+                            f"{_friendly_error_msg('auth', applied, _auth_sc, stream_err)}"
+                        )
                         _maybe_log_full_error(call_type, model_short, key, stream_err, "auth", applied, _auth_sc)
                         continue
                     # Mid-stream failure before any content: smart quarantine.
@@ -1822,11 +1847,12 @@ async def _kame_unified_call(
             if _is_auth_error(e):
                 _auth_sc = getattr(e, "status_code", None)
                 applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
-                if _lvl_normal():
-                    PrintStyle.warning(
-                        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                        f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
-                    )
+                # v1.0.6: always shown, even at 'silent' — see the matching comment
+                # on the mid-stream auth branch above for the full rationale.
+                PrintStyle.warning(
+                    f"[KAME] {call_type}|{model_short} {_key_display_auth(key)} "
+                    f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
+                )
                 _maybe_log_full_error(call_type, model_short, key, e, "auth", applied, _auth_sc)
             else:
                 delay, kind, sc = _classify_error(e)

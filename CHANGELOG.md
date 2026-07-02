@@ -23,9 +23,9 @@ graph LR
 
 ## v1.0.6 — current
 
-**Faster failover + verifiable quota logging + gentler empty-stream handling.**
+**Faster failover + verifiable quota logging + gentler empty-stream handling + visible invalid keys.**
 
-Three focused improvements on top of v1.0.5. The selection/rotation/cooldown carousel and all
+Five focused improvements on top of v1.0.5. The selection/rotation/cooldown carousel and all
 13 shields are unchanged in spirit — these tune timing and observability. No new dependencies.
 Daily-quota cooldowns remain exactly the configured interval (no jitter).
 
@@ -47,6 +47,19 @@ error) is usually a transient provider hiccup — the key is healthy. v1.0.5 res
 rotated on the FIRST empty. v1.0.6 gives the key one un-penalized pass on the first empty and only
 rests it 3s if the SAME key returns empty AGAIN in the same call (bounded to 2, with an event-loop
 yield so a whole pool of empties can't spin).
+
+**4. An invalid/expired key is now always visible, even at `silent` log level.** Previously the
+auth-error warning was gated behind `if _lvl_normal():`, so a permanently dead key was completely
+silenced in `silent` mode — contradicting the documented promise that `silent` still shows "hard,
+unrecoverable errors." A dead key is exactly that: it never self-recovers. Fixed: the warning now
+always fires, matching how a compression failure already behaved.
+
+**5. Invalid-key events now show enough of the key to actually find it.** The routine log display
+(`key_log_style`, default `fingerprint`) shows an anonymized hash like `k3f9a1` — great for privacy
+on rotation/cooldown lines, useless for a dead key you need to locate and replace in your provider
+console. For THIS event only, `fingerprint` is upgraded to a partial reveal (first 10 + last 4
+characters, e.g. `AIzaSyABCD...WXYZ`) — enough to recognize the real key, not the whole secret. An
+explicit `prefix8` or `full` choice is respected unchanged. No other log line is affected.
 
 Daily-quota handling is unchanged from v1.0.5: the cooldown is exactly your configured
 `daily_quota_cooldown_seconds` (default 1h), applied per key, and it still never shortens (the

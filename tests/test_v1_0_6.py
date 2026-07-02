@@ -9,6 +9,13 @@ Covers the four 1.0.6 changes, with stubs (no real A0/litellm):
      from that key cools it (verified via the counter logic in a mini-loop).
   #4 daily cooldown — is EXACTLY the configured interval (the spread idea was
      dropped: it added recovery delay for no benefit). No jitter on daily.
+  #5 invalid-key visibility — an auth/invalid-key event always logs (no longer
+     gated behind _lvl_normal(), so it's visible even at 'silent', matching the
+     documented "silent still shows hard errors" promise).
+  #6 invalid-key partial reveal — _key_display_auth() upgrades the default
+     'fingerprint' style to a partial reveal (first 10 + last 4 chars) for
+     THIS event only, so a dead key can be found in the provider console;
+     an explicit 'prefix8'/'full' choice is respected unchanged.
 """
 import sys, types, os, asyncio, re
 
@@ -148,6 +155,44 @@ check("2nd empty stream from same key DOES cool it (3s)", _second is True)
 _sick = K._KAME_KEY_HEALTH[IDENT]["keys"]["KE"]["sick_until"]
 import time as _t
 check("cooled key sick_until is ~now+3s", 0 < (_sick - _t.time()) <= 4)
+
+
+# ==========================================================================
+# #5/#6 — invalid-key visibility: always shown (even 'silent'), partial reveal
+# ==========================================================================
+_LONG_KEY = "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123"  # 37 chars, like a real Gemini key
+
+# _key_display_auth: fingerprint style (default) is UPGRADED to a partial reveal
+K._KAME_KEY_LOG_STYLE = "fingerprint"
+_auth_disp = K._key_display_auth(_LONG_KEY)
+check("auth display shows first 10 + last 4 chars (not the opaque fingerprint)",
+      _auth_disp == f"{_LONG_KEY[:10]}...{_LONG_KEY[-4:]}")
+check("auth display is NOT the same as the routine fingerprint display",
+      _auth_disp != K._key_display(_LONG_KEY))
+check("auth display never exposes the FULL key when style is fingerprint",
+      _LONG_KEY not in _auth_disp)
+
+# prefix8 / full styles are respected as-is (user already opted into more reveal)
+K._KAME_KEY_LOG_STYLE = "full"
+check("auth display respects an explicit 'full' style (shows the whole key)",
+      K._key_display_auth(_LONG_KEY) == _LONG_KEY)
+K._KAME_KEY_LOG_STYLE = "prefix8"
+check("auth display respects an explicit 'prefix8' style (unchanged)",
+      K._key_display_auth(_LONG_KEY) == K._key_display(_LONG_KEY))
+K._KAME_KEY_LOG_STYLE = "fingerprint"  # restore default
+
+# Short key: nothing meaningful to redact, shown as-is
+check("a short key (<=16 chars) is shown in full (nothing to usefully hide)",
+      K._key_display_auth("shortkey123") == "shortkey123")
+
+# Structural: the two auth-warning call sites no longer gate on _lvl_normal()
+# (previously `if _lvl_normal():` wrapped the auth PrintStyle.warning call,
+# making it invisible in 'silent' mode — removed so it always fires).
+_src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"), encoding="utf-8").read()
+check("no 'if _lvl_normal():' gate right after the stream-side auth check",
+      "if _lvl_normal():" not in _src.split("_is_auth_error(stream_err)")[1][:400])
+check("no 'if _lvl_normal():' gate right after the outer auth check",
+      "if _lvl_normal():" not in _src.split("_is_auth_error(e):")[1][:400])
 
 
 print("=" * 60)
