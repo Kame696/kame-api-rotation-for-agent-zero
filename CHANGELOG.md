@@ -21,9 +21,46 @@ graph LR
 
 ---
 
-## v1.0.5 — current
+## v1.0.6 — current
 
-**Daily-quota logic fix + chat pause + key-status panel.**
+**Faster failover + verifiable quota logging + gentler empty-stream / daily handling.**
+
+Four focused improvements on top of v1.0.5. The selection/rotation/cooldown carousel and all
+13 shields are unchanged in spirit — these tune timing and observability. No new dependencies.
+
+**1. Near-instant key failover.** The failure path previously slept a fixed `50ms` after every
+rotation; during a 15-key 503 storm that added ~750ms of dead wait before the pool went cold and
+the ETA-sleep took over. Replaced with `asyncio.sleep(0)` — a pure event-loop yield (no CPU spin,
+no starvation) with zero wall-clock delay. The failed key is already marked sick, so the next
+iteration picks a different key immediately; once all are sick the ETA-driven sleep handles the
+wait exactly as before.
+
+**2. Inline quota tag in the log (verifiable classification).** Every quota failure line now
+appends the provider's own quota id, shortened — e.g. `429 daily-quota → cooled 1h [quota: PerDay]`
+or `429 per-minute → wait 37s [quota: PerMinute]`. If a "daily-quota" line ever showed
+`[quota: PerMinute]`, that would be a misclassification you can now spot at `normal` level without
+enabling `verbose+errors`. Pure logging; classification logic itself is unchanged.
+
+**3. One transient empty stream no longer penalizes a good key.** An empty stream (no content, no
+error) is usually a transient provider hiccup — the key is healthy. v1.0.5 rested the key 3s and
+rotated on the FIRST empty. v1.0.6 gives the key one un-penalized pass on the first empty and only
+rests it 3s if the SAME key returns empty AGAIN in the same call (bounded to 2, with an event-loop
+yield so a whole pool of empties can't spin).
+
+**4. Daily re-probes are spread, not bunched.** When many keys hit the daily quota in the same
+short burst, their flat 1h cooldowns all expired at nearly the same instant an hour later, so KAME
+re-probed them in one tight wave (log6: ~185 probes in the 04:00 hour vs ~25 in quiet hours). Each
+daily cooldown now gets up to 120s of random spread so expiries — and thus re-probes — fan out over
+a window. This is NOT escalation and does NOT change the ~hourly cadence; it only smooths the burst.
+Cooldowns still never shorten (the v1.0.5 `max()` guarantee holds).
+
+Also: the buggy key-status panel that briefly shipped in a 1.0.5 build (color-coded per-key status +
+reset endpoints) is fully removed — it displayed incorrect data. No orphaned API routes or dead code
+remain. The `verbose+errors` log level is in the settings dropdown.
+
+## v1.0.5
+
+**Daily-quota logic fix + chat pause.**
 
 Driven by an 18-hour real-world overnight run (`log6.txt`, 2026-06-27) that exposed two bugs
 and one missing feature. The selection/rotation/cooldown carousel is unchanged; the 13 shields
@@ -52,14 +89,10 @@ processing intervention. When paused it waits; when unpaused it resumes — caro
 and selections are completely unaffected. Uses the same interruptible-slice machinery as the
 v1.0.2 nudge fix.
 
-**4. Key-status panel in the KAME plugin settings (new feature).**
-The plugin config page now shows every key in every pool with live color-coded health:
-🟢 healthy · 🟠 cooling (server/per-min) · 🔴 daily-quota. Includes ETA for cooling keys and
-recent-RPM usage for healthy ones. Two reset buttons: reset one model pool, or reset all — same
-effect as a container restart for key health, without actually restarting. Memory-only: real
-restart still wipes everything. Implemented via two new plugin API endpoints
-(`/api/plugins/api_rotation_by_kame/status` and `…/reset`) and an updated `webui/config.html`.
-The `verbose+errors` log level option also appears in the config UI for the first time.
+**4. `verbose+errors` log level exposed in the settings dropdown.**
+
+> Note: an early 1.0.5 build also shipped a live key-status panel (color-coded per-key health +
+> reset endpoints). It displayed incorrect data and was removed in v1.0.6 — see the v1.0.6 entry.
 
 ## v1.0.4
 

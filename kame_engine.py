@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.5.
+"""KAME API Rotation & Stability Engine v1.0.6.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -142,7 +142,7 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, contextvars, hashlib, threading, time, logging, re
+import asyncio, contextvars, hashlib, threading, time, logging, re, random
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 import openai
 import litellm
@@ -244,6 +244,16 @@ _KAME_SERVER_BACKOFF_CAP_S = 90.0
 # escalate a key that keeps failing, but a genuinely per-minute key must NOT climb
 # toward the 1h daily ceiling. Cap per-minute escalation here instead.
 _KAME_RL_BACKOFF_CAP_S = 300.0  # 5 min
+
+# --- v1.0.6: daily re-probe SPREAD ---
+# When many keys hit the daily quota inside the same short burst, their flat 1h
+# cooldowns all expire at nearly the same instant an hour later, so KAME re-probes
+# them all in one tight wave (log6 showed ~185 probes in the 04:00 hour vs ~25
+# in quiet hours). This is NOT escalation and does NOT change the ~hourly cadence
+# the user wants — it just adds up to this many seconds of random spread to each
+# daily cooldown so the expiries (and thus the re-probes) fan out over a window
+# instead of bunching. Purely smooths the burst.
+_KAME_DAILY_REPROBE_SPREAD_S = 120.0
 
 # --- v1.0.2: heartbeat cadence while the WHOLE pool cools for a long outage
 # (longer than the 60s re-check). Instead of one line then full silence, KAME
@@ -583,6 +593,34 @@ def _is_daily_or_account_limit(exc) -> bool:
     return any(ind in text for ind in _DAILY_LIMIT_INDICATORS)
 
 
+def _extract_quota_marker(exc) -> str:
+    """Return a SHORT tag naming WHICH quota the provider reported (v1.0.6).
+
+    Purpose: make KAME's daily/per-minute classification eyeball-verifiable in
+    the normal log without dumping the raw JSON. A Gemini 429, for example,
+    carries `"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"` →
+    this returns "PerDay". A per-minute quota → "PerMinute". Returns "" when the
+    error names no quota (nothing is appended). Never raises — logging must not
+    break rotation.
+    """
+    try:
+        text = str(exc)
+        m = re.search(r'"quotaId"\s*:\s*"([^"]+)"', text)
+        raw = m.group(1) if m else ""
+        hay = (raw or text).lower()
+        if any(t in hay for t in ("perday", "per day", "per-day", "/day",
+                                  "requests per day", "tokens per day", "rpd")):
+            return "PerDay"
+        if any(t in hay for t in ("perminute", "per minute", "per-minute",
+                                  "per min", "requests per min", "tokens per min", "rpm")):
+            return "PerMinute"
+        if "insufficient" in hay:
+            return "InsufficientQuota"
+        return raw[:40] if raw else ""
+    except Exception:
+        return ""
+
+
 def _parse_duration_to_seconds(text):
     """Parse a duration EXPRESSION into seconds.
 
@@ -702,6 +740,11 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
                 kd["consecutive_rl"] = cnt
                 escalated = min(20.0 * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S)
                 applied = max(applied, escalated)
+                # v1.0.6: add up to _KAME_DAILY_REPROBE_SPREAD_S of random spread so
+                # keys cooled in the same burst don't all expire (and get re-probed)
+                # at the same instant an hour later. Not escalation, doesn't change
+                # the ~hourly cadence — just fans the re-probes out over a window.
+                applied += random.uniform(0, _KAME_DAILY_REPROBE_SPREAD_S)
             elif kind == "per_minute":
                 # v1.0.2: per-minute (RPM) keys recover in ~60s. Trust the
                 # provider's honest delay on the FIRST strike (no 20s floor), and
@@ -922,16 +965,22 @@ def _friendly_error_msg(kind, delay, status_code=None, exc=None):
       "insufficient_quota -> cooling 24h - next key..."
     """
     d = _fmt_duration(delay)
+    # v1.0.6: for quota errors, append the provider's own quota tag (PerDay /
+    # PerMinute / ...) so the classification is verifiable at a glance — if a
+    # line ever says "daily-quota" but the tag reads "[quota: PerMinute]", that
+    # is a misclassification you can spot without enabling verbose+errors.
+    _qm = _extract_quota_marker(exc) if kind in ("per_minute", "daily", "insufficient_quota") else ""
+    _qtag = f" [quota: {_qm}]" if _qm else ""
     if kind == "timeout":
         return f"⏳ timeout → key cooled {d} · rotating to next key..."
     if kind == "per_minute":
         sc = status_code or 429
-        return f"⏳ {sc} per-minute → key waits {d} · rotating to next key..."
+        return f"⏳ {sc} per-minute → key waits {d} · rotating to next key...{_qtag}"
     if kind == "daily":
         sc = status_code or 429
-        return f"⏳ {sc} daily-quota → key cooled {d} · rotating to next key..."
+        return f"⏳ {sc} daily-quota → key cooled {d} · rotating to next key...{_qtag}"
     if kind == "insufficient_quota":
-        return f"⏳ insufficient_quota → key cooled {d} · rotating to next key..."
+        return f"⏳ insufficient_quota → key cooled {d} · rotating to next key...{_qtag}"
     if kind == "server":
         sc = status_code or 503
         return f"⏳ {sc} server-busy → key cooled {d} · rotating to next key..."
@@ -1515,6 +1564,7 @@ async def _kame_unified_call(
     _long_cool_logged = False        # v1.0.1: dedupe long-outage sleep logging
     _last_sleep_log_at = 0.0         # v1.0.1: throttle near-recovery sleep logging
     _last_long_heartbeat_at = 0.0    # v1.0.2: throttle long-outage heartbeat
+    _empty_counts = {}               # v1.0.6: per-key empty-stream count this call
 
     attempt_no = 0
     while True:  # ETERNAL CAROUSEL - all call types use same robust rotation
@@ -1640,16 +1690,31 @@ async def _kame_unified_call(
                                     approximate_tokens(output["response_delta"]),
                                 )
 
-                    # If stream completed but produced no content, rest the key
-                    # briefly (v1.0.2: avoid a tight no-cooldown spin if every key
-                    # returns empty) and rotate to the next key.
+                    # Stream completed but produced NO content. An empty stream is
+                    # usually a transient provider hiccup (or a safety-filtered empty
+                    # completion) — the key itself is healthy — so v1.0.6 does NOT
+                    # cool the key on the FIRST empty from it: it just rotates on
+                    # (the connection succeeded, so success resets any backoff). Only
+                    # if the SAME key returns empty AGAIN this call is it rested 3s
+                    # and quarantined — that protects against a persistently-empty
+                    # key without penalizing a good key for one transient blank.
+                    # Bounded: at most 2 empties per key, then it's cooled; the
+                    # asyncio.sleep(0) yields so a whole pool of empties can't spin.
                     if not result.response and not result.reasoning:
-                        _mark_key_health(identity, key, False, 3, "other")
-                        if _lvl_verbose():
+                        _empty_counts[key] = _empty_counts.get(key, 0) + 1
+                        if _empty_counts[key] >= 2:
+                            _mark_key_health(identity, key, False, 3, "other")
+                            if _lvl_verbose():
+                                PrintStyle.warning(
+                                    f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+                                    f"⚠️ empty stream ×{_empty_counts[key]} → rest 3s · next key..."
+                                )
+                        elif _lvl_verbose():
                             PrintStyle.warning(
                                 f"[KAME] {call_type}|{model_short} {_key_display(key)} "
-                                f"⚠️ empty stream → rest 3s · next key..."
+                                f"⚠️ empty stream → retry (key not penalized)..."
                             )
+                        await asyncio.sleep(0)
                         continue
 
                 except Exception as stream_err:
@@ -1784,7 +1849,15 @@ async def _kame_unified_call(
                 _log_failure(call_type, model_short, key, e,
                              kind, applied, sc, identity, all_keys)
 
-            await asyncio.sleep(0.05)
+            # v1.0.6: rotate to the next key IMMEDIATELY. Previously this slept a
+            # fixed 50ms after every failure — during a 15-key 503 storm that added
+            # ~750ms of dead wait before the pool went fully cold and the ETA-sleep
+            # took over. asyncio.sleep(0) yields to the event loop (so we never spin
+            # the CPU or starve other tasks) without any wall-clock delay: the failed
+            # key is already marked sick, so the next iteration picks a DIFFERENT key,
+            # and once all keys are sick _get_best_key returns EXHAUSTED_RETRY and the
+            # ETA-driven sleep handles the wait. Net effect: near-instant failover.
+            await asyncio.sleep(0)
             continue
 
 
@@ -1968,7 +2041,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.5] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.6] Patch Failed: {e}")
         return False
 
 
@@ -1998,63 +2071,9 @@ def remove_kame_patch():
         return False
 
 
-def get_pool_status() -> dict:
-    """Return a snapshot of all key-pool health for the status panel (v1.0.5).
-
-    Returns a dict keyed by identity ('provider:model'), each value being a list
-    of per-key dicts with: fingerprint, sick_until, kind, seconds_remaining.
-    Pure read — never changes any state. Called from the webui API endpoint.
-    """
-    now = time.time()
-    result = {}
-    with _KAME_LOCK:
-        for identity, state in _KAME_KEY_HEALTH.items():
-            keys_out = []
-            for key, kd in state.get("keys", {}).items():
-                su = kd.get("sick_until", 0)
-                remaining = max(0.0, su - now)
-                keys_out.append({
-                    "fingerprint": _key_display(key),
-                    "healthy": remaining == 0,
-                    "seconds_remaining": round(remaining),
-                    "eta": time.strftime("%H:%M:%S", time.localtime(su)) if remaining > 0 else None,
-                    "consecutive_rl": kd.get("consecutive_rl", 0),
-                    "recent_requests": len([t for t in kd.get("request_log", []) if now - t <= 60]),
-                })
-            result[identity] = sorted(keys_out, key=lambda k: k["seconds_remaining"])
-    return result
-
-
-def reset_pool_health(identity: str | None = None) -> int:
-    """Clear in-memory cooldowns for one identity (or all) — v1.0.5.
-
-    Equivalent to a restart for the key-health state: every key becomes
-    immediately available again. Never changes disk state or persistent config.
-    Returns the number of keys cleared.
-    """
-    global _KAME_KEY_HEALTH
-    cleared = 0
-    with _KAME_LOCK:
-        targets = [identity] if identity and identity in _KAME_KEY_HEALTH else list(_KAME_KEY_HEALTH.keys())
-        for ident in targets:
-            for kd in _KAME_KEY_HEALTH[ident].get("keys", {}).values():
-                if kd.get("sick_until", 0) > time.time():
-                    kd["sick_until"] = 0
-                    kd["consecutive_rl"] = 0
-                    kd["consecutive_server"] = 0
-                    cleared += 1
-    if _lvl_normal():
-        scope = identity or "all identities"
-        PrintStyle(font_color="#96E").print(
-            f"[KAME] 🔄 Pool reset ({scope}) — {cleared} key{'s' if cleared != 1 else ''} thawed. "
-            f"Memory only; restart still resets everything."
-        )
-    return cleared
-
-
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.5 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.6 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",
