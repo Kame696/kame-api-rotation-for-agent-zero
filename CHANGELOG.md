@@ -23,10 +23,11 @@ graph LR
 
 ## v1.0.6 — current
 
-**Faster failover + verifiable quota logging + gentler empty-stream / daily handling.**
+**Faster failover + verifiable quota logging + gentler empty-stream handling.**
 
-Four focused improvements on top of v1.0.5. The selection/rotation/cooldown carousel and all
+Three focused improvements on top of v1.0.5. The selection/rotation/cooldown carousel and all
 13 shields are unchanged in spirit — these tune timing and observability. No new dependencies.
+Daily-quota cooldowns remain exactly the configured interval (no jitter).
 
 **1. Near-instant key failover.** The failure path previously slept a fixed `50ms` after every
 rotation; during a 15-key 503 storm that added ~750ms of dead wait before the pool went cold and
@@ -47,12 +48,10 @@ rotated on the FIRST empty. v1.0.6 gives the key one un-penalized pass on the fi
 rests it 3s if the SAME key returns empty AGAIN in the same call (bounded to 2, with an event-loop
 yield so a whole pool of empties can't spin).
 
-**4. Daily re-probes are spread, not bunched.** When many keys hit the daily quota in the same
-short burst, their flat 1h cooldowns all expired at nearly the same instant an hour later, so KAME
-re-probed them in one tight wave (log6: ~185 probes in the 04:00 hour vs ~25 in quiet hours). Each
-daily cooldown now gets up to 120s of random spread so expiries — and thus re-probes — fan out over
-a window. This is NOT escalation and does NOT change the ~hourly cadence; it only smooths the burst.
-Cooldowns still never shorten (the v1.0.5 `max()` guarantee holds).
+Daily-quota handling is unchanged from v1.0.5: the cooldown is exactly your configured
+`daily_quota_cooldown_seconds` (default 1h), applied per key, and it still never shortens (the
+v1.0.5 `max()` guarantee holds). KAME re-probes each daily-dead key once per interval — no jitter,
+no escalation, no added recovery delay.
 
 Also: the buggy key-status panel that briefly shipped in a 1.0.5 build (color-coded per-key status +
 reset endpoints) is fully removed — it displayed incorrect data. No orphaned API routes or dead code

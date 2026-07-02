@@ -151,13 +151,10 @@ K._mark_key_health(IDENT, "KEYA", True)  # success resets the counter
 aR = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute")
 check("per-minute counter resets on success (back to honest 8s)", aR == 8)
 
-# Daily strike is the 1h daily cooldown PLUS v1.0.6's re-probe spread (up to
-# _KAME_DAILY_REPROBE_SPREAD_S of random jitter so keys cooled in the same burst
-# don't all expire — and get re-probed — at the same instant an hour later).
+# Daily escalation still allowed up to the 1h ceiling (delay passed already floored).
 K._get_identity_state(IDENT, ["KEYB"])
 aD = K._mark_key_health(IDENT, "KEYB", False, K._KAME_DAILY_COOLDOWN_S, "daily")
-check("daily strike stays within [1h, 1h + spread]",
-      K._KAME_DAILY_COOLDOWN_S <= aD <= K._KAME_DAILY_COOLDOWN_S + K._KAME_DAILY_REPROBE_SPREAD_S)
+check("daily strike stays at the 1h daily cooldown", aD == K._KAME_DAILY_COOLDOWN_S)
 
 # Server escalation: first ~5s, capped at 90s, reset on success.
 K._get_identity_state(IDENT, ["KEYC"])

@@ -142,7 +142,7 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, contextvars, hashlib, threading, time, logging, re, random
+import asyncio, contextvars, hashlib, threading, time, logging, re
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 import openai
 import litellm
@@ -244,16 +244,6 @@ _KAME_SERVER_BACKOFF_CAP_S = 90.0
 # escalate a key that keeps failing, but a genuinely per-minute key must NOT climb
 # toward the 1h daily ceiling. Cap per-minute escalation here instead.
 _KAME_RL_BACKOFF_CAP_S = 300.0  # 5 min
-
-# --- v1.0.6: daily re-probe SPREAD ---
-# When many keys hit the daily quota inside the same short burst, their flat 1h
-# cooldowns all expire at nearly the same instant an hour later, so KAME re-probes
-# them all in one tight wave (log6 showed ~185 probes in the 04:00 hour vs ~25
-# in quiet hours). This is NOT escalation and does NOT change the ~hourly cadence
-# the user wants — it just adds up to this many seconds of random spread to each
-# daily cooldown so the expiries (and thus the re-probes) fan out over a window
-# instead of bunching. Purely smooths the burst.
-_KAME_DAILY_REPROBE_SPREAD_S = 120.0
 
 # --- v1.0.2: heartbeat cadence while the WHOLE pool cools for a long outage
 # (longer than the 60s re-check). Instead of one line then full silence, KAME
@@ -740,11 +730,6 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
                 kd["consecutive_rl"] = cnt
                 escalated = min(20.0 * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S)
                 applied = max(applied, escalated)
-                # v1.0.6: add up to _KAME_DAILY_REPROBE_SPREAD_S of random spread so
-                # keys cooled in the same burst don't all expire (and get re-probed)
-                # at the same instant an hour later. Not escalation, doesn't change
-                # the ~hourly cadence — just fans the re-probes out over a window.
-                applied += random.uniform(0, _KAME_DAILY_REPROBE_SPREAD_S)
             elif kind == "per_minute":
                 # v1.0.2: per-minute (RPM) keys recover in ~60s. Trust the
                 # provider's honest delay on the FIRST strike (no 20s floor), and

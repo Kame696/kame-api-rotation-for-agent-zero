@@ -7,7 +7,8 @@ Covers the four 1.0.6 changes, with stubs (no real A0/litellm):
      tag, and _friendly_error_msg appends it for quota kinds.
   #3 empty-stream — the SAME key gets one un-penalized retry; only a 2nd empty
      from that key cools it (verified via the counter logic in a mini-loop).
-  #4 daily spread — a daily cooldown is 1h plus up to the spread jitter.
+  #4 daily cooldown — is EXACTLY the configured interval (the spread idea was
+     dropped: it added recovery delay for no benefit). No jitter on daily.
 """
 import sys, types, os, asyncio, re
 
@@ -98,17 +99,21 @@ _pline = K._friendly_error_msg("per_minute", _pd, 429, _err(429, _GEMINI_PER_MIN
 check("friendly per-minute line appends '[quota: PerMinute]'", "[quota: PerMinute]" in _pline)
 
 
-# ==========================================================================
-# #4 — daily cooldown carries the re-probe spread (1h .. 1h + spread)
-# ==========================================================================
 IDENT = "gemini:gemini-3.5-flash"
+
+
+# ==========================================================================
+# #4 — daily cooldown is EXACTLY the configured interval (no jitter/spread).
+# (An early 1.0.6 build added up to 120s spread; removed — it added recovery
+#  delay for no benefit the user wanted. Daily cooldown must be exact.)
+# ==========================================================================
 K._KAME_KEY_HEALTH = {}
 K._get_identity_state(IDENT, ["K1"])
-_lo, _hi = K._KAME_DAILY_COOLDOWN_S, K._KAME_DAILY_COOLDOWN_S + K._KAME_DAILY_REPROBE_SPREAD_S
-_spreads = [K._mark_key_health(IDENT, "K1", False, K._KAME_DAILY_COOLDOWN_S, "daily") for _ in range(20)]
-check("every daily cooldown within [1h, 1h+spread]", all(_lo <= s <= _hi for s in _spreads))
-check("daily spread actually varies (not a constant)", len(set(round(s) for s in _spreads)) > 1)
-check("spread never shortens below the configured 1h", min(_spreads) >= _lo)
+_daily = [K._mark_key_health(IDENT, "K1", False, K._KAME_DAILY_COOLDOWN_S, "daily") for _ in range(10)]
+check("daily cooldown is exactly the configured interval (no spread)",
+      all(s == K._KAME_DAILY_COOLDOWN_S for s in _daily))
+check("no _KAME_DAILY_REPROBE_SPREAD_S constant remains",
+      not hasattr(K, "_KAME_DAILY_REPROBE_SPREAD_S"))
 
 
 # ==========================================================================

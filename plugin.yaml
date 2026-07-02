@@ -1,6 +1,6 @@
 name: api_rotation_by_kame
 title: Key-Aware Management Engine (API Rotation)
-description: KAME rotates API keys to avoid 429 errors, cooldown exhausted keys, respect retry delays, and route around provider outages during long agent runs. v1.0.6 makes key failover near-instant (no fixed inter-rotation delay), shows the provider's quota tag inline so daily/per-minute classification is verifiable, stops penalizing a key for one transient empty stream, and spreads daily re-probes so they don't bunch. Builds on v1.0.5 (daily-quota logic + chat pause).
+description: KAME rotates API keys to avoid 429 errors, cooldown exhausted keys, respect retry delays, and route around provider outages during long agent runs. v1.0.6 makes key failover near-instant (no fixed inter-rotation delay), shows the provider's quota tag inline so daily/per-minute classification is verifiable, and stops penalizing a key for one transient empty stream. Builds on v1.0.5 (daily-quota logic + chat pause).
 version: 1.0.6
 settings_sections:
   - agent
