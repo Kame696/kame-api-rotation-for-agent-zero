@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.6.
+"""KAME API Rotation & Stability Engine v1.0.7.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -2052,7 +2052,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.6] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.7] Patch Failed: {e}")
         return False
 
 
@@ -2084,7 +2084,7 @@ def remove_kame_patch():
 
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.6 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.7 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

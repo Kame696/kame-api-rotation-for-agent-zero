@@ -21,7 +21,31 @@ graph LR
 
 ---
 
-## v1.0.6 — current
+## v1.0.7 — current
+
+**Response Shield — heals empty response-tool args (upstream `KeyError: 'message'` crash).**
+
+One focused fix in the KAME Shield extension (`_10_kame_heal_tool_args.py`). The rotation /
+selection / cooldown engine is untouched. No new dependencies.
+
+Upstream Agent Zero's `tools/response.py` reads
+`self.args["text"] if "text" in self.args else self.args["message"]` — when a model (seen with
+Codex-style models) emits the `response` tool with empty, null, or wrongly-keyed arguments, the
+framework crashes with `KeyError: 'message'` and the turn dies. Verified still unfixed on
+`agent0ai/agent-zero` `main` as of 2026-07-19.
+
+KAME Shield now guarantees the response tool always receives a usable argument:
+
+1. **Empty/null args** → `{"text": ""}` injected (turn ends gracefully instead of crashing).
+2. **Wrong-key salvage** — a string value under `content`, `answer`, `response`, or
+   `answer_text` is moved into `text`, so the model's actual reply is preserved, not dropped.
+3. **Null values** — `{"text": null}` / `{"message": null}` coerced to `""`.
+4. **Non-dict `tool_args`** (e.g. the string `"[]"`) forced to a dict before healing.
+
+Normal calls (any `text` or `message` present) and all other tools are untouched.
+Tests: `tests/test_v1_0_7.py` (19) + all prior suites green.
+
+## v1.0.6
 
 **Faster failover + verifiable quota logging + gentler empty-stream handling + visible invalid keys.**
 

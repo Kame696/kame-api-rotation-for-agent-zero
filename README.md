@@ -4,7 +4,7 @@
 
 ### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.0.6-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
+[![Version](https://img.shields.io/badge/version-1.0.7-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
@@ -119,7 +119,7 @@ Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.0.6 — ACTIVE
+  🐢⚡ KAME v1.0.7 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -392,6 +392,7 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
+| **v1.0.7** | Response Shield — heals empty response-tool args | Upstream Agent Zero's `tools/response.py` crashes with `KeyError: 'message'` when a model (seen with Codex-style models) emits the `response` tool with empty, null, or wrongly-keyed arguments (still unfixed upstream as of 2026-07-19). The KAME Shield extension now guarantees a usable argument: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
 | **v1.0.6** | Faster failover + verifiable quota logs + gentler empty-stream + visible invalid keys | **(1)** Near-instant key failover — dropped the fixed 50ms inter-rotation delay for a zero-delay event-loop yield (saved ~750ms per 15-key storm). **(2)** Every quota failure line now shows the provider's own quota tag inline (`[quota: PerDay]` / `[quota: PerMinute]`) so daily/per-minute classification is verifiable at `normal` level. **(3)** One transient empty stream no longer cools a healthy key — it gets an un-penalized retry; only a 2nd empty from the same key rests it. **(4)** An invalid/expired key is now always shown, even at `silent` log level (previously silenced — contradicted the documented promise). **(5)** That message now shows enough of the key (first 10 + last 4 chars) to actually find it in your provider console, instead of a useless anonymized hash. Daily-quota cooldown stays exactly the configured interval (no jitter); cooldowns still never shorten. |
 | **v1.0.5** | Daily-quota logic fix + chat pause | Two confirmed bugs fixed from overnight log analysis: **(1)** daily-quota cooldown now always uses the configured `daily_quota_cooldown_seconds` — Google's retryDelay is ignored for daily quotas since it is often wrong; **(2)** existing cooldowns can never be shortened — a 503 (10s) can no longer wipe a 1h daily-quota protection (fixed by `max()` on `sick_until`). Plus: the carousel now honors chat **pause** (waits until unpaused, resumes cleanly). Rotation / selection / ETA-sleep unchanged from 1.0.4. (An early 1.0.5 build's key-status panel was removed in 1.0.6 — it showed incorrect data.) |
 | **v1.0.4** | Agent Zero V2 / V2.1 compatibility | Three V2/V2.1 changes broke 1.0.3, all fixed here. **(1)** V2 moved streaming to a transport layer and removed `models._parse_chunk`; 1.0.4 detects the A0 version once and picks the right parser automatically. **(2)** V2.1 split the entry point — the agent monologue now calls `unified_turn`, not `unified_call`, so 1.0.3's rotation was bypassed entirely; 1.0.4 also wraps `unified_turn`, calling `litellm.acompletion` directly (bypassing A0's internal Responses transport so 503s return in ~1s instead of ~40s). **(3)** V2.1's free-tier prompt-caching 429 is sidestepped by disabling explicit caching. The selection / health / cooldown carousel is unchanged from 1.0.3. |
@@ -515,7 +516,7 @@ If KAME made your agent less frustrating, drop a star ⭐ — it costs you nothi
 
 <div align="center">
 
-🐢⚡ **KAME v1.0.6** — *because round-robin was never enough*
+🐢⚡ **KAME v1.0.7** — *because round-robin was never enough*
 
 **Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
 
