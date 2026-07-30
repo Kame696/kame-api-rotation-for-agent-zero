@@ -16,6 +16,10 @@ These tests verify, with stubs (no real A0/litellm):
      the whole stream is consumed.
   D. an early stop with BLANK text is not mistaken for an empty stream: the key
      is not penalized and KAME does not rotate.
+
+Also covers the second v1.0.8 fix — 403 PERMISSION_DENIED quarantine (group F).
+A denied key/project is permanent, not a 20s blip; before the fix it fell into
+the generic 20s `other` bucket and was re-probed three times a minute forever.
 """
 import sys, types, os, asyncio
 
@@ -210,6 +214,75 @@ check("streaming without a response_callback consumes the whole stream",
       cnt_e["pulled"] == len(CHUNKS))
 check("streaming without a response_callback returns the full text",
       res_e[0] == "".join(CHUNKS))
+
+
+# --- F: 403 PERMISSION_DENIED is quarantined, not cooled for 20s -------------
+class _Err(Exception):
+    def __init__(self, msg, status_code=None):
+        super().__init__(msg)
+        self.status_code = status_code
+
+
+_GEMINI_403 = _Err(
+    'litellm.BadRequestError: Vertex_ai_betaException BadRequestError - '
+    '{"error": {"code": 403, "message": "Your project has been denied access. '
+    'Please contact support.", "status": "PERMISSION_DENIED"}}',
+    status_code=403,
+)
+
+_delay_403, _kind_403, _sc_403 = K._classify_error(_GEMINI_403)
+check("403 PERMISSION_DENIED classifies as 'denied'", _kind_403 == "denied")
+check("403 PERMISSION_DENIED reports its real status code", _sc_403 == 403)
+check("403 PERMISSION_DENIED is quarantined for the daily cooldown, not 20s",
+      _delay_403 == K._KAME_DAILY_COOLDOWN_S and _delay_403 > 20)
+check("403 PERMISSION_DENIED is NOT terminal (KAME rotates, never aborts the run)",
+      K._is_terminal_error(_GEMINI_403) is False)
+check("403 PERMISSION_DENIED is not misread as an invalid key",
+      K._is_auth_error(_GEMINI_403) is False)
+
+# the text marker alone must work too: litellm sometimes drops status_code
+_text_only = _Err('GeminiException - {"status": "PERMISSION_DENIED"}')
+check("PERMISSION_DENIED text alone is enough (status_code may be lost)",
+      K._classify_error(_text_only)[1] == "denied")
+
+# and a quota 429 must NEVER be swallowed by the new branch
+_429 = _Err("RateLimitError: 429 RESOURCE_EXHAUSTED quota exceeded", status_code=429)
+check("a 429 is still classified as a rate limit, not 'denied'",
+      K._classify_error(_429)[1] in ("per_minute", "daily", "insufficient_quota"))
+_503 = _Err("ServiceUnavailableError: 503 UNAVAILABLE high demand", status_code=503)
+check("a 503 is still classified as 'server', not 'denied'",
+      K._classify_error(_503)[1] == "server")
+
+# the friendly line must name the real cause, not a generic exception name
+_line = K._friendly_error_msg("denied", _delay_403, 403, _GEMINI_403)
+check("the denied log line is explicit and actionable",
+      "denied" in _line and "quarantined" in _line and "403" in _line)
+
+# a denied key must actually stop being re-selected while quarantined
+K._KAME_KEY_HEALTH = {}
+_ident = "gemini:gemini-3.5-flash"
+K._get_identity_state(_ident, ["DEAD", "GOOD"])
+K._mark_key_health(_ident, "DEAD", False, _delay_403, "denied")
+_picks = {K._get_best_key(_ident, ["DEAD", "GOOD"])[0] for _ in range(5)}
+check("a quarantined denied key is never picked again while cooling",
+      _picks == {"GOOD"})
+
+
+# --- G: the cosmetic banner can never fail the patch -------------------------
+# On a non-UTF-8 console (native Windows, cp1252) the emoji banner raises
+# UnicodeEncodeError. Before v1.0.8 that escaped into apply_kame_patch's outer
+# handler, which printed "Patch Failed" and returned False even though every
+# patch had already been applied. Source check: the _print_shield_status() call
+# must sit inside its own try/except.
+import inspect  # noqa: E402
+import re  # noqa: E402
+
+_src = inspect.getsource(K.apply_kame_patch)
+_guarded = re.search(
+    r"try:\s*\n\s*_print_shield_status\(\)\s*\n\s*except Exception:", _src)
+check("the shield banner is printed inside its own try/except", bool(_guarded))
+check("_KAME_PATCHED is set BEFORE the banner is printed",
+      _src.index("_KAME_PATCHED = True") < _src.index("_print_shield_status()"))
 
 
 print("=" * 60)

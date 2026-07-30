@@ -23,11 +23,12 @@ graph LR
 
 ## v1.0.8 — current
 
-**Honors Agent Zero's early-stop contract + verified against Agent Zero v2.7.**
+**Honors Agent Zero's early-stop contract, quarantines permanently-denied keys,
+and is verified against Agent Zero v2.7.**
 
-One real behavioral fix, one documentation correction, and a new live-compatibility
-harness. The rotation / selection / cooldown carousel and all 13 shields are
-untouched. No new dependencies.
+Three real behavioral fixes, one documentation correction, and a new
+live-compatibility harness. The rotation / selection / cooldown carousel and all
+13 shields are otherwise untouched. No new dependencies.
 
 **1. The streamed response callback's return value is now honored (the fix).**
 Since Agent Zero V2, `Agent.monologue`'s stream callback *returns* the accumulated
@@ -41,7 +42,31 @@ the stream exactly like native A0 does. A blank early stop is not mistaken for a
 empty stream, so the key is never wrongly penalized. On Agent Zero v1.x the
 callback returns `None` and behavior is unchanged.
 
-**2. The v1.0.7 response-tool claim is corrected.** Agent Zero v2.6+ fixed the
+**2. A permanently-denied key (403) is now quarantined instead of re-probed every
+20 seconds.** A `403 PERMISSION_DENIED` — *"Your project has been denied access"*,
+the API never enabled for that project, or the model not authorized for that key's
+tier — is the provider refusing the key on purpose. It does not clear in 20s. Up to
+v1.0.7 it fell into the generic `other` bucket with a 20s cooldown, so the dead key
+kept returning to the front of the carousel three times a minute and burned a full
+round trip on nearly every user turn. Confirmed in a 15-key production pool: one
+denied key was selected first on eight consecutive calls, each costing ~0.5-1.5s of
+added latency plus a warning line. v1.0.8 classifies it as a new `denied` kind and
+quarantines the key for the daily cooldown (default 1h), so it is re-probed about
+once an hour — still self-healing the moment the project is fixed. The health map is
+per `provider:model`, so a model-specific 403 never takes the key out of the pool for
+other models. A `429` is still classified before this branch and is never mistaken for
+a denial; a `403` is still **not** terminal, so KAME rotates and never aborts the run.
+The log line names the real cause and, like an invalid key, is never storm-collapsed
+and is shown even at `silent`.
+
+**3. The cosmetic startup banner can no longer fail the patch.** On a non-UTF-8
+console (a native Windows run with a cp1252 code page) the emoji in the shield banner
+raises `UnicodeEncodeError`. That exception escaped into `apply_kame_patch`'s outer
+handler, which printed **"Patch Failed"** and returned `False` — even though every
+patch had already been applied a few lines earlier. The banner now prints inside its
+own `try/except`. Docker installs (UTF-8) were never affected.
+
+**4. The v1.0.7 response-tool claim is corrected.** Agent Zero v2.6+ fixed the
 crash upstream: `tools/response.py` now raises a `RepairableException` instead of
 `KeyError: 'message'`, so the framework asks the model to retry rather than dying.
 KAME's empty-args injection is therefore a crash guard for **older A0 only**
@@ -50,7 +75,7 @@ its keep on every version is the **wrong-key salvage**: a reply stranded under
 `content` / `answer` / `response` / `answer_text` is moved into `text`, turning a
 wasted repair round-trip into the answer the model actually wrote.
 
-**3. New `tests/test_a0_compat.py` — a live harness against a real A0 checkout.**
+**5. New `tests/test_a0_compat.py` — a live harness against a real A0 checkout.**
 The other suites stub Agent Zero so they run anywhere; this one imports the genuine
 `models`, `helpers.history`, `helpers.extension`, `agent` and `tools.response`,
 then applies and reverts KAME's patches against those real classes. Run it when a
@@ -79,7 +104,24 @@ the `fw.topic_summary` prompts. Two notes for the record:
   KAME's path. A0 drops the `tools` kwarg on the chat path anyway, so nothing breaks;
   A0's JSON-in-text tool protocol is what runs, exactly as before.
 
-Tests: `tests/test_v1_0_8.py` (10) + `tests/test_a0_compat.py` (24, against A0 v2.7)
+**Not a KAME issue, for the record** (both traced from a production Docker log while
+diagnosing this release, both upstream Agent Zero behavior by design):
+
+- *"Sending a new message does not stop the current run."* Since A0 V2 the WebUI
+  **queues** a message when the context is running (`webui/index.js` → `message_queue`)
+  and sends the batch only after the monologue ends
+  (`extensions/python/process_chain_end/_50_process_queue.py`). The **nudge** button is
+  the explicit interrupt. KAME already honors `InterventionException` between rotations
+  and during every cooling slice — it cannot interrupt what the UI never sent.
+- *"Agent stopped after 2 consecutive unusable model responses to prevent further API
+  charges."* That is A0's own cost circuit-breaker
+  (`_functions/agent/Agent/hist_add_warning/end/_90_stop_unusable_response_loop.py`),
+  tripped when the model returns a misformatted or repeated reply twice in a row. The
+  API call **succeeded** — there is no error for KAME to rotate on. Raise
+  `max_consecutive_unusable_responses` in settings, or use a model that keeps to A0's
+  JSON contract.
+
+Tests: `tests/test_v1_0_8.py` (22) + `tests/test_a0_compat.py` (24, against A0 v2.7)
 + all prior suites green.
 
 ## v1.0.7

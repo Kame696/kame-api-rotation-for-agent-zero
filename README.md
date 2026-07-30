@@ -284,6 +284,12 @@ No — that's the daily-quota shield working: KAME detected a daily or out-of-cr
 </details>
 
 <details>
+<summary><b>I'm seeing "403 access denied for this key/model → quarantined 1h". What now?</b></summary>
+
+That key is being refused on purpose by the provider — the project was suspended (*"Your project has been denied access"*), the API was never enabled for it, or that model isn't authorized for the key's tier. Nothing KAME can retry away, so since v1.0.8 the key is quarantined for the daily cooldown instead of being re-probed every 20 seconds. The rest of the pool is unaffected, and the quarantine is scoped to that `provider:model` — the same key keeps serving other models. Fix or replace the key in your provider console; KAME re-probes it about once an hour and picks it back up automatically the moment it answers.
+</details>
+
+<details>
 <summary><b>Compression takes a long time. Is KAME slowing it down?</b></summary>
 
 No. KAME's "Trust the Connection" philosophy means zero artificial timeouts. A 90,000-token compression that legitimately takes 90 seconds takes 90 seconds. Without KAME, A0's native flow can crash with "timed out" — KAME lets it finish.
@@ -293,6 +299,18 @@ No. KAME's "Trust the Connection" philosophy means zero artificial timeouts. A 9
 <summary><b>During an outage my log used to fill with hundreds of "503 server-busy" lines. Still?</b></summary>
 
 No — at `normal` level KAME **collapses** a storm: it prints the first failure, then a single aggregate line every ~20s, then a "storm over" recap when a key answers again. Set `kame_collapse_storm_logs: false` (or use `verbose`) to get one line per failure again.
+</details>
+
+<details>
+<summary><b>I sent a new message mid-run and the agent kept going. Is KAME blocking the interrupt?</b></summary>
+
+No — that's Agent Zero's own design. Since A0 V2 the WebUI **queues** a message when the context is running (`webui/index.js` → `/message_queue_add`) and only sends the batch after the monologue ends (`extensions/python/process_chain_end/_50_process_queue.py`). You'll see it in the log as `User message (queued batch):`. The **nudge** button is the explicit interrupt. KAME honors `InterventionException` between every rotation and during every 1-second slice of a cooling sleep, so a nudge lands even on a fully cold pool — but it cannot deliver a message the UI never sent.
+</details>
+
+<details>
+<summary><b>"Agent stopped after 2 consecutive unusable model responses to prevent further API charges" — shouldn't KAME rotate past that?</b></summary>
+
+There's nothing to rotate. That's A0's cost circuit-breaker (`_90_stop_unusable_response_loop.py`), tripped when the model returns a misformatted or repeated reply twice in a row — the **API call succeeded**, the model just didn't follow A0's JSON contract (markdown fences, plain prose, etc.). KAME rotates on transport errors, not on bad content, so a different key would produce the same reply. Raise `max_consecutive_unusable_responses` in settings if you want more attempts, or switch to a model that keeps to the format.
 </details>
 
 <details>
@@ -392,7 +410,7 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
-| **v1.0.8** | Honors A0's early-stop contract + verified on Agent Zero v2.7 | Since Agent Zero V2 the streamed response callback *returns* the accumulated text as soon as a complete tool request has been streamed, and native A0 breaks the stream there. KAME owned the stream but discarded that return value, so the model kept generating past every finished tool call — wasted output tokens and latency on each turn, plus trailing junk after the tool JSON. v1.0.8 breaks the stream exactly like native A0, and a blank early stop is no longer mistaken for an empty stream (the key is never wrongly penalized). Also: the v1.0.7 `KeyError` claim is corrected (A0 v2.6+ fixed it upstream — the wrong-key salvage is the part that still pays off on every version), and a new `tests/test_a0_compat.py` runs KAME's patches against a real Agent Zero checkout. Rotation engine unchanged. |
+| **v1.0.8** | Honors A0's early-stop contract, quarantines denied keys + verified on Agent Zero v2.7 | **(1)** Since Agent Zero V2 the streamed response callback *returns* the accumulated text as soon as a complete tool request has been streamed, and native A0 breaks the stream there. KAME owned the stream but discarded that return value, so the model kept generating past every finished tool call — wasted output tokens and latency on each turn, plus trailing junk after the tool JSON. v1.0.8 breaks the stream exactly like native A0, and a blank early stop is no longer mistaken for an empty stream. **(2)** A `403 PERMISSION_DENIED` (suspended project / API not enabled / model not authorized for that key) is permanent, not a 20s blip — it used to land in the generic 20s bucket, so a dead key came back to the front of the carousel three times a minute and burned a round trip on nearly every turn. It is now quarantined for the daily cooldown, per `provider:model`, and always logged. **(3)** The cosmetic emoji banner can no longer make `apply_kame_patch()` report "Patch Failed" on a non-UTF-8 Windows console. Also: the v1.0.7 `KeyError` claim is corrected (A0 v2.6+ fixed it upstream — the wrong-key salvage is the part that still pays off), and a new `tests/test_a0_compat.py` runs KAME's patches against a real Agent Zero checkout. Rotation engine otherwise unchanged. |
 | **v1.0.7** | Response Shield — heals empty/wrong-key response-tool args | A model (seen with Codex-style models) can emit the `response` tool with empty, null, or wrongly-keyed arguments. On Agent Zero up to v2.5 that crashed the turn with `KeyError: 'message'`; A0 v2.6+ turned it into a repair request instead. The KAME Shield extension guarantees a usable argument either way: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved instead of costing a repair round-trip; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
 | **v1.0.6** | Faster failover + verifiable quota logs + gentler empty-stream + visible invalid keys | **(1)** Near-instant key failover — dropped the fixed 50ms inter-rotation delay for a zero-delay event-loop yield (saved ~750ms per 15-key storm). **(2)** Every quota failure line now shows the provider's own quota tag inline (`[quota: PerDay]` / `[quota: PerMinute]`) so daily/per-minute classification is verifiable at `normal` level. **(3)** One transient empty stream no longer cools a healthy key — it gets an un-penalized retry; only a 2nd empty from the same key rests it. **(4)** An invalid/expired key is now always shown, even at `silent` log level (previously silenced — contradicted the documented promise). **(5)** That message now shows enough of the key (first 10 + last 4 chars) to actually find it in your provider console, instead of a useless anonymized hash. Daily-quota cooldown stays exactly the configured interval (no jitter); cooldowns still never shorten. |
 | **v1.0.5** | Daily-quota logic fix + chat pause | Two confirmed bugs fixed from overnight log analysis: **(1)** daily-quota cooldown now always uses the configured `daily_quota_cooldown_seconds` — Google's retryDelay is ignored for daily quotas since it is often wrong; **(2)** existing cooldowns can never be shortened — a 503 (10s) can no longer wipe a 1h daily-quota protection (fixed by `max()` on `sick_until`). Plus: the carousel now honors chat **pause** (waits until unpaused, resumes cleanly). Rotation / selection / ETA-sleep unchanged from 1.0.4. (An early 1.0.5 build's key-status panel was removed in 1.0.6 — it showed incorrect data.) |

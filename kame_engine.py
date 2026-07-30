@@ -898,11 +898,50 @@ def _extract_retry_delay(exc):
     return 20  # Safe default
 
 
+# --- v1.0.8: permanently DENIED key/project (403) ---
+# Distinct from an invalid key (400/401 -> `auth`) and from a quota hit (429).
+# A 403 PERMISSION_DENIED means the provider is refusing this key for this
+# model on purpose: the project was suspended ("Your project has been denied
+# access. Please contact support."), the API was never enabled for it, or the
+# model is not authorized for that key's tier. None of that clears in 20s.
+# Before v1.0.8 this landed in the generic `other` bucket (20s cooldown), so a
+# permanently-dead key came back to the front of the carousel three times a
+# minute and burned a full round trip on EVERY user turn — confirmed in a
+# 15-key production pool where one denied key was picked first on 8 consecutive
+# calls. Now it is quarantined for the daily cooldown like an invalid key, so
+# it is re-probed about once an hour (still self-healing if the user fixes the
+# project) instead of every 20 seconds.
+_PERMANENT_DENIAL_INDICATORS = (
+    "permission_denied",
+    "denied access",
+    "consumer_suspended",
+    "service_disabled",
+    "api_key_service_blocked",
+    "has not been used in project",
+    "is disabled for this project",
+)
+
+
+def _is_permanent_denial(exc: Exception) -> bool:
+    """True for a 403-class refusal that another 20s will not fix (v1.0.8).
+
+    Matches on the status code (403) OR on the provider's own textual marker —
+    litellm sometimes rewraps a Gemini 403 as a `BadRequestError` whose
+    `status_code` is not carried over, so the text check is not redundant.
+    Never matches a 429: quota is classified before this in `_classify_error`.
+    """
+    if getattr(exc, "status_code", None) == 403:
+        return True
+    err_msg = str(exc).lower()
+    return any(ind in err_msg for ind in _PERMANENT_DENIAL_INDICATORS)
+
+
 def _classify_error(exc):
     """Classify an error into (delay_seconds, kind, status_code).
 
     kind in: 'timeout', 'per_minute', 'daily', 'insufficient_quota',
-             'server', 'other'.  (auth is handled separately in the loop.)
+             'server', 'denied', 'other'.  (auth is handled separately in the
+             loop.)
 
     Rate-Limit Intelligence:
     - per-minute 429: trust the provider's parsed retryDelay (exact guidance).
@@ -953,6 +992,12 @@ def _classify_error(exc):
             return delay, kind, (status_code or 429)
         return parsed, "per_minute", (status_code or 429)
 
+    # v1.0.8: a 403-class refusal (suspended project / API not enabled / model
+    # not authorized for this key). Checked AFTER the quota branch so a 429 is
+    # never mistaken for it. Quarantined for the daily cooldown, not 20s.
+    if _is_permanent_denial(exc):
+        return _KAME_DAILY_COOLDOWN_S, "denied", (status_code or 403)
+
     # Everything else
     return 20, "other", status_code
 
@@ -992,6 +1037,10 @@ def _friendly_error_msg(kind, delay, status_code=None, exc=None):
         return f"⏳ {sc} server-busy → key cooled {d} · rotating to next key..."
     if kind == "auth":
         return f"\U0001f512 invalid key → quarantined {d}"
+    if kind == "denied":
+        sc = status_code or 403
+        return (f"\U0001f6ab {sc} access denied for this key/model → quarantined {d} "
+                f"(project suspended, API not enabled, or model not authorized)")
     name = type(exc).__name__ if exc is not None else "error"
     return f"⚠️ {name} → cooling {d} · next key..."
 
@@ -1117,18 +1166,23 @@ def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, 
       * normal + collapse ON -> first failure of a storm verbatim, repeats
         collapsed into a throttled aggregate. `auth` is never collapsed (an
         invalid key is rare and worth seeing every time).
+    v1.0.8: `denied` (403) is treated exactly like `auth` here — it is a
+    PERMANENT, operator-actionable problem (suspended project / API not
+    enabled), so it is never collapsed and is shown even at 'silent', matching
+    the documented "silent still shows hard errors" promise.
     The rotation/cooldown decision already happened in the caller; this only
     decides what reaches the log.
     """
     _maybe_log_full_error(call_type, model_short, key, exc, kind, applied, sc)
-    if not _lvl_normal():
+    if not _lvl_normal() and kind != "denied":
         return
     line = (
-        f"[KAME] {call_type}|{model_short} {_key_display(key)} "
+        f"[KAME] {call_type}|{model_short} "
+        f"{(_key_display_auth if kind == 'denied' else _key_display)(key)} "
         f"{_friendly_error_msg(kind, applied, sc, exc)}"
     )
     if (_lvl_verbose() or not _KAME_COLLAPSE_STORM_LOGS
-            or _KAME_LOG_FULL_ERRORS or kind == "auth"):
+            or _KAME_LOG_FULL_ERRORS or kind in ("auth", "denied")):
         PrintStyle.warning(line)
         return
     decision = _storm_tick(identity, kind)
@@ -2064,8 +2118,17 @@ def apply_kame_patch():
         _patch_rate_limiters()
 
         _KAME_PATCHED = True
+        # v1.0.8: the banner is COSMETIC — it must never decide whether KAME is
+        # considered installed. On a non-UTF-8 console (a native Windows run
+        # with a cp1252 code page) the emoji in the shield banner raises
+        # UnicodeEncodeError; before this guard that exception escaped into the
+        # outer handler, which printed "Patch Failed" and returned False even
+        # though every patch above had already been applied successfully.
         if _KAME_LOG_LEVEL != "silent":
-            _print_shield_status()
+            try:
+                _print_shield_status()
+            except Exception:
+                pass
         return True
     except Exception as e:
         PrintStyle.error(f"[KAME v1.0.8] Patch Failed: {e}")
