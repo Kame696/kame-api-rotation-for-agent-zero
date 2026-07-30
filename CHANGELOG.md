@@ -21,7 +21,68 @@ graph LR
 
 ---
 
-## v1.0.7 — current
+## v1.0.8 — current
+
+**Honors Agent Zero's early-stop contract + verified against Agent Zero v2.7.**
+
+One real behavioral fix, one documentation correction, and a new live-compatibility
+harness. The rotation / selection / cooldown carousel and all 13 shields are
+untouched. No new dependencies.
+
+**1. The streamed response callback's return value is now honored (the fix).**
+Since Agent Zero V2, `Agent.monologue`'s stream callback *returns* the accumulated
+text the moment a complete, valid tool request has been streamed, and A0's native
+`unified_call` / `unified_turn` break the stream and use that text (`stop_response`).
+KAME owns the stream, and up to v1.0.7 it awaited the callback and **threw the
+return value away** — so on every single turn the model kept generating past the
+finished tool call. Cost: wasted output tokens and latency on each turn, plus
+trailing junk accumulating after the tool JSON in `result.response`. v1.0.8 breaks
+the stream exactly like native A0 does. A blank early stop is not mistaken for an
+empty stream, so the key is never wrongly penalized. On Agent Zero v1.x the
+callback returns `None` and behavior is unchanged.
+
+**2. The v1.0.7 response-tool claim is corrected.** Agent Zero v2.6+ fixed the
+crash upstream: `tools/response.py` now raises a `RepairableException` instead of
+`KeyError: 'message'`, so the framework asks the model to retry rather than dying.
+KAME's empty-args injection is therefore a crash guard for **older A0 only**
+(harmless on new A0 — blank text still routes to the repair path). What still earns
+its keep on every version is the **wrong-key salvage**: a reply stranded under
+`content` / `answer` / `response` / `answer_text` is moved into `text`, turning a
+wasted repair round-trip into the answer the model actually wrote.
+
+**3. New `tests/test_a0_compat.py` — a live harness against a real A0 checkout.**
+The other suites stub Agent Zero so they run anywhere; this one imports the genuine
+`models`, `helpers.history`, `helpers.extension`, `agent` and `tools.response`,
+then applies and reverts KAME's patches against those real classes. Run it when a
+new Agent Zero ships:
+
+```
+python tests/test_a0_compat.py /path/to/agent-zero
+```
+
+It skips cleanly (exit 0) when no path is given.
+
+**Agent Zero v2.7 compatibility: verified, all green.** Every patch point audited
+against the v2.7 tag — `unified_call` / `unified_turn`, `ChatCompletionsTransport.parse`,
+`Topic.summarize_messages`, `Bulk.summarize`, `RateLimiter`, the two `@extensible`
+extension folders KAME ships into, `LLMResult.from_chat`, plugin manifest schema and
+the `fw.topic_summary` prompts. Two notes for the record:
+
+- v2.7 added `@extensible` to `unified_call` and `unified_turn`. KAME's monkey-patch
+  replaces those decorated wrappers, so the new `_functions/models/LiteLLMChatWrapper/
+  unified_{call,turn}/{start,end}` extension points do not fire while KAME is active.
+  Nothing in A0 v2.7 ships an extension there, so there is no live breakage — but a
+  future third-party extension at those points would be silently skipped. Migrating
+  KAME off the monkey-patch onto those extension points is tracked for a later release.
+- KAME forces chat-completions and strips `a0_*` kwargs (including
+  `a0_responses_function_tools`), so provider-native function calling is not used on
+  KAME's path. A0 drops the `tools` kwarg on the chat path anyway, so nothing breaks;
+  A0's JSON-in-text tool protocol is what runs, exactly as before.
+
+Tests: `tests/test_v1_0_8.py` (10) + `tests/test_a0_compat.py` (24, against A0 v2.7)
++ all prior suites green.
+
+## v1.0.7
 
 **Response Shield — heals empty response-tool args (upstream `KeyError: 'message'` crash).**
 

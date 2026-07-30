@@ -1,4 +1,4 @@
-"""KAME API Rotation & Stability Engine v1.0.7.
+"""KAME API Rotation & Stability Engine v1.0.8.
 
 Full-Spectrum Protections:
 1. Identity-Aware Health (Tracks health by Model ID to isolate Chat/Utility)
@@ -1671,6 +1671,16 @@ async def _kame_unified_call(
             # (A0 v1.x acompletion+_parse_chunk vs A0 V2 LiteLLMTransport). Every
             # rotation / health / callback / cooldown line below is UNCHANGED.
             if stream:
+                # v1.0.8: A0's response_callback may ask for an EARLY STOP. Since
+                # A0 V2, `Agent.monologue`'s stream callback returns the full text
+                # the moment a complete, valid tool request has been streamed, and
+                # native `unified_call`/`unified_turn` then break the stream and use
+                # that text (`stop_response`). KAME owns the stream, so it must honor
+                # the same contract — otherwise the model keeps generating past a
+                # finished tool call every single turn (wasted tokens + latency, and
+                # trailing junk after the JSON). A0 v1.x callbacks return None, so
+                # this is a no-op there.
+                stop_response = None
                 try:
                     async for parsed in _kame_chunk_aiter(self, msgs_conv, call_kwargs, key, True):
                         got_any_chunk = True  # content has started
@@ -1687,7 +1697,7 @@ async def _kame_unified_call(
 
                         if output["response_delta"]:
                             if response_callback:
-                                await response_callback(
+                                stop_response = await response_callback(
                                     output["response_delta"], result.response
                                 )
                             if tokens_callback:
@@ -1695,6 +1705,10 @@ async def _kame_unified_call(
                                     output["response_delta"],
                                     approximate_tokens(output["response_delta"]),
                                 )
+
+                        if stop_response is not None:
+                            result.response = stop_response
+                            break
 
                     # Stream completed but produced NO content. An empty stream is
                     # usually a transient provider hiccup (or a safety-filtered empty
@@ -1706,7 +1720,9 @@ async def _kame_unified_call(
                     # key without penalizing a good key for one transient blank.
                     # Bounded: at most 2 empties per key, then it's cooled; the
                     # asyncio.sleep(0) yields so a whole pool of empties can't spin.
-                    if not result.response and not result.reasoning:
+                    # (v1.0.8: an early stop is never an empty stream — A0 asked us
+                    # to stop and handed us the text, even if that text is blank.)
+                    if stop_response is None and not result.response and not result.reasoning:
                         _empty_counts[key] = _empty_counts.get(key, 0) + 1
                         if _empty_counts[key] >= 2:
                             _mark_key_health(identity, key, False, 3, "other")
@@ -2052,7 +2068,7 @@ def apply_kame_patch():
             _print_shield_status()
         return True
     except Exception as e:
-        PrintStyle.error(f"[KAME v1.0.7] Patch Failed: {e}")
+        PrintStyle.error(f"[KAME v1.0.8] Patch Failed: {e}")
         return False
 
 
@@ -2084,7 +2100,7 @@ def remove_kame_patch():
 
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
-    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.7 — ACTIVE")
+    PrintStyle(font_color="#96E").print("  \U0001f422⚡ KAME v1.0.8 — ACTIVE")
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

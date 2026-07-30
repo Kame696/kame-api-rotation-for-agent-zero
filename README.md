@@ -4,7 +4,7 @@
 
 ### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.0.7-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
+[![Version](https://img.shields.io/badge/version-1.0.8-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
@@ -113,13 +113,13 @@ KAME doesn't look like a bot. KAME looks like a thoughtful human who took a coff
 
 No config required. No tuning. No code changes anywhere. The plugin hooks Agent Zero's model layer at boot and reverts cleanly on uninstall.
 
-> **Agent Zero v1.x *and* V2/V2.1 are both supported.** v1.0.6 auto-detects which model-streaming layer your A0 build uses and adapts — the rotation engine is identical on both. Nothing for you to configure.
+> **Agent Zero v1.x *and* the V2 line (through v2.7) are both supported.** KAME auto-detects which model-streaming layer your A0 build uses and adapts — the rotation engine is identical on both. Nothing for you to configure.
 
 Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.0.7 — ACTIVE
+  🐢⚡ KAME v1.0.8 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -248,7 +248,7 @@ No. A0 hot-reloads plugins: dropping KAME into your plugins folder (or toggling 
 </details>
 
 <details>
-<summary><b>Does KAME work on the new Agent Zero V2 / V2.1?</b></summary>
+<summary><b>Does KAME work on the new Agent Zero V2 line (V2 / V2.1 / v2.7)?</b></summary>
 
 Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made three changes that KAME 1.0.3 didn't survive; 1.0.4 handles all of them:
 
@@ -256,7 +256,7 @@ Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made
 2. **The model entry point split** — V2.1's agent monologue calls `unified_turn`, not `unified_call`. 1.0.3 patched only `unified_call`, so rotation never engaged on V2.1. 1.0.4 wraps `unified_turn` too.
 3. **Free-tier prompt caching** — V2.1 tries to cache big prompts, but free-tier keys have zero cache storage and 429 on it. 1.0.4 disables caching for its calls.
 
-Behavior on A0 v1.x is unchanged. If you're on V2 or V2.1, just install 1.0.4.
+Behavior on A0 v1.x is unchanged. Every A0 release since has been re-audited against the same four patch points; **v2.7 is verified green** as of v1.0.8. If you're on the V2 line, just install the latest KAME.
 </details>
 
 <details>
@@ -379,7 +379,7 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ through the v1.x line **and Agent Zero V2 / V2.1** — v1.0.4 auto-detects which is installed and adapts.
+- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green against v2.7** (2026-07-30). KAME auto-detects which is installed and adapts. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **No new dependencies** — uses stdlib only on top of what A0 already ships
@@ -392,7 +392,8 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
-| **v1.0.7** | Response Shield — heals empty response-tool args | Upstream Agent Zero's `tools/response.py` crashes with `KeyError: 'message'` when a model (seen with Codex-style models) emits the `response` tool with empty, null, or wrongly-keyed arguments (still unfixed upstream as of 2026-07-19). The KAME Shield extension now guarantees a usable argument: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
+| **v1.0.8** | Honors A0's early-stop contract + verified on Agent Zero v2.7 | Since Agent Zero V2 the streamed response callback *returns* the accumulated text as soon as a complete tool request has been streamed, and native A0 breaks the stream there. KAME owned the stream but discarded that return value, so the model kept generating past every finished tool call — wasted output tokens and latency on each turn, plus trailing junk after the tool JSON. v1.0.8 breaks the stream exactly like native A0, and a blank early stop is no longer mistaken for an empty stream (the key is never wrongly penalized). Also: the v1.0.7 `KeyError` claim is corrected (A0 v2.6+ fixed it upstream — the wrong-key salvage is the part that still pays off on every version), and a new `tests/test_a0_compat.py` runs KAME's patches against a real Agent Zero checkout. Rotation engine unchanged. |
+| **v1.0.7** | Response Shield — heals empty/wrong-key response-tool args | A model (seen with Codex-style models) can emit the `response` tool with empty, null, or wrongly-keyed arguments. On Agent Zero up to v2.5 that crashed the turn with `KeyError: 'message'`; A0 v2.6+ turned it into a repair request instead. The KAME Shield extension guarantees a usable argument either way: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved instead of costing a repair round-trip; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
 | **v1.0.6** | Faster failover + verifiable quota logs + gentler empty-stream + visible invalid keys | **(1)** Near-instant key failover — dropped the fixed 50ms inter-rotation delay for a zero-delay event-loop yield (saved ~750ms per 15-key storm). **(2)** Every quota failure line now shows the provider's own quota tag inline (`[quota: PerDay]` / `[quota: PerMinute]`) so daily/per-minute classification is verifiable at `normal` level. **(3)** One transient empty stream no longer cools a healthy key — it gets an un-penalized retry; only a 2nd empty from the same key rests it. **(4)** An invalid/expired key is now always shown, even at `silent` log level (previously silenced — contradicted the documented promise). **(5)** That message now shows enough of the key (first 10 + last 4 chars) to actually find it in your provider console, instead of a useless anonymized hash. Daily-quota cooldown stays exactly the configured interval (no jitter); cooldowns still never shorten. |
 | **v1.0.5** | Daily-quota logic fix + chat pause | Two confirmed bugs fixed from overnight log analysis: **(1)** daily-quota cooldown now always uses the configured `daily_quota_cooldown_seconds` — Google's retryDelay is ignored for daily quotas since it is often wrong; **(2)** existing cooldowns can never be shortened — a 503 (10s) can no longer wipe a 1h daily-quota protection (fixed by `max()` on `sick_until`). Plus: the carousel now honors chat **pause** (waits until unpaused, resumes cleanly). Rotation / selection / ETA-sleep unchanged from 1.0.4. (An early 1.0.5 build's key-status panel was removed in 1.0.6 — it showed incorrect data.) |
 | **v1.0.4** | Agent Zero V2 / V2.1 compatibility | Three V2/V2.1 changes broke 1.0.3, all fixed here. **(1)** V2 moved streaming to a transport layer and removed `models._parse_chunk`; 1.0.4 detects the A0 version once and picks the right parser automatically. **(2)** V2.1 split the entry point — the agent monologue now calls `unified_turn`, not `unified_call`, so 1.0.3's rotation was bypassed entirely; 1.0.4 also wraps `unified_turn`, calling `litellm.acompletion` directly (bypassing A0's internal Responses transport so 503s return in ~1s instead of ~40s). **(3)** V2.1's free-tier prompt-caching 429 is sidestepped by disabling explicit caching. The selection / health / cooldown carousel is unchanged from 1.0.3. |
@@ -516,7 +517,7 @@ If KAME made your agent less frustrating, drop a star ⭐ — it costs you nothi
 
 <div align="center">
 
-🐢⚡ **KAME v1.0.7** — *because round-robin was never enough*
+🐢⚡ **KAME v1.0.8** — *because round-robin was never enough*
 
 **Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
 

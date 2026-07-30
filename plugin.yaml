@@ -1,7 +1,7 @@
 name: api_rotation_by_kame
 title: Key-Aware Management Engine (API Rotation)
-description: KAME is a learning key-rotation engine for Agent Zero. Instead of blindly cycling API keys like round-robin, it tracks each key's health per provider:model, respects the provider's own retry-delay to the second, tells daily quotas apart from per-minute limits, and never re-probes a key before it's actually ready. When every key is temporarily down, KAME sleeps until the exact moment one recovers instead of burning wasted requests — and the agent never sees an error. Works on Agent Zero v1.x and V2/V2.1, zero configuration required (only set APIs on provider as api1,api2,api3,etc).
-version: 1.0.7
+description: KAME is a learning key-rotation engine for Agent Zero. Instead of blindly cycling API keys like round-robin, it tracks each key's health per provider:model, respects the provider's own retry-delay to the second, tells daily quotas apart from per-minute limits, and never re-probes a key before it's actually ready. When every key is temporarily down, KAME sleeps until the exact moment one recovers instead of burning wasted requests — and the agent never sees an error. Works on Agent Zero v1.x and the whole V2 line (verified through v2.7), zero configuration required (only set APIs on provider as api1,api2,api3,etc).
+version: 1.0.8
 settings_sections:
   - agent
 per_project_config: false

@@ -4,12 +4,19 @@ Extension hook on Agent.validate_tool_request/start.
 Heals null/empty tool_args BEFORE the framework's validator runs,
 preventing ValueError crashes from LLM-generated malformed JSON.
 
-v1.0.7 adds a response-tool heal: upstream Agent Zero's tools/response.py
-does `self.args["text"] ... else self.args["message"]`, which raises
-KeyError: 'message' when the model emits a response call with empty args
-(seen with Codex-style models). KAME now guarantees the response tool
-always receives a usable "text" key, salvaging common wrong-key variants
-("content", "answer", "response", "answer_text") and coercing null values.
+v1.0.7 added a response-tool heal. Agent Zero up to and including v2.5 did
+`self.args["text"] ... else self.args["message"]` in tools/response.py, which
+raised KeyError: 'message' when a model emitted a response call with empty args
+(seen with Codex-style models). KAME guarantees the response tool always
+receives a usable "text" key, salvaging common wrong-key variants ("content",
+"answer", "response", "answer_text") and coercing null values.
+
+v1.0.8 note — A0 v2.6+ fixed the crash upstream: ResponseTool now raises a
+RepairableException instead of KeyError, so the framework asks the model to
+retry rather than dying. The empty-args injection is therefore only a crash
+guard on older A0 (harmless on new A0: blank text still repairs). The
+WRONG-KEY SALVAGE is the part that still earns its keep on every version —
+it turns a wasted repair round-trip into the answer the model actually wrote.
 
 This approach preserves the @extensible decorator (unlike monkey-patching).
 """
