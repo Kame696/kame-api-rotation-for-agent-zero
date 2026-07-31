@@ -7,6 +7,7 @@
 [![Version](https://img.shields.io/badge/version-1.0.8-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
+[![Verified against](https://img.shields.io/badge/verified_against-A0_v2.7-purple.svg)](COMPATIBILITY.md)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/status-production--validated-brightgreen.svg)](#production-validation)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-engine?style=social)](https://github.com/Kame696/kame-api-engine/stargazers)
@@ -401,6 +402,24 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **No new dependencies** — uses stdlib only on top of what A0 already ships
+
+### Agent Zero just shipped a new version — is KAME still fine?
+
+One command answers it:
+
+```bash
+python tools/a0_upgrade_check.py --latest    # is there even a new A0?
+python tools/a0_upgrade_check.py /path/to/agent-zero    # the real audit
+```
+
+It does three things: asks GitHub for A0's newest tag, **fingerprints the source of
+all 14 A0 symbols KAME patches or depends on** and diffs them against the pinned
+baseline in `a0_compat.json`, then runs the live harness that applies KAME's real
+patches to the real classes. Exit `0` = compatible. Exit `1` = it names the exact
+function that changed and *why KAME cares about it* — no hunting through A0's tree.
+
+Full patch-point map, the endpoint cheat-sheet and the step-by-step upgrade runbook
+live in **[COMPATIBILITY.md](COMPATIBILITY.md)**.
 
 ---
 

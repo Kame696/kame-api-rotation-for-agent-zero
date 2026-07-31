@@ -121,6 +121,27 @@ diagnosing this release, both upstream Agent Zero behavior by design):
   `max_consecutive_unusable_responses` in settings, or use a model that keeps to A0's
   JSON contract.
 
+**6. Upgrade protocol — KAME now tells you when Agent Zero breaks it, and where.**
+Three new artifacts ship with the plugin so the next A0 release is a one-command
+check instead of an archaeology session:
+
+- `tools/a0_upgrade_check.py` — asks GitHub for A0's newest tag, **fingerprints the
+  source of all 14 A0 symbols KAME patches or depends on** (whitespace- and
+  comment-insensitive hashes, parsed with `ast` so A0 does not need to be
+  importable) and diffs them against the pinned baseline, then runs the live
+  harness. Exit `0` = compatible; exit `1` names the exact changed function *and
+  why KAME cares about it*. `--update-baseline vX.Y` re-pins after an audit.
+- `a0_compat.json` — the pinned baseline: the watch list with a per-symbol `why`,
+  plus the v2.7 fingerprints.
+- `COMPATIBILITY.md` — the compatibility matrix, the full patch-point map
+  (including the two `@extensible` folder paths that fail *silently* if A0 renames
+  `Agent.monologue` or `Agent.validate_tool_request`), a "where to look in the A0
+  tree" cheat-sheet, and the step-by-step upgrade runbook.
+
+`plugin.yaml`'s description now starts with **`[UPDATED TO A0 V2.7]`**, so the A0
+plugin list shows at a glance which Agent Zero the installed KAME was verified
+against — no need to open the README.
+
 Tests: `tests/test_v1_0_8.py` (22) + `tests/test_a0_compat.py` (24, against A0 v2.7)
 + all prior suites green.
 
