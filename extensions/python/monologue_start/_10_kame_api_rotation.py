@@ -1,15 +1,9 @@
-"""KAME activation at Agent Zero's implicit ``Agent.monologue`` start point.
+"""KAME activation at Agent Zero's ``monologue_start`` extension point (v1.0.9).
 
-This is KAME's original activation door (v0.5.x - v1.0.8). Agent Zero's
-``@extensible`` decorator DERIVES this folder path from ``agent.py``'s module and
-qualname, so it only fires while ``Agent.monologue`` keeps that exact name and
-location. That made it a silent single point of failure: an upstream rename would
-stop the extension from ever firing, with no error and no banner.
-
-v1.0.9 keeps it (it is the earliest, most precise hook on A0 V2) but no longer
-depends on it: the same activation now also ships at the named ``agent_init`` and
-``monologue_start`` extension points, whose names are hardcoded strings in
-agent.py and have not changed since Agent Zero v1.14.
+``monologue_start`` fires at the beginning of every agent monologue. It is the
+belt to ``agent_init``'s braces: it re-applies the plugin settings each turn (so
+changing them in the UI takes effect immediately) and would still activate KAME
+on a build where agent_init somehow did not fire.
 
 The real work lives in ``kame_activation.activate()`` — this file is only a door.
 Activation is idempotent, so it does not matter which door fires first, or how

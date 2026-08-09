@@ -21,10 +21,135 @@ graph LR
 
 ---
 
-## v1.0.8 — current
+## v1.0.9 — current
+
+**Agent Zero now makes the call; KAME only chooses the key.**
+The rotation engine is unchanged. What changed is architecture: KAME stopped
+being a parallel copy of Agent Zero's most-refactored file.
+
+### The problem this release exists to solve
+
+Every KAME release since 1.0.0 re-implemented Agent Zero's entire model call. It
+built the litellm request itself, opened the stream itself, parsed every chunk
+itself and re-assembled the result itself. That worked — and it meant that every
+time Agent Zero refactored `models.py` or its transport layer, KAME could break.
+1.0.4 exists *only* because A0 V2 removed `models._parse_chunk`. That is not a
+sustainable contract, and keeping it green was manual work on every A0 release.
+
+### The change
+
+KAME now does exactly one thing on each attempt: pick the healthiest key, then
+call **Agent Zero's own model method** with `api_key=<the chosen key>`. Agent Zero
+owns the request, the stream, the parsing and the result object. KAME hands that
+result straight back to the caller, untouched — same object, not a rebuild.
+
+**Symbols that left KAME's compatibility surface entirely:**
+`models._parse_chunk` · `models.ChatGenerationResult` ·
+`helpers.litellm_transport.ChatCompletionsTransport.parse` ·
+`helpers.llm_result.LLMResult.from_chat` · `litellm.acompletion` · the whole
+A0-version chunk-mode detection. The engine no longer imports `litellm`, `openai`
+or `logging` at all. Watched patch points went from **14 to 11**, and 2 of the
+remaining 11 are marked `adaptive` — KAME absorbs a change there by itself.
+
+**Why this does not reintroduce the 30-40s hang that made 1.0.4 bypass A0's
+transport:** that hang was A0's *own* retry loop (2 attempts × 1.5s per key, on a
+key KAME already knew was rate-limited). KAME now switches it off per call by
+passing `a0_retry_attempts=0` / `a0_retry_delay_seconds=0`. Those knob names are
+read out of Agent Zero's source at runtime, so if upstream renames them, KAME
+picks up the new names automatically. Rotation after a 429 is instant, as before.
+
+### Shape-based binding — a rename no longer disables rotation
+
+KAME used to look for the methods named `unified_call` and `unified_turn`. It now
+finds them **by signature**: a coroutine on the model class whose parameters
+include `messages`, `response_callback`, `reasoning_callback` and
+`tokens_callback`. If Agent Zero renames them tomorrow, KAME still binds.
+
+Three layers, and the last one is deliberately safe:
+
+| Layer | What happened | Rotation |
+|---|---|---|
+| **1** | Entry points found by shape | full |
+| **2** | Shape missed; found by legacy name | full, with a console note |
+| **3** | Neither worked | **KAME wraps nothing at all** |
+
+Layer 3 is the important one. KAME never leaves Agent Zero half-patched: it either
+installs completely or steps aside completely, prints one honest line explaining
+that Agent Zero is running natively without rotation, and links the issue tracker.
+The accessory shields (compression guard, rate-limiter fix) are each isolated in
+their own `try` — one of them failing can no longer take down the rotation core.
+
+### Activation has three independent doors
+
+KAME's activation extension used to live at exactly one path,
+`_functions/agent/Agent/monologue/start/`, which Agent Zero *derives* from
+`agent.py`'s module and qualname. The day upstream renamed or moved
+`Agent.monologue`, that folder would stop matching, the extension would silently
+never fire, and KAME would never install — no error, no banner, just no rotation.
+It was the last real single point of failure in the plugin.
+
+v1.0.9 keeps that door and adds two more at Agent Zero's **named** extension
+points, `agent_init` and `monologue_start` — hardcoded strings in `agent.py`,
+byte-identical since at least v1.14. Activation is idempotent, so firing from
+three doors costs nothing. All three delegate to one new shared module,
+`kame_activation.py`.
+
+### Also in this release
+
+- **One version string.** `KAME_VERSION` is now the single source of truth; the
+  banner and the patch-failure line read it instead of a hand-typed literal that
+  drifted between releases.
+- **Startup banner tells you how KAME attached itself** — which layer, which entry
+  points, and (only when they differ) the installed Agent Zero version next to the
+  one this KAME build was verified on. Console only. **No email, no webhook, no
+  telemetry, no background check, nothing that phones home.** If you can see the
+  banner, you have the whole compatibility report.
+- **Blank early stops are still respected.** Agent Zero can legitimately return an
+  empty answer when the model early-stops on a completed tool call. KAME rotates
+  on an empty answer only when *nothing* streamed at all, and never more than
+  twice per call — so a genuine blank answer is returned exactly like native A0.
+- **Message lists are never mutated.** Agent Zero's `unified_call` inserts the
+  system prompt into the list it is handed; each carousel attempt now gets a fresh
+  copy, so a rotation can never duplicate the prompt.
+- **The upgrade checker reports severity.** `tools/a0_upgrade_check.py` now labels
+  each flagged symbol `critical` / `degraded` / `adaptive`, so an expected change
+  in an adaptive symbol no longer reads like a red flag.
+
+### Verification
+
+Live harness (real Agent Zero checkout, real `LiteLLMChatWrapper`, real transport,
+only the outermost network call faked) is **green on six Agent Zero versions
+spanning both majors**: **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8**. Each run includes
+a genuine end-to-end rotation: the first key gets a 429, KAME rotates, the second
+key answers, and the answer streams through to the caller's callback.
+
+Tests: `tests/test_v1_0_9.py` (62 checks — delegation contract, shape binding,
+retry-knob extraction, empty-answer bounds, callback transparency, layer safety)
++ `tests/test_a0_compat.py` (live) + every prior suite green. `test_v1_0_4.py`,
+`test_v1_0_4_v21.py` and groups A-E of `test_v1_0_8.py` were retargeted at the new
+seam: they assert the same *behaviors*, against the code that now implements them.
+
+---
+
+## v1.0.8
 
 **Honors Agent Zero's early-stop contract, quarantines permanently-denied keys,
-and is verified against Agent Zero v2.7.**
+and is verified against Agent Zero v2.8.**
+
+> **Agent Zero v2.8 re-verification (2026-08-01) — no KAME code changes.**
+> All 14 fingerprinted patch points came back unchanged and the live harness is
+> green against the v2.8 tag. v2.8 is a big release, but it moves things KAME does
+> not stand on: `helpers/extension.py` only *gained* a WebUI manifest helper (the
+> `_functions/<module>/<Class>/<method>/` derivation is byte-identical), the new
+> `helpers/ui_bundler.py` picks up plugin `webui/` assets through the generic
+> enabled-plugin path, and the 17 extra `a0_api_mode: chat` provider entries are
+> moot because KAME bypasses A0's transport and strips every `a0_*` kwarg anyway.
+> Two upstream changes are worth knowing about as a *user*:
+> `max_consecutive_unusable_responses` went from **2 to 5**, and v2.8 adds a real
+> `/stop` endpoint (`api/stop.py`) next to nudge. Full audit table in
+> [COMPATIBILITY.md](COMPATIBILITY.md) §2.1. Shipped alongside:
+> `tests/requirements.txt`, pinning the live harness's dependency closure so
+> running it never means chasing `ModuleNotFoundError` one `pip install` at a time.
 
 Three real behavioral fixes, one documentation correction, and a new
 live-compatibility harness. The rotation / selection / cooldown carousel and all

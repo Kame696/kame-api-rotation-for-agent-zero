@@ -35,6 +35,7 @@ so stages 1 and 2 still work in a bare environment.
 """
 import argparse
 import ast
+import datetime
 import hashlib
 import json
 import os
@@ -207,17 +208,33 @@ def main():
     for key, value in current.items():
         (same if recorded.get(key) == value else changed).append(key)
 
+    def _sev(entry):
+        return entry.get("severity", "critical")
+
     for key in sorted(gone):
         entry = by_id[key]
-        print(f"{BAD} MISSING  {key}")
+        print(f"{BAD} MISSING  [{_sev(entry)}] {key}")
         print(f"         {entry['module'].replace('.', '/')}.py :: {entry['symbol']}")
         print(f"         why KAME cares: {entry['why']}")
     for key in sorted(changed):
         entry = by_id[key]
-        print(f"{WARN} CHANGED  {key}  {recorded.get(key, '-')} -> {current[key]}")
+        print(f"{WARN} CHANGED  [{_sev(entry)}] {key}  {recorded.get(key, '-')} -> {current[key]}")
         print(f"         {entry['module'].replace('.', '/')}.py :: {entry['symbol']}")
         print(f"         why KAME cares: {entry['why']}")
     print(f"{OK} unchanged: {len(same)}/{len(base['watch'])}")
+
+    # v1.0.9: a changed fingerprint on an `adaptive` symbol is EXPECTED noise -
+    # KAME delegates the call and finds the entry points by shape, so A0 is free
+    # to rewrite those bodies. Say so, instead of letting it read as a red flag.
+    _adaptive = [k for k in changed if _sev(by_id[k]) == "adaptive"]
+    if _adaptive:
+        print(f"{OK} {len(_adaptive)} of those are 'adaptive' - KAME handles them "
+              f"automatically (delegation + shape-based binding). The live harness "
+              f"below is the real verdict for these.")
+    _serious = [k for k in changed if _sev(by_id[k]) != "adaptive"]
+    if _serious:
+        print(f"{WARN} {len(_serious)} changed symbol(s) need a human read: "
+              f"{', '.join(sorted(_serious))}")
 
     tests_failed = False
     if not args.skip_tests:
@@ -249,6 +266,9 @@ def main():
             print(f"\n{WARN} re-pinning over {len(changed)} changed symbol(s) - "
                   f"do this only after reading each one above.")
         base["verified_against"] = args.update_baseline
+        # stamp the date too - a baseline that says v2.8 but still carries the v2.7
+        # date is worse than no date at all.
+        base["verified_on"] = datetime.date.today().isoformat()
         base["fingerprints"] = current
         with open(BASELINE, "w", encoding="utf-8") as fh:
             json.dump(base, fh, indent=2, ensure_ascii=False)

@@ -1,0 +1,65 @@
+# Dependencies for `tests/test_a0_compat.py` — the LIVE harness that imports a real
+# Agent Zero checkout and applies KAME's real patches to it.
+#
+#     pip install -r tests/requirements.txt
+#
+# You do NOT need this for `tools/a0_upgrade_check.py --latest` or for the
+# fingerprint stage (`--skip-tests`): those parse A0's source with `ast` and run in
+# a bare Python.
+#
+# Why this file exists: A0's own `requirements.txt` is ~60 packages and pulls
+# torch/faiss/playwright/unstructured. The harness only needs A0 to *import*, which
+# is this much smaller closure. Rediscovering it by chasing ModuleNotFoundError one
+# at a time costs ~10 pip round-trips. Don't do that again.
+#
+# Last verified: 2026-08-09, Python 3.14.5 on Windows, against A0 v1.14 / v1.20 /
+# v2.1 / v2.4 / v2.7 / v2.8.
+#
+# `pip install --dry-run -r tests/requirements.txt` must resolve cleanly. It did
+# not before 1.0.9 (exact pins on langchain-core + text-splitters 1.x were
+# mutually unsolvable). From a clean environment this file now resolves to
+# langchain-core 0.3.86 / langchain-text-splitters 0.3.11; the six A0 versions
+# above were driven on the equivalent 0.3.49 / 1.1.2 pair.
+
+# --- what KAME itself touches -------------------------------------------------
+litellm==1.94.1
+nest-asyncio==1.6.0
+pillow==12.2.0
+
+# --- pinned: langchain 1.x REMOVED `langchain.prompts`, which A0's
+#     helpers/call_llm.py still imports. langchain-core must stay on 0.3.x too or
+#     `PipelinePromptTemplate` disappears — and text-splitters 1.x hard-requires
+#     langchain-core>=1.0, which is why it is capped here. Pinning langchain-core
+#     to an exact 0.3.x makes pip unsolvable against langchain 0.3.27 (it wants
+#     >=0.3.72), so the ceiling is a RANGE on purpose. Do not "tidy" it into ==.
+#     Install with --no-deps if pip tries to build zstandard from source (no cp314
+#     wheel as of 2026-08).
+langchain==0.3.27
+langchain-core<0.4
+langchain-text-splitters<1.0
+
+# --- transitive, but hit on the import path of models.py / helpers/history.py ---
+simpleeval==1.0.7        # helpers/files.py
+GitPython==3.1.57        # helpers/git.py
+giturlparse==0.15.0      # helpers/git.py
+webcolors==25.10.0       # helpers/print_style.py
+python-dotenv==1.2.2     # helpers/dotenv.py
+pytz==2026.2
+crontab==1.0.5
+pathspec==1.1.1
+psutil==7.2.2
+markdown==3.10.3
+markdownify==1.2.3
+pydantic==2.13.4
+tiktoken==0.13.0
+ansio==0.0.2
+inputimeout==1.0.4
+cryptography             # helpers/crypto.py (imported by helpers/settings.py)
+watchdog==6.0.0          # helpers/file_watcher.py (imported by initialize.py)
+
+# --- NOT installed, stubbed by the harness instead ------------------------------
+# sentence_transformers and whisper are imported by A0's model layer on some
+# versions but never reached by the harness. tests/test_a0_compat.py inserts empty
+# stub modules into sys.modules for both, which saves a ~2.5 GB torch install.
+# If a future A0 actually *calls* into them on the import path, stub harder — do
+# not add torch here.

@@ -1,17 +1,28 @@
-"""v1.0.4 (A0 V2.1) — direct-call carousel for unified_turn.
+"""v1.0.4 (A0 V2.1) — the turn path, RETARGETED for v1.0.9's delegated execution.
 
-KAME does NOT delegate to A0's native unified_turn (whose Responses-mode transport
-runs an internal retry/fallback loop that hangs a failing call ~40s). Instead it runs
-the SAME proven direct-acompletion carousel as unified_call (the 1.0.3 mechanism —
-fast rotation), then wraps the (response, reasoning) in the LLMResult V2.1 expects.
+What this suite originally guarded
+----------------------------------
+A0 V2.1 moved the agent monologue from ``unified_call`` to ``unified_turn``. 1.0.4
+patched that too, ran the same direct-``acompletion`` carousel, and then REBUILT the
+``LLMResult`` that V2.1 expects via ``LLMResult.from_chat(...)``.
 
-These tests verify, with stubs (no real A0/litellm):
-  A. unified_turn returns an LLMResult built from the carousel's output.
-  B. the carousel rotates on a connect-time 503 via DIRECT acompletion (fast).
-  C. a mid-stream transient drop is ridden out (no error surfaced), full answer.
-  D. a genuinely terminal error still surfaces (no infinite spin).
+Why it looks different now
+--------------------------
+v1.0.9 stopped rebuilding anything. A0's own ``unified_turn`` runs and its result —
+whatever class that is, with whatever fields a future A0 adds — is handed straight
+back. ``LLMResult.from_chat`` is no longer part of KAME's compatibility surface.
+
+The four behavioral guarantees the original suite existed for are unchanged, and
+this file still tests all four:
+
+  A. the turn path returns the result type A0's caller expects
+  B. a connect-time 503 rotates to another key, fast
+  C. a mid-stream transient drop is ridden out — never surfaced to the user
+  D. a genuinely terminal error still surfaces instead of spinning forever
+
+Runs with stubs. No real Agent Zero, no litellm, no network.
 """
-import sys, types, os, asyncio
+import sys, types, os, asyncio, time
 
 
 def _stub(name):
@@ -20,19 +31,21 @@ def _stub(name):
     return m
 
 
-_stub("openai")
-_litellm = _stub("litellm")
-_litellm.suppress_debug_info = False
-_litellm.acompletion = lambda *a, **k: None
 _stub("langchain_core")
 _lc = _stub("langchain_core.messages")
+
+
 class _Msg:
     def __init__(self, content=""):
         self.content = content
+
+
 _lc.SystemMessage = _Msg
 _lc.HumanMessage = _Msg
 _stub("helpers")
 _ps = _stub("helpers.print_style")
+
+
 class _PrintStyle:
     def __init__(self, *a, **k): pass
     def print(self, *a, **k): pass
@@ -42,158 +55,167 @@ class _PrintStyle:
     def error(*a, **k): pass
     @staticmethod
     def success(*a, **k): pass
+
+
 _ps.PrintStyle = _PrintStyle
 _errs = _stub("helpers.errors")
 for _n in ("InterventionException", "RepairableException", "HandledException"):
     setattr(_errs, _n, type(_n, (Exception,), {}))
 
-# models stub: turn_off_logging, approximate_tokens, ChatGenerationResult, LLMResult
-_models = _stub("models")
-_models.turn_off_logging = lambda: None
-_models.approximate_tokens = lambda s: len(s or "")
-class _CGR:
-    def __init__(self):
-        self.response = ""; self.reasoning = ""
-    def add_chunk(self, parsed):
-        self.response += parsed.get("response_delta", "")
-        self.reasoning += parsed.get("reasoning_delta", "")
-        return parsed
-    def output(self):
-        return {"response_delta": self.response, "reasoning_delta": self.reasoning}
-_models.ChatGenerationResult = _CGR
-class _LLMResult:
-    def __init__(self, response="", reasoning=""):
-        self.response = response; self.reasoning = reasoning
-    @classmethod
-    def from_chat(cls, *, response="", reasoning="", input_items=None,
-                  provider_model_key="", capability=None):
-        return cls(response=response, reasoning=reasoning)
-_models.LLMResult = _LLMResult
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import kame_engine as K  # noqa: E402
 
-# parser stub + V2 mode (so _kame_chunk_aiter parses our raw chunks)
-K._KAME_CHUNK_MODE = "v2"
-K._KAME_PARSE_CHUNK = lambda raw: {"reasoning_delta": "", "response_delta": str(raw)}
-
-_seen = []
-async def _rcb(delta, full):
-    _seen.append(delta)
-    return None
-
+K.set_log_level("silent")
 
 _failures = []
+
+
 def check(name, cond):
-    print(("PASS" if cond else "FAIL") + " - " + name)
+    print(("PASS  " if cond else "FAIL  ") + name)
     if not cond:
         _failures.append(name)
 
 
-def _err(status):
-    e = Exception("rate limit" if status == 503 else "bad")
-    e.status_code = status
-    return e
-
-
 class _Conf:
     provider = "gemini"
-class FW:
+
+
+class _Err(Exception):
+    def __init__(self, msg, status_code=None):
+        super().__init__(msg)
+        self.status_code = status_code
+
+
+class LLMResultLike:
+    """A0 V2.1's LLMResult: what the monologue expects back from unified_turn."""
+    def __init__(self, response="", reasoning=""):
+        self.response = response
+        self.reasoning = reasoning
+        self.function_calls = []
+        self.mode = "chat_completions"
+
+
+class TurnModel:
+    """A0 V2.1 model whose unified_turn streams via the callbacks, then returns
+    an LLMResult. `script` decides what each attempt does."""
     model_name = "gemini/gemini-3.5-flash"
-    a0_model_conf = _Conf()
-    kwargs = {}
-    def _convert_messages(self, msgs, explicit_caching=False):
-        return [{"role": "user", "content": "hi"}]
+
+    def __init__(self, script):
+        self.a0_model_conf = _Conf()
+        self.kwargs = {}
+        self.calls = []
+        self.script = script
+
+    async def unified_turn(self, system_message="", user_message="", messages=None,
+                           response_callback=None, reasoning_callback=None,
+                           tokens_callback=None, rate_limiter_callback=None,
+                           explicit_caching=False, **kwargs):
+        kwargs.pop("a0_retry_attempts", None)
+        kwargs.pop("a0_retry_delay_seconds", None)
+        self.calls.append(kwargs.get("api_key"))
+        return await self.script[min(len(self.calls) - 1, len(self.script) - 1)](
+            self, response_callback)
 
 
-class _Stream:
-    def __init__(self, items): self._i = list(items)
-    def __aiter__(self): return self
-    async def __anext__(self):
-        if not self._i:
-            raise StopAsyncIteration
-        v = self._i.pop(0)
-        if isinstance(v, Exception):
-            raise v
-        return v
+def _answer(text, stream_chunks=()):
+    async def _step(model, cb):
+        for c in stream_chunks:
+            if cb:
+                await cb(c, c)
+        return LLMResultLike(text)
+    return _step
 
 
-# --- Test A: unified_turn wraps the carousel's output in an LLMResult ---------
-async def _fake_call(self, **kw):
-    return ("HELLO-WORLD", "my-reasoning")
-_orig_call = K._kame_unified_call
-K._kame_unified_call = _fake_call
-res_a = asyncio.run(K._kame_unified_turn(FW(), messages=[_Msg("hi")], response_callback=_rcb))
-K._kame_unified_call = _orig_call
-check("unified_turn returns an LLMResult (has .response/.reasoning)",
-      hasattr(res_a, "response") and hasattr(res_a, "reasoning"))
-check("unified_turn LLMResult carries the carousel's response/reasoning",
-      res_a.response == "HELLO-WORLD" and res_a.reasoning == "my-reasoning")
+def _fail_before_streaming(exc):
+    async def _step(model, cb):
+        raise exc
+    return _step
 
 
-# --- Test B: carousel rotates on a connect-time 503 via DIRECT acompletion ----
-K._KAME_KEY_HEALTH = {}
-K._get_all_api_keys = lambda self: ["AAA", "BBB", "CCC"]
-_b = {"calls": []}
-async def _acomp_b(model=None, messages=None, **kw):
-    _b["calls"].append(kw.get("api_key"))
-    if len(_b["calls"]) == 1:
-        raise _err(503)              # first key 503s at CONNECT → rotate
-    return _Stream(["Hello"])        # next key succeeds
-K.acompletion = _acomp_b
-res_b = asyncio.run(K._kame_unified_turn(
-    FW(), messages=[_Msg("hi")], response_callback=_rcb))
-check("connect 503 rotates to another key (>=2 direct acompletion calls)", len(_b["calls"]) >= 2)
-check("carousel calls acompletion DIRECTLY (no transport) and returns the answer",
-      res_b.response == "Hello")
-check("the retry used a different key than the failed first",
-      _b["calls"][0] != _b["calls"][1])
+def _fail_mid_stream(exc, before=("partial ",)):
+    async def _step(model, cb):
+        for c in before:
+            if cb:
+                await cb(c, c)
+        raise exc
+    return _step
 
 
-# --- Test C: a MID-STREAM transient drop is ridden out (never surfaced) -------
-K._KAME_KEY_HEALTH = {}
-K._get_all_api_keys = lambda self: ["AAA", "BBB"]
-_c = {"calls": 0}
-async def _acomp_c(model=None, messages=None, **kw):
-    _c["calls"] += 1
-    if _c["calls"] == 1:
-        return _Stream(["{\"thoughts\":", _err(503)])   # stream a bit, THEN drop
-    return _Stream(["done"])
-K.acompletion = _acomp_c
-_raised_c = None
+async def _cb(delta, full):
+    return None
+
+
+def _run(script, keys=("AAA", "BBB", "CCC")):
+    K._KAME_KEY_HEALTH = {}
+    K._get_all_api_keys = lambda self: list(keys)
+    model = TurnModel(script)
+    wrapper = K._kame_make_entry_wrapper("unified_turn", TurnModel.unified_turn)
+    return model, wrapper
+
+
+# --- A. the turn path returns A0's own result type ---------------------------
+_m, _w = _run([_answer("the answer")])
+_res = asyncio.run(_w(_m, messages=[_Msg("hi")], response_callback=_cb))
+check("A the turn path returns A0's LLMResult (has .response/.reasoning)",
+      hasattr(_res, "response") and hasattr(_res, "reasoning"))
+check("A the result is A0's OWN object, not a KAME rebuild",
+      isinstance(_res, LLMResultLike) and _res.mode == "chat_completions")
+check("A the answer text survives the carousel", _res.response == "the answer")
+
+
+# --- B. a connect-time 503 rotates to another key, fast ----------------------
+_m, _w = _run([_fail_before_streaming(_Err("503 UNAVAILABLE high demand", 503)),
+               _answer("recovered")])
+_t0 = time.perf_counter()
+_res = asyncio.run(_w(_m, messages=[_Msg("hi")], response_callback=_cb))
+check("B a connect 503 rotates to another key", len(_m.calls) >= 2)
+check("B the retry used a different key than the one that failed",
+      _m.calls[0] != _m.calls[1])
+check("B the answer comes from the key that finally worked", _res.response == "recovered")
+check("B rotation is fast (no inherited retry/backoff delay)",
+      (time.perf_counter() - _t0) < 1.0)
+
+
+# --- C. a mid-stream transient drop is ridden out ----------------------------
+_m, _w = _run([_fail_mid_stream(_Err("APIConnectionError: stream closed", None)),
+               _answer("complete answer")])
+_raised = None
 try:
-    res_c = asyncio.run(K._kame_unified_turn(
-        FW(), messages=[_Msg("hi")], response_callback=_rcb))
-except Exception as e:
-    _raised_c = e
-check("mid-stream transient drop is NOT surfaced (no exception escapes)", _raised_c is None)
-check("KAME rotated + retried after the mid-stream drop (>=2 calls)", _c["calls"] >= 2)
-check("returns the COMPLETE answer from the key that finally worked",
-      _raised_c is None and res_c.response == "done")
+    _res = asyncio.run(_w(_m, messages=[_Msg("hi")], response_callback=_cb))
+except Exception as e:      # noqa: BLE001 - the point of the test
+    _raised = e
+check("C a mid-stream transient drop is NOT surfaced to the user", _raised is None)
+check("C KAME rotated and retried after the drop", len(_m.calls) >= 2)
+check("C the COMPLETE answer from the working key is returned",
+      _raised is None and _res.response == "complete answer")
 
 
-# --- Test D: a genuinely terminal error still surfaces ------------------------
-K._KAME_KEY_HEALTH = {}
-K._get_all_api_keys = lambda self: ["AAA", "BBB"]
-_d = {"calls": 0}
-async def _acomp_d(model=None, messages=None, **kw):
-    _d["calls"] += 1
-    e = Exception("invalid request: content_policy violation")
-    e.status_code = 400
-    raise e
-K.acompletion = _acomp_d
-_raised_d = None
+# --- D. a genuinely terminal error still surfaces ----------------------------
+_terminal = _Err("BadRequestError: context window exceeded 2000000 > 1000000", 400)
+_m, _w = _run([_fail_before_streaming(_terminal)])
+_raised = None
 try:
-    asyncio.run(K._kame_unified_turn(FW(), messages=[_Msg("hi")],
-                                     response_callback=_rcb))
-except Exception as e:
-    _raised_d = e
-check("a terminal (4xx/content-policy) error still surfaces", _raised_d is not None)
-check("terminal error is not retried in a loop (called once)", _d["calls"] == 1)
+    asyncio.run(_w(_m, messages=[_Msg("hi")], response_callback=_cb))
+except Exception as e:      # noqa: BLE001 - the point of the test
+    _raised = e
+check("D a terminal error still surfaces instead of spinning forever",
+      _raised is _terminal)
+check("D a terminal error is not retried in a loop", len(_m.calls) == 1)
+
+# and the KAME contract that outranks all of them: control-flow passes through
+_intervention = _errs.InterventionException("user typed mid-generation")
+_m, _w = _run([_fail_mid_stream(_intervention)])
+_raised = None
+try:
+    asyncio.run(_w(_m, messages=[_Msg("hi")], response_callback=_cb))
+except Exception as e:      # noqa: BLE001 - the point of the test
+    _raised = e
+check("D InterventionException still reaches A0 (native nudge handling)",
+      _raised is _intervention and len(_m.calls) == 1)
 
 
 print("=" * 60)
 if _failures:
     print("FAILURES:", _failures)
     sys.exit(1)
-print("ALL v1.0.4 (A0 V2.1) TESTS PASSED")
+print("ALL v1.0.4-V2.1 TESTS PASSED")

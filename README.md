@@ -4,10 +4,10 @@
 
 ### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.0.8-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
+[![Version](https://img.shields.io/badge/version-1.0.9-blue.svg)](https://github.com/Kame696/kame-api-engine/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
-[![Verified against](https://img.shields.io/badge/verified_against-A0_v2.7-purple.svg)](COMPATIBILITY.md)
+[![Verified against](https://img.shields.io/badge/verified_against-A0_v1.14_%E2%86%92_v2.8-purple.svg)](COMPATIBILITY.md)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/status-production--validated-brightgreen.svg)](#production-validation)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-engine?style=social)](https://github.com/Kame696/kame-api-engine/stargazers)
@@ -114,13 +114,13 @@ KAME doesn't look like a bot. KAME looks like a thoughtful human who took a coff
 
 No config required. No tuning. No code changes anywhere. The plugin hooks Agent Zero's model layer at boot and reverts cleanly on uninstall.
 
-> **Agent Zero v1.x *and* the V2 line (through v2.7) are both supported.** KAME auto-detects which model-streaming layer your A0 build uses and adapts — the rotation engine is identical on both. Nothing for you to configure.
+> **Agent Zero v1.x *and* the V2 line (through v2.8) are both supported.** Since v1.0.9 KAME does not re-implement Agent Zero's model call at all — it picks the key and lets Agent Zero make the call. That is why one build works across both majors, and why a new Agent Zero release is far less likely to break it. Verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8**. Nothing for you to configure.
 
 Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.0.8 — ACTIVE
+  🐢⚡ KAME v1.0.9 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -131,17 +131,19 @@ Look for this banner on startup:
   ✓ Hybrid Learning (Parsed retry-delay + ETA-driven sleep)
   ✓ Daily-Quota & Account-Limit Aware (multi-provider)
   ✓ Adaptive Backoff (provider-agnostic safety net)
-  ✓ Agent Zero V2.1 Aware (unified_turn + free-tier cache-safe)
+  ✓ Agent Zero V2.1+ Aware (turn-based calls + free-tier cache-safe)
   ✓ Rate Limiter Lock Fix
   ✓ Token Callback Support
   ✓ Friendly Error Reporting (real status + kind)
+  ✓ Delegated Execution (Agent Zero makes the call, KAME picks the key)
+  ✓ Bound to Agent Zero's model layer by shape: unified_turn, unified_call
   Note: keys are shown as anonymized ids (e.g. 'k3f9a1') — NOT your real keys.
 =======================================================
 ```
 
 ---
 
-## 🛡️ The 13 Shields
+## 🛡️ The 14 Shields
 
 | # | Shield | What it gives you |
 |---|---|---|
@@ -158,6 +160,7 @@ Look for this banner on startup:
 | 11 | 📈 **Adaptive Backoff** | Provider-agnostic safety net: if the same key keeps hitting rate limits, its cooldown escalates (20s → 40s → 80s … up to the ceiling) and resets on the first success. |
 | 12 | 🔒 **Rate Limiter Deadlock Fix** | Replaces A0's `asyncio.Lock` with `threading.Lock`, eliminating an async deadlock under specific concurrency patterns. |
 | 13 | 🧹 **Clean Uninstall** | `hooks.py::uninstall()` reverts every monkey-patch. Drop the folder and KAME is gone — no leftover state. |
+| 14 | 🤝 **Delegated Execution** | *(new in v1.0.9)* KAME picks the key — **Agent Zero makes the call itself.** KAME no longer builds the request, parses the stream or constructs the result, so an Agent Zero update changes A0's own code path instead of a stale copy of it living inside the plugin. It also binds to A0's model layer **by signature, not by name**, and if a future Agent Zero ever moves out from under it, KAME prints one line and steps aside — your agent keeps running. |
 
 ---
 
@@ -249,7 +252,7 @@ No. A0 hot-reloads plugins: dropping KAME into your plugins folder (or toggling 
 </details>
 
 <details>
-<summary><b>Does KAME work on the new Agent Zero V2 line (V2 / V2.1 / v2.7)?</b></summary>
+<summary><b>Does KAME work on the new Agent Zero V2 line (V2 / V2.1 / v2.7 / v2.8)?</b></summary>
 
 Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made three changes that KAME 1.0.3 didn't survive; 1.0.4 handles all of them:
 
@@ -257,7 +260,7 @@ Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made
 2. **The model entry point split** — V2.1's agent monologue calls `unified_turn`, not `unified_call`. 1.0.3 patched only `unified_call`, so rotation never engaged on V2.1. 1.0.4 wraps `unified_turn` too.
 3. **Free-tier prompt caching** — V2.1 tries to cache big prompts, but free-tier keys have zero cache storage and 429 on it. 1.0.4 disables caching for its calls.
 
-Behavior on A0 v1.x is unchanged. Every A0 release since has been re-audited against the same four patch points; **v2.7 is verified green** as of v1.0.8. If you're on the V2 line, just install the latest KAME.
+Behavior on A0 v1.x is unchanged. **v1.0.9 went further and removed the reason those breakages were possible**: KAME no longer parses A0's stream or rebuilds its result — it chooses the key and hands the call to Agent Zero. It also finds A0's model methods *by signature* rather than by name, so an upstream rename no longer disables rotation. Verified green end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8**. If you're on the V2 line, just install the latest KAME.
 </details>
 
 <details>
@@ -398,7 +401,7 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green against v2.7** (2026-07-30). KAME auto-detects which is installed and adapts. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
+- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8** (2026-08-09). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **No new dependencies** — uses stdlib only on top of what A0 already ships
@@ -413,10 +416,18 @@ python tools/a0_upgrade_check.py /path/to/agent-zero    # the real audit
 ```
 
 It does three things: asks GitHub for A0's newest tag, **fingerprints the source of
-all 14 A0 symbols KAME patches or depends on** and diffs them against the pinned
+all 11 A0 symbols KAME patches or depends on** and diffs them against the pinned
 baseline in `a0_compat.json`, then runs the live harness that applies KAME's real
-patches to the real classes. Exit `0` = compatible. Exit `1` = it names the exact
-function that changed and *why KAME cares about it* — no hunting through A0's tree.
+patches to the real classes *and drives a real key rotation through them*. Exit `0` =
+compatible. Exit `1` = it names the exact function that changed and *why KAME cares
+about it* — no hunting through A0's tree.
+
+That list used to be 14. v1.0.9 delegated the model call back to Agent Zero, which
+retired the stream parser, the chunk accumulator, the transport parser and the result
+builder from KAME's compatibility surface entirely. Each remaining symbol also
+carries a **severity**, so the output tells you whether you are looking at "rotation
+is down" or "one shield is down" — or at `adaptive`, which means KAME absorbs that
+change on its own and the flag is informational.
 
 Full patch-point map, the endpoint cheat-sheet and the step-by-step upgrade runbook
 live in **[COMPATIBILITY.md](COMPATIBILITY.md)**.
@@ -429,6 +440,7 @@ KAME has been in development since early 2026, learning from real production log
 
 | Version | Focus | Key insight |
 |---|---|---|
+| **v1.0.9** | **Future-proofing: KAME stops re-implementing Agent Zero** | The plugin's real fragility was never the rotation logic — it was that KAME had reimplemented A0's model call inside itself (build the request, call `litellm.acompletion`, parse every stream chunk, accumulate, construct the result). That copy went stale on every A0 release, and keeping it in sync was manual work each time. v1.0.9 inverts it: **KAME only chooses the key**, injects it as `api_key=`, and calls *Agent Zero's own* method — A0 owns the request, the stream, the parsing and the result, which is returned untouched. Five upstream symbols and `litellm` itself left KAME's dependency surface (watch list 14 → 11), so A0 is now free to rewrite its model layer without breaking the plugin. On top of that: entry points are found **by signature shape**, so an upstream *rename* is survivable; A0's own internal retry loop is switched off per call by reading its knob names out of A0's source at runtime (a rename there is picked up automatically too); activation moved from one silent single point of failure to **three independent doors**; and if a future A0 ever moves out from under all of it, KAME prints one honest line and steps aside instead of breaking the agent. Live-verified end to end — real classes, real rotation — on **v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8**, one code path for all six. No new settings, no new dependencies, no notifications, and rotation behaves exactly as before. |
 | **v1.0.8** | Honors A0's early-stop contract, quarantines denied keys + verified on Agent Zero v2.7 | **(1)** Since Agent Zero V2 the streamed response callback *returns* the accumulated text as soon as a complete tool request has been streamed, and native A0 breaks the stream there. KAME owned the stream but discarded that return value, so the model kept generating past every finished tool call — wasted output tokens and latency on each turn, plus trailing junk after the tool JSON. v1.0.8 breaks the stream exactly like native A0, and a blank early stop is no longer mistaken for an empty stream. **(2)** A `403 PERMISSION_DENIED` (suspended project / API not enabled / model not authorized for that key) is permanent, not a 20s blip — it used to land in the generic 20s bucket, so a dead key came back to the front of the carousel three times a minute and burned a round trip on nearly every turn. It is now quarantined for the daily cooldown, per `provider:model`, and always logged. **(3)** The cosmetic emoji banner can no longer make `apply_kame_patch()` report "Patch Failed" on a non-UTF-8 Windows console. Also: the v1.0.7 `KeyError` claim is corrected (A0 v2.6+ fixed it upstream — the wrong-key salvage is the part that still pays off), and a new `tests/test_a0_compat.py` runs KAME's patches against a real Agent Zero checkout. Rotation engine otherwise unchanged. |
 | **v1.0.7** | Response Shield — heals empty/wrong-key response-tool args | A model (seen with Codex-style models) can emit the `response` tool with empty, null, or wrongly-keyed arguments. On Agent Zero up to v2.5 that crashed the turn with `KeyError: 'message'`; A0 v2.6+ turned it into a repair request instead. The KAME Shield extension guarantees a usable argument either way: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved instead of costing a repair round-trip; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
 | **v1.0.6** | Faster failover + verifiable quota logs + gentler empty-stream + visible invalid keys | **(1)** Near-instant key failover — dropped the fixed 50ms inter-rotation delay for a zero-delay event-loop yield (saved ~750ms per 15-key storm). **(2)** Every quota failure line now shows the provider's own quota tag inline (`[quota: PerDay]` / `[quota: PerMinute]`) so daily/per-minute classification is verifiable at `normal` level. **(3)** One transient empty stream no longer cools a healthy key — it gets an un-penalized retry; only a 2nd empty from the same key rests it. **(4)** An invalid/expired key is now always shown, even at `silent` log level (previously silenced — contradicted the documented promise). **(5)** That message now shows enough of the key (first 10 + last 4 chars) to actually find it in your provider console, instead of a useless anonymized hash. Daily-quota cooldown stays exactly the configured interval (no jitter); cooldowns still never shorten. |
@@ -554,7 +566,7 @@ If KAME made your agent less frustrating, drop a star ⭐ — it costs you nothi
 
 <div align="center">
 
-🐢⚡ **KAME v1.0.8** — *because round-robin was never enough*
+🐢⚡ **KAME v1.0.9** — *because round-robin was never enough*
 
 **Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
 

@@ -1,110 +1,106 @@
 {
-  "kame_version": "1.0.8",
-  "verified_against": "v2.7",
-  "verified_on": "2026-07-30",
+  "kame_version": "1.0.9",
+  "verified_against": "v2.8",
+  "verified_on": "2026-08-09",
   "a0_repo": "https://github.com/agent0ai/agent-zero",
   "supported_range": "Agent Zero v1.14+ and the whole V2 line",
-  "note": "Baseline for tools/a0_upgrade_check.py. `fingerprints` are whitespace- and comment-insensitive hashes of each watched symbol's source in the verified Agent Zero tag. Re-pin ONLY through `--update-baseline`, and only after a clean audit.",
+  "verified_versions": ["v1.14", "v1.20", "v2.1", "v2.4", "v2.7", "v2.8"],
+  "note": "Baseline for tools/a0_upgrade_check.py. `fingerprints` are whitespace- and comment-insensitive hashes of each watched symbol's source in the verified Agent Zero tag. Re-pin ONLY through `--update-baseline`, and only after a clean audit. v1.0.9 shrank this list: KAME now delegates the model call to Agent Zero instead of re-implementing it, so the stream parser, the chunk accumulator, the transport parser, the result builder and litellm itself left KAME's compatibility surface entirely.",
+  "severity_legend": {
+    "critical": "if this breaks, KAME does not rotate at all",
+    "degraded": "if this breaks, ONE shield stops; rotation keeps working",
+    "adaptive": "KAME handles a change here automatically - the fingerprint is informational"
+  },
   "watch": [
     {
       "id": "models.LiteLLMChatWrapper.unified_call",
       "module": "models",
       "symbol": "LiteLLMChatWrapper.unified_call",
-      "why": "KAME monkey-patches this. Signature and return shape (response, reasoning) must match, and the streaming callback contract lives here."
+      "severity": "adaptive",
+      "why": "KAME wraps this and calls it back. Since v1.0.9 it is found BY SHAPE (a coroutine taking messages + response/reasoning/tokens callbacks), so a RENAME is survivable and the body may change freely - KAME never parses what it returns. What still matters: it must keep accepting `api_key` through **kwargs, and keep at least those four parameter names."
     },
     {
       "id": "models.LiteLLMChatWrapper.unified_turn",
       "module": "models",
       "symbol": "LiteLLMChatWrapper.unified_turn",
-      "why": "KAME monkey-patches this too (A0 V2.1+ monologue calls it, not unified_call). Must keep returning an LLMResult."
-    },
-    {
-      "id": "models.ChatGenerationResult",
-      "module": "models",
-      "symbol": "ChatGenerationResult",
-      "why": "KAME accumulates the stream with it. Needs .add_chunk(parsed) -> {response_delta, reasoning_delta} plus .response / .reasoning."
-    },
-    {
-      "id": "helpers.litellm_transport.ChatCompletionsTransport.parse",
-      "module": "helpers.litellm_transport",
-      "symbol": "ChatCompletionsTransport.parse",
-      "why": "KAME's A0-V2 chunk parser. If it stops being a stateless staticmethod (v2.7 added a stateful ChatCompletionsStreamParser), KAME must switch parsers."
-    },
-    {
-      "id": "helpers.llm_result.LLMResult.from_chat",
-      "module": "helpers.llm_result",
-      "symbol": "LLMResult.from_chat",
-      "why": "_kame_unified_turn builds its return value with it. KAME passes keyword-only args, so ADDED params are safe; a RENAMED or REQUIRED new param breaks the turn path."
-    },
-    {
-      "id": "helpers.history.Topic.summarize_messages",
-      "module": "helpers.history",
-      "symbol": "Topic.summarize_messages",
-      "why": "KAME monkey-patches this for the compression timeout guard."
-    },
-    {
-      "id": "helpers.history.Bulk.summarize",
-      "module": "helpers.history",
-      "symbol": "Bulk.summarize",
-      "why": "KAME monkey-patches this for the compression timeout guard."
-    },
-    {
-      "id": "helpers.rate_limiter.RateLimiter",
-      "module": "helpers.rate_limiter",
-      "symbol": "RateLimiter",
-      "why": "KAME swaps its asyncio.Lock for a threading.Lock and replaces cleanup/get_total. Depends on ._lock, .values and .timeframe."
-    },
-    {
-      "id": "agent.Agent.monologue",
-      "module": "agent",
-      "symbol": "Agent.monologue",
-      "why": "KAME ships an extension at _functions/agent/Agent/monologue/start (it stashes the agent for intervention handling). The @extensible-derived path is built from this module+qualname - if either moves, KAME's extension folder silently stops firing. It is also where the stream callback's early-stop return value is defined."
-    },
-    {
-      "id": "agent.Agent.validate_tool_request",
-      "module": "agent",
-      "symbol": "Agent.validate_tool_request",
-      "why": "KAME Shield's arg healer ships at _functions/agent/Agent/validate_tool_request/start. Same folder-path fragility as monologue."
-    },
-    {
-      "id": "agent.Agent.handle_intervention",
-      "module": "agent",
-      "symbol": "Agent.handle_intervention",
-      "why": "_kame_honor_intervention() calls it between rotations and during cooling sleeps so a nudge is never slept through."
-    },
-    {
-      "id": "tools.response.ResponseTool.execute",
-      "module": "tools.response",
-      "symbol": "ResponseTool.execute",
-      "why": "The arg shape KAME Shield heals into. Which keys it reads (text / message) decides whether the salvage still lands."
+      "severity": "adaptive",
+      "why": "Same contract as unified_call (A0 V2.1+ routes the monologue here). Its return value is passed straight back to A0's caller, so its type may change freely; KAME only reads .response / .reasoning to detect a fully empty answer, and tolerates their absence."
     },
     {
       "id": "helpers.dotenv.get_dotenv_value",
       "module": "helpers.dotenv",
       "symbol": "get_dotenv_value",
-      "why": "_get_all_api_keys reads API_KEY_<PROVIDER> / <PROVIDER>_API_KEY / <PROVIDER>_API_TOKEN through it. No keys found = no rotation at all."
+      "severity": "critical",
+      "why": "_get_all_api_keys reads API_KEY_<PROVIDER> / <PROVIDER>_API_KEY / <PROVIDER>_API_TOKEN through it. No keys found = no rotation at all, on every provider."
+    },
+    {
+      "id": "agent.Agent.monologue",
+      "module": "agent",
+      "symbol": "Agent.monologue",
+      "severity": "degraded",
+      "why": "KAME ships an activation extension at the @extensible-derived path _functions/agent/Agent/monologue/start. Since v1.0.9 this is no longer the only door: activation also ships at the NAMED points agent_init and monologue_start, so losing this path costs nothing as long as agent.py still calls those."
+    },
+    {
+      "id": "agent.Agent.handle_intervention",
+      "module": "agent",
+      "symbol": "Agent.handle_intervention",
+      "severity": "degraded",
+      "why": "_kame_honor_intervention() calls it between rotations and during cooling sleeps so a user nudge is never slept through. If it moves, a nudge during a long outage waits for the next A0-side callback instead."
+    },
+    {
+      "id": "agent.Agent.validate_tool_request",
+      "module": "agent",
+      "symbol": "Agent.validate_tool_request",
+      "severity": "degraded",
+      "why": "KAME Shield's tool-arg healer ships at _functions/agent/Agent/validate_tool_request/start. Derived-path fragility: if it moves, the healer stops firing and a malformed tool call is no longer salvaged."
+    },
+    {
+      "id": "tools.response.ResponseTool.execute",
+      "module": "tools.response",
+      "symbol": "ResponseTool.execute",
+      "severity": "degraded",
+      "why": "The arg shape KAME Shield heals into. Which keys it reads (text / message) decides whether the salvage still lands."
+    },
+    {
+      "id": "helpers.history.Topic.summarize_messages",
+      "module": "helpers.history",
+      "symbol": "Topic.summarize_messages",
+      "severity": "degraded",
+      "why": "KAME monkey-patches this for the compression timeout guard (it tags compression calls so the carousel can prefer fresh keys). Wrapped in its own try since v1.0.9 - a failure here can no longer stop rotation from installing."
+    },
+    {
+      "id": "helpers.history.Bulk.summarize",
+      "module": "helpers.history",
+      "symbol": "Bulk.summarize",
+      "severity": "degraded",
+      "why": "Same as Topic.summarize_messages, for bulk compression."
+    },
+    {
+      "id": "helpers.rate_limiter.RateLimiter",
+      "module": "helpers.rate_limiter",
+      "symbol": "RateLimiter",
+      "severity": "degraded",
+      "why": "KAME swaps its asyncio.Lock for a threading.Lock and replaces cleanup/get_total. Depends on ._lock, .values and .timeframe. Isolated since v1.0.9."
     },
     {
       "id": "helpers.errors.RepairableException",
       "module": "helpers.errors",
       "symbol": "RepairableException",
-      "why": "In KAME's passthrough tuple - it must reach A0's repair loop, never be swallowed as a failed API call."
+      "severity": "degraded",
+      "why": "In KAME's passthrough tuple - it must reach A0's repair loop, never be swallowed as a failed API call. If the import fails KAME degrades to an empty passthrough tuple rather than crashing."
     }
   ],
   "fingerprints": {
     "models.LiteLLMChatWrapper.unified_call": "48fd6a946bc195cc",
     "models.LiteLLMChatWrapper.unified_turn": "581aba9d8ba8468f",
-    "models.ChatGenerationResult": "62c5039a91393070",
-    "helpers.litellm_transport.ChatCompletionsTransport.parse": "7bba12dcf4ea45af",
-    "helpers.llm_result.LLMResult.from_chat": "2ed6518eb668e7bf",
+    "helpers.dotenv.get_dotenv_value": "8f4d212eafa43d98",
+    "agent.Agent.monologue": "bcebd84ab33c1e8c",
+    "agent.Agent.handle_intervention": "0b0c89d6d4d8cf0e",
+    "agent.Agent.validate_tool_request": "eec26b2b8e65967a",
+    "tools.response.ResponseTool.execute": "fd79aba7eb42abec",
     "helpers.history.Topic.summarize_messages": "038a86ccf0e0f9e8",
     "helpers.history.Bulk.summarize": "f09b763d8a201915",
     "helpers.rate_limiter.RateLimiter": "debd59b4e743b93b",
-    "agent.Agent.monologue": "bcebd84ab33c1e8c",
-    "agent.Agent.validate_tool_request": "eec26b2b8e65967a",
-    "agent.Agent.handle_intervention": "0b0c89d6d4d8cf0e",
-    "tools.response.ResponseTool.execute": "fd79aba7eb42abec",
-    "helpers.dotenv.get_dotenv_value": "8f4d212eafa43d98",
     "helpers.errors.RepairableException": "8a331b4c4b1d03ba"
   }
 }

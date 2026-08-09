@@ -1,25 +1,21 @@
-"""v1.0.8 — honor A0's early-stop contract on the streamed response callback.
+"""v1.0.8 — early-stop contract + 403 quarantine, updated for v1.0.9.
 
 Since Agent Zero V2, `Agent.monologue`'s stream callback RETURNS the accumulated
 text as soon as a complete, valid tool request has been streamed; native
 `unified_call` / `unified_turn` then break the stream and use that text
-(`stop_response`). KAME owns the stream, so it has to honor the same contract.
-Before v1.0.8 it awaited the callback and threw the return value away, so the
-model kept generating past a finished tool call on every turn.
+(`stop_response`). Before v1.0.8 KAME owned the stream, awaited the callback and
+threw the return value away, so the model kept generating past a finished tool
+call on every turn.
 
-These tests verify, with stubs (no real A0/litellm):
-  A. a non-None callback return stops the stream immediately (remaining chunks
-     are never pulled from the provider).
-  B. the returned text becomes the result (trailing junk after the tool JSON is
-     dropped, exactly like native A0).
-  C. a callback returning None (A0 v1.x, and V2 mid-response) changes nothing —
-     the whole stream is consumed.
-  D. an early stop with BLANK text is not mistaken for an empty stream: the key
-     is not penalized and KAME does not rotate.
+v1.0.9 hands the stream back to Agent Zero, so honoring the contract is once
+again A0's own code doing it. KAME's remaining duty is to be TRANSPARENT: the
+caller's callback must reach A0 unchanged, its return value must reach A0
+unchanged, and a blank early stop must not be mistaken for a dead key. That is
+what groups A-E assert now (the behavior under test is identical; only who
+implements it changed).
 
-Also covers the second v1.0.8 fix — 403 PERMISSION_DENIED quarantine (group F).
-A denied key/project is permanent, not a 20s blip; before the fix it fell into
-the generic 20s `other` bucket and was re-probed three times a minute forever.
+Group F (403 PERMISSION_DENIED quarantine) and group G (the cosmetic banner can
+never fail the patch) are unchanged from v1.0.8 — both are still KAME's own.
 """
 import sys, types, os, asyncio
 
@@ -30,10 +26,6 @@ def _stub(name):
     return m
 
 
-_stub("openai")
-_litellm = _stub("litellm")
-_litellm.suppress_debug_info = False
-_litellm.acompletion = lambda *a, **k: None
 _stub("langchain_core")
 _lc = _stub("langchain_core.messages")
 
@@ -65,46 +57,10 @@ _errs = _stub("helpers.errors")
 for _n in ("InterventionException", "RepairableException", "HandledException"):
     setattr(_errs, _n, type(_n, (Exception,), {}))
 
-_models = _stub("models")
-_models.turn_off_logging = lambda: None
-_models.approximate_tokens = lambda s: len(s or "")
-
-
-class _CGR:
-    def __init__(self):
-        self.response = ""
-        self.reasoning = ""
-
-    def add_chunk(self, parsed):
-        self.response += parsed.get("response_delta", "")
-        self.reasoning += parsed.get("reasoning_delta", "")
-        return parsed
-
-    def output(self):
-        return {"response_delta": self.response, "reasoning_delta": self.reasoning}
-
-
-_models.ChatGenerationResult = _CGR
-
-
-class _LLMResult:
-    def __init__(self, response="", reasoning=""):
-        self.response = response
-        self.reasoning = reasoning
-
-    @classmethod
-    def from_chat(cls, *, response="", reasoning="", input_items=None,
-                  output_items=None, provider_model_key="", capability=None):
-        return cls(response=response, reasoning=reasoning)
-
-
-_models.LLMResult = _LLMResult
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import kame_engine as K  # noqa: E402
 
-K._KAME_CHUNK_MODE = "v2"
-K._KAME_PARSE_CHUNK = lambda raw: {"reasoning_delta": "", "response_delta": str(raw)}
+K.set_log_level("silent")
 
 _failures = []
 
@@ -119,61 +75,63 @@ class _Conf:
     provider = "gemini"
 
 
-class FW:
+class A0Model:
+    """Agent Zero's model, honoring the early-stop contract in its OWN code —
+    exactly as native A0 does since V2."""
     model_name = "gemini/gemini-3.5-flash"
-    a0_model_conf = _Conf()
-    kwargs = {}
 
-    def _convert_messages(self, msgs, explicit_caching=False):
-        return [{"role": "user", "content": "hi"}]
+    def __init__(self, chunks):
+        self.a0_model_conf = _Conf()
+        self.kwargs = {}
+        self.chunks = list(chunks)
+        self.pulled = 0
+        self.calls = 0
 
-
-class _Stream:
-    """Async iterator that records how many chunks were actually pulled."""
-
-    def __init__(self, items, counter):
-        self._i = list(items)
-        self._counter = counter
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._i:
-            raise StopAsyncIteration
-        self._counter["pulled"] += 1
-        return self._i.pop(0)
-
-
-def _run(chunks, callback, **extra):
-    """Run one clean carousel call over `chunks`, returning (result, counter)."""
-    K._KAME_KEY_HEALTH = {}
-    K._get_all_api_keys = lambda self: ["AAA", "BBB"]
-    counter = {"pulled": 0, "calls": 0}
-
-    async def _acomp(model=None, messages=None, **kw):
-        counter["calls"] += 1
-        return _Stream(chunks, counter)
-
-    K.acompletion = _acomp
-    res = asyncio.run(K._kame_unified_call(
-        FW(), messages=[_Msg("hi")], response_callback=callback, **extra))
-    return res, counter
+    async def unified_call(self, system_message="", user_message="", messages=None,
+                           response_callback=None, reasoning_callback=None,
+                           tokens_callback=None, rate_limiter_callback=None,
+                           explicit_caching=False, **kwargs):
+        kwargs.pop("a0_retry_attempts", None)
+        kwargs.pop("a0_retry_delay_seconds", None)
+        self.calls += 1
+        result, stop_response = "", None
+        for c in self.chunks:
+            self.pulled += 1
+            result += c
+            if response_callback:
+                stop_response = await response_callback(c, result)
+            if tokens_callback:
+                await tokens_callback(c, len(c))
+            if stop_response is not None:
+                result = stop_response          # A0's own early-stop handling
+                break
+        return (result, "")
 
 
 TOOL_JSON = '{"tool_name": "response", "tool_args": {"text": "done"}}'
 CHUNKS = [TOOL_JSON, " TRAILING", " JUNK"]
 
 
-# --- A + B: a non-None return stops the stream and becomes the result --------
+def _run(chunks, callback, **extra):
+    """Run one clean carousel call over `chunks`, returning (result, model)."""
+    K._KAME_KEY_HEALTH = {}
+    K._get_all_api_keys = lambda self: ["AAA", "BBB"]
+    model = A0Model(chunks)
+    wrapper = K._kame_make_entry_wrapper("unified_call", A0Model.unified_call)
+    res = asyncio.run(wrapper(model, messages=[_Msg("hi")],
+                              response_callback=callback, **extra))
+    return res, model
+
+
+# --- A + B: the early-stop return value reaches A0 and stops the stream ------
 async def _cb_stop(delta, full):
     # mimics A0 V2 Agent.monologue: return the full text once the tool JSON closes
     return full if full.endswith("}}") else None
 
 
-res_ab, cnt_ab = _run(CHUNKS, _cb_stop)
-check("early stop halts the stream (trailing chunks never pulled)", cnt_ab["pulled"] == 1)
-check("early stop does not trigger a key rotation (single provider call)", cnt_ab["calls"] == 1)
+res_ab, m_ab = _run(CHUNKS, _cb_stop)
+check("early stop halts the stream (trailing chunks never pulled)", m_ab.pulled == 1)
+check("early stop does not trigger a key rotation (single provider call)", m_ab.calls == 1)
 check("returned text becomes the result (trailing junk dropped)", res_ab[0] == TOOL_JSON)
 
 
@@ -182,9 +140,9 @@ async def _cb_none(delta, full):
     return None
 
 
-res_c, cnt_c = _run(CHUNKS, _cb_none)
+res_c, m_c = _run(CHUNKS, _cb_none)
 check("callback returning None consumes the whole stream (A0 v1.x behavior)",
-      cnt_c["pulled"] == len(CHUNKS))
+      m_c.pulled == len(CHUNKS))
 check("full accumulated text returned when no early stop",
       res_c[0] == "".join(CHUNKS))
 
@@ -194,8 +152,8 @@ async def _cb_blank(delta, full):
     return ""
 
 
-res_d, cnt_d = _run(CHUNKS, _cb_blank)
-check("blank early stop is honored, not treated as an empty stream", cnt_d["calls"] == 1)
+res_d, m_d = _run(CHUNKS, _cb_blank)
+check("blank early stop is honored, not treated as an empty stream", m_d.calls == 1)
 check("blank early stop returns the blank text", res_d[0] == "")
 check("blank early stop leaves the key un-penalized",
       all(not v.get("keys", {}) or all(k.get("sick_until", 0) == 0 for k in v["keys"].values())
@@ -203,15 +161,15 @@ check("blank early stop leaves the key un-penalized",
 
 
 # --- E: streaming with NO response_callback (e.g. a tokens-only utility call).
-# KAME streams whenever any callback is set; the early-stop branch must not fire
-# or crash when response_callback itself is None.
+# A0 must still see tokens_callback set (so it streams) and response_callback
+# None (so its early-stop branch is skipped) — KAME's shims must not invent one.
 async def _tok(delta, n):
     return None
 
 
-res_e, cnt_e = _run(CHUNKS, None, tokens_callback=_tok)
+res_e, m_e = _run(CHUNKS, None, tokens_callback=_tok)
 check("streaming without a response_callback consumes the whole stream",
-      cnt_e["pulled"] == len(CHUNKS))
+      m_e.pulled == len(CHUNKS))
 check("streaming without a response_callback returns the full text",
       res_e[0] == "".join(CHUNKS))
 

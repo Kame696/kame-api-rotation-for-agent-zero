@@ -185,12 +185,17 @@ K._KAME_KEY_LOG_STYLE = "fingerprint"  # restore default
 check("a short key (<=16 chars) is shown in full (nothing to usefully hide)",
       K._key_display_auth("shortkey123") == "shortkey123")
 
-# Structural: the two auth-warning call sites no longer gate on _lvl_normal()
+# Structural: the auth-warning call site no longer gates on _lvl_normal()
 # (previously `if _lvl_normal():` wrapped the auth PrintStyle.warning call,
 # making it invisible in 'silent' mode — removed so it always fires).
+#
+# v1.0.9 note: there used to be TWO such call sites, because KAME owned the
+# stream and had to mirror the auth handling inside its own chunk loop. Agent
+# Zero owns the stream now, so a connect-time auth error simply raises out of
+# the delegated call and lands in the ONE outer handler. One call site, one check.
 _src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"), encoding="utf-8").read()
-check("no 'if _lvl_normal():' gate right after the stream-side auth check",
-      "if _lvl_normal():" not in _src.split("_is_auth_error(stream_err)")[1][:400])
+check("there is exactly ONE carousel auth-error call site left (stream handler is gone)",
+      _src.count("_is_auth_error(") == 3)  # def + _classify_error + the carousel
 check("no 'if _lvl_normal():' gate right after the outer auth check",
       "if _lvl_normal():" not in _src.split("_is_auth_error(e):")[1][:400])
 
