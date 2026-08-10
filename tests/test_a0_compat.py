@@ -21,7 +21,7 @@ it. Exits 0 and prints SKIPPED when no A0 path is given.
 
 Verified green against Agent Zero v2.8.
 """
-import sys, types, os, importlib.util, inspect, asyncio
+import sys, types, os, re, importlib.util, inspect, asyncio
 
 _A0 = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("A0_PATH", "")).strip()
 if not _A0 or not os.path.isdir(_A0):
@@ -206,6 +206,97 @@ try:
     check("LIVE: with no keys KAME injects nothing", _seen_keys == [None], str(_seen_keys))
 except Exception as e:  # noqa: BLE001
     check("LIVE: with no keys the call still works (native passthrough)", False, repr(e))
+
+# =============================================================================
+# LIVE 3 — OAuth / subscription providers must be left ALONE (v1.0.9)
+# =============================================================================
+# A0 v2.x ships plugins/_oauth: providers that authenticate by SUBSCRIPTION
+# (OpenAI Codex, GitHub Copilot, ...) instead of by API key. A0 marks them by
+# handing get_api_key() a sentinel string. KAME injects api_key=<chosen> and
+# CALLER KWARGS WIN, so if KAME ever picked a key for one of these it would
+# clobber the subscription auth and the user would just see auth errors.
+#
+# The check is DIFFERENTIAL on purpose: run the identical call with KAME
+# uninstalled, then installed, and compare what reaches litellm. That way the
+# test cannot pass (or fail) because of how this harness builds its wrapper —
+# only a real behavioral difference shows up. Providers are auto-discovered, so
+# a provider added upstream later is covered without touching this file.
+# Discovery is deliberately layout-insensitive: A0 has already moved this code
+# once (v1.14 keeps a Codex-only PROVIDERS set inside the get_api_key extension;
+# v1.20+ has a plugins/_oauth/helpers/providers/ package with a registry). Import
+# the modern path first, then fall back to reading the sentinel and the provider
+# ids straight out of whatever get_api_key extension this checkout ships.
+_oauth_ids, _oauth_sentinel = None, None
+try:
+    from plugins._oauth.helpers.providers.base import DUMMY_API_KEY as _oauth_sentinel
+    from plugins._oauth.helpers.providers.registry import oauth_provider_ids
+    _oauth_ids = sorted(oauth_provider_ids())
+except Exception:
+    try:
+        import glob as _glob
+        _hits = _glob.glob(os.path.join(
+            _A0, "plugins", "_oauth", "extensions", "python", "_functions",
+            "models", "get_api_key", "end", "*.py"))
+        _ids: set = set()
+        for _f in _hits:
+            _src = open(_f, encoding="utf-8").read()
+            _m = re.search(r"DUMMY_API_KEY\s*=\s*[\"']([^\"']+)[\"']", _src)
+            if _m:
+                _oauth_sentinel = _m.group(1)
+            _ids.update(re.findall(r"[\"']([a-z0-9_]+_oauth)[\"']", _src))
+        if _ids and _oauth_sentinel:
+            _oauth_ids = sorted(_ids)
+    except Exception:
+        pass  # No OAuth plugin at all - nothing to protect, nothing to check.
+
+if _oauth_ids:
+    print(f"      (OAuth providers found: {', '.join(_oauth_ids)})")
+
+    def _oauth_probe(provider_id):
+        """What api_key reaches litellm for this provider, right now?"""
+        _seen_keys.clear()
+        conf = models.ModelConfig(type=models.ModelType.CHAT, provider=provider_id,
+                                  name="oauth-model", api_key=_oauth_sentinel)
+        w = models.LiteLLMChatWrapper(model="oauth-model", provider=provider_id,
+                                      model_config=conf)
+        asyncio.run(models.LiteLLMChatWrapper.unified_call(
+            w, user_message="say hello", response_callback=_resp_cb,
+            a0_api_mode="chat_completions"))
+        return list(_seen_keys)
+
+    # A subscription user has no API_KEY_<PROVIDER> in the .env, so KAME must
+    # find nothing to rotate. Force that condition rather than trusting the
+    # machine this test happens to run on.
+    _real_all_keys = kame._get_all_api_keys
+    kame._get_all_api_keys = lambda self: []
+
+    for _pid in _oauth_ids:
+        try:
+            kame.remove_kame_patch()
+            _native = _oauth_probe(_pid)
+            kame.apply_kame_patch()
+            _with_kame = _oauth_probe(_pid)
+            check(f"LIVE: KAME changes nothing for OAuth provider '{_pid}'",
+                  _native == _with_kame, f"native={_native} kame={_with_kame}")
+            check(f"LIVE: KAME injects no key for OAuth provider '{_pid}'",
+                  all(k in (None, _oauth_sentinel) for k in _with_kame), str(_with_kame))
+        except Exception as e:  # noqa: BLE001
+            check(f"LIVE: KAME changes nothing for OAuth provider '{_pid}'", False, repr(e))
+
+    # Control: with a real pool KAME must STILL inject, or the checks above
+    # would pass simply because KAME had stopped working altogether.
+    kame._get_all_api_keys = lambda self: ["KEY-GOOD"]
+    try:
+        _ctrl = _oauth_probe(_oauth_ids[0])
+        check("LIVE: control - KAME does still inject when keys DO exist",
+              _ctrl == ["KEY-GOOD"], str(_ctrl))
+    except Exception as e:  # noqa: BLE001
+        check("LIVE: control - KAME does still inject when keys DO exist", False, repr(e))
+
+    kame._get_all_api_keys = _real_all_keys
+    # LIVE 3 toggled the patch; make sure it is on for the revert checks below.
+    if models.LiteLLMChatWrapper.unified_call is orig_call:
+        kame.apply_kame_patch()
 
 setattr(_net_module, "acompletion", _real_acompletion)
 

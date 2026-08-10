@@ -228,6 +228,45 @@ Do **not** re-add these to the watch list. They are gone from KAME's source, and
 
 ---
 
+## 4.1 OAuth / subscription providers (Codex, Copilot, …) — no interaction
+
+Agent Zero ships `plugins/_oauth`, whose providers authenticate by **subscription
+instead of by API key**: OpenAI Codex, GitHub Copilot, Gemini API and xAI Grok on
+v1.20+; Codex alone on v1.14. A0 marks such a model by letting its `get_api_key`
+extension return the sentinel string `"oauth"`.
+
+This matters because KAME injects `api_key=<chosen>` and **caller kwargs win**
+(§5). If KAME ever picked a key for one of these, it would clobber the
+subscription auth and the user would just see auth failures.
+
+It does not, for a structural reason worth keeping:
+
+> KAME reads keys from the `.env` directly (`API_KEY_<PROVIDER>` via
+> `get_dotenv_value`). It **never calls `models.get_api_key`** — which is exactly
+> the function the OAuth plugin hooks. The two never meet.
+
+A subscription user has no `API_KEY_CODEX_OAUTH` in their `.env`, so KAME finds an
+empty pool and takes the passthrough branch in `_kame_entry`: A0's original method
+is called unchanged, as if KAME were not installed. If a user *does* set explicit
+keys for such a provider, those keys are honoured — they asked for rotation.
+
+**This is guarded behaviorally, not by fingerprint.** None of the OAuth symbols are
+in `a0_compat.json`'s watch list, because KAME depends on none of them; a
+fingerprint there would only produce false alarms. Instead the `LIVE 3` block in
+`tests/test_a0_compat.py` runs the identical call **twice against the real
+checkout — once with KAME uninstalled, once installed — and fails if what reaches
+litellm differs**. Differential by design: it cannot pass because of how the test
+builds its wrapper, only because behavior genuinely matches. Providers are
+auto-discovered from the checkout (registry on v1.20+, falling back to parsing the
+`get_api_key` extension on v1.14), so a provider added upstream later is covered
+without editing the test. A control assertion in the same block proves KAME still
+*does* inject when keys exist, so the checks cannot pass by KAME being inert.
+
+Verified green on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8. Mutation-tested:
+disabling the empty-pool passthrough guard makes every one of these fail.
+
+---
+
 ## 5. Where to look in the A0 tree — the endpoint / behavior cheat-sheet
 
 Facts already traced from A0 v2.8 source. Re-verify rather than re-derive.

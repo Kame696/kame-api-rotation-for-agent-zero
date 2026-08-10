@@ -246,6 +246,18 @@ continue   # never fall through with a sick key
 ## ❓ FAQ
 
 <details>
+<summary><b>I sign in to Codex / Copilot with my subscription, not an API key. Does KAME break that?</b></summary>
+
+**No — KAME does not touch those models at all.**
+
+Agent Zero authenticates subscription providers (OpenAI Codex, GitHub Copilot, Gemini API, xAI Grok) through its own OAuth plugin, which supplies the credential via `models.get_api_key`. KAME never calls that function: it reads key pools straight from your `.env` (`API_KEY_<PROVIDER>`). Since a subscription model has no key pool there, KAME finds nothing to rotate and hands the call to Agent Zero **unchanged, exactly as if KAME were not installed**.
+
+You can mix freely — rotate a pool of Gemini keys *and* keep a Codex subscription model in the same Agent Zero. Each takes its own path.
+
+This is checked on every run of the compatibility harness, on every supported Agent Zero version, by comparing the same call with KAME uninstalled vs installed and requiring them to be identical.
+</details>
+
+<details>
 <summary><b>Do I need to restart Agent Zero after installing KAME?</b></summary>
 
 No. A0 hot-reloads plugins: dropping KAME into your plugins folder (or toggling it on) clears the plugin/extension caches, and KAME activates on the **next agent turn** — no container restart, no framework restart. The only prerequisite is having **multiple API keys** configured in A0's normal model settings — KAME never stores keys itself; it rotates the ones A0 already has.
@@ -401,9 +413,10 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8** (2026-08-09). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
+- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8** (2026-08-10). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
+- **Subscription / OAuth models are untouched** — Codex, GitHub Copilot, Gemini API and xAI Grok sign in through Agent Zero's own OAuth plugin, not with API keys. KAME finds no key pool for them and hands the call straight to Agent Zero, exactly as if the plugin were not installed. Verified every run, on every supported Agent Zero version. Details: [COMPATIBILITY.md §4.1](COMPATIBILITY.md)
 - **No new dependencies** — uses stdlib only on top of what A0 already ships
 
 ### Agent Zero just shipped a new version — is KAME still fine?

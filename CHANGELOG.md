@@ -118,6 +118,16 @@ three doors costs nothing. All three delegate to one new shared module,
 - **The upgrade checker reports severity.** `tools/a0_upgrade_check.py` now labels
   each flagged symbol `critical` / `degraded` / `adaptive`, so an expected change
   in an adaptive symbol no longer reads like a red flag.
+- **Subscription providers are left alone, and it is now proven every run.**
+  Agent Zero's `plugins/_oauth` providers — OpenAI Codex, GitHub Copilot, Gemini
+  API, xAI Grok — authenticate by subscription, not by API key. KAME never touches
+  them: it reads keys from the `.env` and never calls `models.get_api_key`, which
+  is where that plugin hooks in, so a subscription model takes KAME's passthrough
+  branch and reaches Agent Zero unchanged. That was already true; what is new is
+  that `tests/test_a0_compat.py` now *proves* it, differentially — the same call
+  runs with KAME uninstalled and installed and the two must agree. Providers are
+  auto-discovered from the checkout, so ones added upstream later are covered
+  automatically. See COMPATIBILITY.md §4.1.
 
 ### Verification
 
@@ -125,11 +135,22 @@ Live harness (real Agent Zero checkout, real `LiteLLMChatWrapper`, real transpor
 only the outermost network call faked) is **green on six Agent Zero versions
 spanning both majors**: **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8**. Each run includes
 a genuine end-to-end rotation: the first key gets a 429, KAME rotates, the second
-key answers, and the answer streams through to the caller's callback.
+key answers, and the answer streams through to the caller's callback — plus the
+OAuth non-interference block described above.
 
-Tests: `tests/test_v1_0_9.py` (62 checks — delegation contract, shape binding,
+Measured, not assumed: on a real A0 v2.8 stack a rotation off a 429 costs
+**0.77s and 2 network calls**. With KAME's retry-knob suppression removed — i.e.
+letting A0 retry the dead key first, as `a0_retry_attempts=2` /
+`a0_retry_delay_seconds=1.5` would — the same rotation costs **3.77s and 4 calls**.
+The OAuth block is mutation-tested: disabling KAME's empty-pool passthrough guard
+makes every one of its assertions fail.
+
+Tests: `tests/test_v1_0_9.py` (67 checks — delegation contract, shape binding,
 retry-knob extraction, empty-answer bounds, callback transparency, layer safety)
-+ `tests/test_a0_compat.py` (live) + every prior suite green. `test_v1_0_4.py`,
++ `tests/test_a0_compat.py` (57 live checks per Agent Zero version) + every prior
+suite green — **230 offline checks and 322 live ones across the six versions**
+(44 / 50 / 57 / 57 / 57 / 57; older Agent Zeros ship fewer OAuth providers to
+check, and v1.14 has no `unified_turn` to bind). `test_v1_0_4.py`,
 `test_v1_0_4_v21.py` and groups A-E of `test_v1_0_8.py` were retargeted at the new
 seam: they assert the same *behaviors*, against the code that now implements them.
 
