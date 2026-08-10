@@ -65,6 +65,10 @@ finds them **by signature**: a coroutine on the model class whose parameters
 include `messages`, `response_callback`, `reasoning_callback` and
 `tokens_callback`. If Agent Zero renames them tomorrow, KAME still binds.
 
+The scan walks the class's whole MRO, so a rename that *also* moves the method
+into a base class is caught too — the wrapper is installed on the model class
+itself, which correctly shadows the inherited one.
+
 Three layers, and the last one is deliberately safe:
 
 | Layer | What happened | Rotation |

@@ -314,6 +314,53 @@ check("B2 uninstall restores the renamed entry point exactly",
       RenamedA0.run_model_turn is _orig_renamed)
 
 
+class _FutureBase:
+    """A0 of the further future: the entry point was renamed AND moved into a base
+    class. `vars(cls)` alone would miss it and drop KAME to layer 3 - the exact
+    failure shape-detection exists to prevent."""
+    async def do_llm_turn(self, system_message="", user_message="", messages=None,
+                          response_callback=None, reasoning_callback=None,
+                          tokens_callback=None, rate_limiter_callback=None,
+                          explicit_caching=False, **kwargs):
+        return await FakeA0Model.unified_call(
+            self, system_message=system_message, user_message=user_message,
+            messages=messages, response_callback=response_callback,
+            reasoning_callback=reasoning_callback, tokens_callback=tokens_callback,
+            rate_limiter_callback=rate_limiter_callback,
+            explicit_caching=explicit_caching, **kwargs)
+
+
+class InheritedA0(_FutureBase):
+    """Defines nothing itself - everything is inherited."""
+    def __init__(self):
+        self.seen = []
+        self.script = []
+        self.model_name = "future/model"
+
+
+check("B2b an INHERITED renamed entry point is still found by shape",
+      "do_llm_turn" in K._kame_find_entry_points(InheritedA0))
+
+K._KAME_BOUND_ENTRY_POINTS = []
+_orig_inherited = InheritedA0.do_llm_turn
+layer = K._kame_bind_entry_points(InheritedA0)
+check("B2b binding an inherit-only build still reports layer 1", layer == 1)
+check("B2b the wrapper is installed on the SUBCLASS, shadowing the base",
+      "do_llm_turn" in vars(InheritedA0)
+      and _FutureBase.do_llm_turn is _orig_inherited)
+K._get_all_api_keys = lambda self: ["AAA", "BBB"]
+K._KAME_KEY_HEALTH = {}
+_im = InheritedA0()
+_im.script = [_ok(RESULT)]
+check("B2b rotation really runs through the inherited entry point",
+      asyncio.run(_im.do_llm_turn(messages=[_Msg("hi")])) is RESULT
+      and _im.seen[0]["api_key"] in ("AAA", "BBB"))
+K._kame_unbind_entry_points(InheritedA0)
+check("B2b uninstall leaves the base class untouched",
+      _FutureBase.do_llm_turn is _orig_inherited
+      and InheritedA0.do_llm_turn is _orig_inherited)
+
+
 class LegacyOnlyA0:
     """A0 whose signature changed so much that shape detection misses it, but
     whose method names are still the historical ones."""

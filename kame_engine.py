@@ -1492,28 +1492,39 @@ def _kame_find_entry_points(cls) -> list:
 
     Returns the attribute names, in declaration order. Empty list means "shape
     detection found nothing" and the caller falls back to the legacy names.
+
+    The scan walks the whole MRO, not just ``vars(cls)``. A rename alone is caught
+    either way, but a rename PLUS a move into a base class would otherwise slip
+    past shape detection and drop KAME to layer 3 — the exact scenario this
+    function exists to survive. Patching still happens on ``cls`` itself, which
+    correctly shadows the inherited method.
     """
     found = []
     try:
         import inspect as _inspect
-        for name, attr in list(vars(cls).items()):
-            if name.startswith("_") or name.startswith("_kame"):
+        seen = set()
+        for klass in getattr(cls, "__mro__", (cls,)):
+            if klass is object:
                 continue
-            target = _inspect.unwrap(attr) if callable(attr) else None
-            if target is None or not _inspect.iscoroutinefunction(target):
-                continue
-            try:
-                params = _inspect.signature(target).parameters
-            except Exception:
-                continue
-            # The distinguishing shape of an A0 model entry point.
-            if (
-                "messages" in params
-                and "response_callback" in params
-                and "reasoning_callback" in params
-                and "tokens_callback" in params
-            ):
-                found.append(name)
+            for name, attr in list(vars(klass).items()):
+                if name.startswith("_") or name in seen:
+                    continue
+                target = _inspect.unwrap(attr) if callable(attr) else None
+                if target is None or not _inspect.iscoroutinefunction(target):
+                    continue
+                try:
+                    params = _inspect.signature(target).parameters
+                except Exception:
+                    continue
+                # The distinguishing shape of an A0 model entry point.
+                if (
+                    "messages" in params
+                    and "response_callback" in params
+                    and "reasoning_callback" in params
+                    and "tokens_callback" in params
+                ):
+                    seen.add(name)
+                    found.append(name)
     except Exception:
         return []
     return found

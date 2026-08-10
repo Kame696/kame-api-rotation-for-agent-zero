@@ -32,15 +32,17 @@ Three consequences that matter when you audit a new A0:
    are now `adaptive` rather than `critical` — A0 may rewrite those function bodies
    freely.
 2. **The entry points are found by SHAPE, not by name.** `_kame_find_entry_points()`
-   looks for coroutine methods on `LiteLLMChatWrapper` whose signature contains
-   `messages`, `response_callback`, `reasoning_callback` and `tokens_callback`. An
-   upstream *rename* is survivable.
+   looks for coroutine methods anywhere in `LiteLLMChatWrapper`'s MRO whose
+   signature contains `messages`, `response_callback`, `reasoning_callback` and
+   `tokens_callback`. An upstream *rename* is survivable, including a rename that
+   also moves the method into a base class.
 3. **Failure is layered, and layer 3 is silent-safe.** See §3.1.
 
 What KAME still needs from A0's model layer is small and stable:
 
 - `LiteLLMChatWrapper` must exist in `models.py`,
-- at least one coroutine on it must take those four parameter names,
+- at least one coroutine on it (or on one of its base classes) must take those
+  four parameter names,
 - and it must keep forwarding unknown `**kwargs` (specifically `api_key`) down to
   litellm.
 
@@ -142,7 +144,7 @@ first that works:
 
 | Layer | How the entry point is found | Result |
 |---|---|---|
-| **1** | **By shape** — a coroutine on `LiteLLMChatWrapper` whose signature contains `messages`, `response_callback`, `reasoning_callback`, `tokens_callback` | Full rotation. Survives an upstream **rename**. |
+| **1** | **By shape** — a coroutine anywhere in `LiteLLMChatWrapper`'s MRO whose signature contains `messages`, `response_callback`, `reasoning_callback`, `tokens_callback` | Full rotation. Survives an upstream **rename**, and a rename plus a move into a base class. The wrapper is installed on `LiteLLMChatWrapper` itself, shadowing the inherited method. |
 | **2** | **By legacy name** — `unified_turn`, then `unified_call` | Full rotation. The fallback if A0 changes those parameter names but keeps the methods. |
 | **3** | **Nothing is wrapped** | KAME prints **one** honest console line and gets out of the way. Agent Zero runs natively — no crash, no exception, no half-patched state. |
 
