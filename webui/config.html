@@ -80,6 +80,31 @@
         misleading. Default <code>3600</code> (1h); range 1–86400.
       </p>
     </div>
+
+    <div class="setting-row">
+      <label>
+        Unusable-response floor
+        <input
+          type="number"
+          min="0"
+          step="1"
+          x-model.number="config.kame_unusable_response_limit"
+        />
+      </label>
+      <p class="hint">
+        Agent Zero stops a turn after N consecutive model outputs it cannot
+        parse into a tool request, <em>"to prevent further API charges"</em>.
+        With a rotated pool that reason is much weaker — and A0 has itself
+        moved the number (it was <code>2</code> in v2.4–v2.7, <code>5</code> in
+        v2.8), so a settings file written by an older A0 keeps the tight
+        <code>2</code> forever and one JSON-escaping slip ends the turn. KAME
+        applies this as a <strong>floor, never a ceiling</strong>:
+        <code>effective = max(A0's setting, this)</code>. It is not a bypass —
+        past this count A0's stop is left alone, so a model stuck in a
+        formatting loop still cannot drain the pool. Default <code>5</code>;
+        set <code>0</code> to never interfere.
+      </p>
+    </div>
   </div>
 </body>
 </html>

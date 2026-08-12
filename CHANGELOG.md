@@ -128,6 +128,37 @@ three doors costs nothing. All three delegate to one new shared module,
   runs with KAME uninstalled and installed and the two must agree. Providers are
   auto-discovered from the checkout, so ones added upstream later are covered
   automatically. See COMPATIBILITY.md §4.1.
+- **New shield: an unusable-response floor.** Agent Zero v2.4 added a guard that
+  aborts the turn after N consecutive model outputs it cannot parse into a tool
+  request — *"to prevent further API charges"*, in its own words. With a rotated
+  key pool that reasoning is much weaker, and the number has moved: the default
+  was **2** in v2.4–v2.7 and **5** in v2.8. A `settings.json` written by an older
+  Agent Zero keeps the tight 2 forever, so a single JSON-escaping slip from the
+  model ends the turn — which is exactly what users hit in the wild. KAME now
+  applies a **floor, never a ceiling**: `effective = max(A0's setting, 5)`, tunable
+  via `kame_unusable_response_limit` (`0` = never interfere). It is not a bypass:
+  past KAME's own limit, Agent Zero's abort is left untouched, so a model stuck in
+  a formatting loop still cannot drain the pool. Ships as an extension file at
+  `hist_add_warning/end/_95_kame_unusable_floor.py` — no new monkey-patch, inert on
+  A0 < v2.4, and a genuine exception from `hist_add_warning` is never swallowed.
+  See COMPATIBILITY.md §4.2.
+- **The upgrade checker understands version-gated symbols.** A watch entry can now
+  be marked `optional: true`; a symbol absent because the checkout predates it is
+  reported as expected rather than counted as a break. Used for the v2.4 guard
+  above, which is watched on new A0 and correctly missing on old.
+
+### Not changed, on purpose
+
+Memory notifications arriving *after* the answer is upstream by design, not a KAME
+side effect: `agent.py` runs the `monologue_end` extension point inside a
+`finally`, after the response tool has already returned, and Agent Zero's `_memory`
+plugin hooks memorization there. Moving it earlier would mean holding every answer
+back until memorization finished. Agent Zero already neutralises both visible side
+effects — `set_initial_progress()` pins `progress_no` past those log items so the
+status line stays parked, and the WebUI classifier refuses to reopen a
+"Processing…" group under a finished response. KAME therefore adds nothing here;
+`tests/test_a0_compat.py` asserts both upstream guarantees so a future regression
+surfaces in the upgrade runbook instead of in someone's chat.
 
 ### Verification
 
@@ -142,15 +173,20 @@ Measured, not assumed: on a real A0 v2.8 stack a rotation off a 429 costs
 **0.77s and 2 network calls**. With KAME's retry-knob suppression removed — i.e.
 letting A0 retry the dead key first, as `a0_retry_attempts=2` /
 `a0_retry_delay_seconds=1.5` would — the same rotation costs **3.77s and 4 calls**.
-The OAuth block is mutation-tested: disabling KAME's empty-pool passthrough guard
-makes every one of its assertions fail.
+Both new blocks are mutation-tested. Disabling KAME's empty-pool passthrough guard
+makes every OAuth assertion fail. For the unusable-response floor, removing the
+`count >= floor` check makes the anti-bypass assertions fail, and removing the
+`HandledException` type check makes the "a real error is never cleared" assertion
+fail — and the block opens with a *control* that proves Agent Zero alone really
+does abort on the build under test, so nothing can pass vacuously.
 
 Tests: `tests/test_v1_0_9.py` (67 checks — delegation contract, shape binding,
 retry-knob extraction, empty-answer bounds, callback transparency, layer safety)
-+ `tests/test_a0_compat.py` (57 live checks per Agent Zero version) + every prior
-suite green — **230 offline checks and 322 live ones across the six versions**
-(44 / 50 / 57 / 57 / 57 / 57; older Agent Zeros ship fewer OAuth providers to
-check, and v1.14 has no `unified_turn` to bind). `test_v1_0_4.py`,
++ `tests/test_a0_compat.py` (71 live checks on v2.8) + every prior
+suite green — **230 offline checks and 374 live ones across the six versions**
+(48 / 54 / 61 / 70 / 70 / 71; older Agent Zeros ship fewer OAuth providers to
+check, have no v2.4 unusable-response guard to drive, and v1.14 has no
+`unified_turn` to bind). `test_v1_0_4.py`,
 `test_v1_0_4_v21.py` and groups A-E of `test_v1_0_8.py` were retargeted at the new
 seam: they assert the same *behaviors*, against the code that now implements them.
 

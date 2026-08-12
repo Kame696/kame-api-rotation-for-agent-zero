@@ -401,6 +401,196 @@ except KeyError as e:
 except Exception as e:
     check("empty response args never raise KeyError", False, repr(e))
 
+# --- LIVE 4: the unusable-response floor, against this A0's real guard --------
+# The shield ships as an extension FILE, not a patch, so it cannot be verified
+# by fingerprinting a symbol. It is driven for real instead: A0's own
+# StopUnusableResponseLoop stages the abort, KAME's _95 decides what to do with
+# it. The first check is a CONTROL proving A0 alone really does abort on this
+# build — without it the rest could pass vacuously.
+
+
+def _load_ext(path, name):
+    s = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(s)
+    s.loader.exec_module(m)
+    return m
+
+
+class _FakeCtx:
+    def __init__(self, log):
+        self.log = log
+        self.id = "test-ctx"
+        self.streaming_agent = None
+
+
+class _FakeLoopData:
+    def __init__(self):
+        self.iteration = 3
+        self.params_persistent = {}
+
+
+class _FakeAgent:
+    """Enough of an Agent for the two shields and for A0's own _90 guard."""
+
+    def __init__(self, log, number=0):
+        self.context = _FakeCtx(log)
+        self.loop_data = _FakeLoopData()
+        self.number = number
+
+    def read_prompt(self, name, **kw):
+        # Read A0's REAL prompt files so the shields are matched against the
+        # text this Agent Zero actually ships, not a stand-in.
+        p = os.path.join(_A0, "prompts", name)
+        if os.path.isfile(p):
+            txt = open(p, encoding="utf-8").read()
+            for k, v in kw.items():
+                txt = txt.replace("{{" + k + "}}", str(v))
+            return txt
+        return f"PROMPT:{name}"
+
+
+import helpers.log as a0_log  # noqa: E402
+
+_floor_ext = _load_ext(os.path.join(
+    _KAME, "extensions", "python", "_functions", "agent", "Agent",
+    "hist_add_warning", "end", "_95_kame_unusable_floor.py"), "kame_floor")
+
+check("the unusable-response floor extension loads against this A0",
+      hasattr(_floor_ext, "KameUnusableFloor"))
+
+# The floor must be a sync execute: hist_add_warning is a SYNC @extensible, and
+# call_extensions_sync raises ValueError on an awaitable result.
+check("the floor extension's execute is synchronous (sync extension point)",
+      not inspect.iscoroutinefunction(_floor_ext.KameUnusableFloor.execute))
+
+# -- 4a: floor vs A0's real StopUnusableResponseLoop ---------------------------
+_guard_path = os.path.join(
+    _A0, "extensions", "python", "_functions", "agent", "Agent",
+    "hist_add_warning", "end", "_90_stop_unusable_response_loop.py")
+
+if not os.path.isfile(_guard_path):
+    # A0 < v2.4 has no such guard. The shield must then be a strict no-op.
+    _log = a0_log.Log()
+    _ag = _FakeAgent(_log)
+    _d = {"args": (), "kwargs": {}, "result": "ok", "exception": None}
+    _floor_ext.KameUnusableFloor(agent=_ag).execute(data=_d)
+    check("floor shield is inert on an A0 with no unusable-response guard",
+          _d["exception"] is None and _d["result"] == "ok")
+else:
+    _guard = _load_ext(_guard_path, "a0_stop_unusable")
+
+    def _stage_abort(a0_limit, iterations):
+        """Drive A0's REAL guard until it aborts. Returns (agent, data)."""
+        _log = a0_log.Log()
+        ag = _FakeAgent(_log)
+        _guard.get_settings = lambda: {
+            "max_consecutive_unusable_responses": a0_limit}
+        msg = ag.read_prompt("fw.msg_misformat.md")
+        data = None
+        for i in range(iterations):
+            ag.loop_data.iteration = i
+            data = {"args": (), "kwargs": {"message": msg},
+                    "result": "hist-msg", "exception": None}
+            _guard.StopUnusableResponseLoop(agent=ag).execute(data=data)
+        return ag, data
+
+    def _with_floor(floor, agent, data):
+        _floor_ext._read_floor = lambda _a: floor
+        _floor_ext.KameUnusableFloor(agent=agent).execute(data=data)
+        return data["exception"]
+
+    # Control: A0 alone really does abort at its own limit of 2.
+    _ag2, _d2 = _stage_abort(a0_limit=2, iterations=2)
+    check("A0's own guard aborts at its configured limit (control)",
+          isinstance(_d2["exception"], BaseException),
+          f"exception={_d2['exception']!r}")
+
+    # Floor above A0's limit -> KAME lets the turn continue.
+    _ag3, _d3 = _stage_abort(a0_limit=2, iterations=2)
+    check("KAME clears the abort while under its floor (2 < 5)",
+          _with_floor(5, _ag3, _d3) is None)
+    check("clearing the abort preserves A0's result (no None deref upstream)",
+          _d3["result"] == "hist-msg")
+    check("the abort line is rewritten to say the turn continued",
+          any("[KAME]" in (i.content or "") for i in _ag3.context.log.logs),
+          str([i.content for i in _ag3.context.log.logs]))
+
+    # At the floor -> KAME agrees with the stop. This is the anti-bypass proof.
+    _ag4, _d4 = _stage_abort(a0_limit=2, iterations=5)
+    check("KAME does NOT clear the abort once its own floor is reached (5 >= 5)",
+          isinstance(_with_floor(5, _ag4, _d4), BaseException))
+
+    # floor 0 -> never interfere, A0 behaves exactly as shipped.
+    _ag5, _d5 = _stage_abort(a0_limit=2, iterations=2)
+    check("floor 0 leaves A0's abort untouched",
+          isinstance(_with_floor(0, _ag5, _d5), BaseException))
+
+    # A0's limit already generous -> nothing to lift, and nothing broken.
+    _ag6, _d6 = _stage_abort(a0_limit=8, iterations=2)
+    check("no abort staged when A0's own limit is not reached",
+          _d6["exception"] is None)
+    check("floor is a no-op when A0 has not aborted",
+          _with_floor(5, _ag6, _d6) is None)
+
+    # A real exception from hist_add_warning must NEVER be swallowed.
+    _ag7, _d7 = _stage_abort(a0_limit=2, iterations=2)
+    _real = RuntimeError("genuine failure")
+    _d7["exception"] = _real
+    check("a non-HandledException error is never cleared",
+          _with_floor(5, _ag7, _d7) is _real)
+
+    # If the wrapped call produced no result, clearing would return None to a
+    # caller that immediately reads `.id` on it. Leave those alone.
+    _ag8, _d8 = _stage_abort(a0_limit=2, iterations=2)
+    try:
+        from helpers.extension import _UNSET as _EXT_UNSET
+        _d8["result"] = _EXT_UNSET
+        check("abort is kept when the wrapped call produced no result",
+              isinstance(_with_floor(5, _ag8, _d8), BaseException))
+    except Exception as _e:
+        check("abort is kept when the wrapped call produced no result", False, repr(_e))
+
+# --- LIVE 5: post-response memory notifications are A0's, and A0 parks them ---
+# Users report memory notifications landing UNDER the answer and the chat still
+# looking busy. That is upstream by design — memorization is hooked at
+# monologue_end, which agent.py runs in a `finally` AFTER the response tool has
+# returned — and A0 already neutralises both visible side effects. KAME must add
+# NOTHING here; these checks exist so a future A0 that regresses either
+# behaviour is caught by the upgrade runbook instead of by a user.
+
+
+def _simulate_memorize(log):
+    """What _50_memorize_fragments / _51_memorize_solutions do: create the util
+    item up front, then update it from a background thread."""
+    a = log.log(type="util", heading="Memorizing new information...")
+    b = log.log(type="util", heading="Memorizing succesful solutions...")
+    return a, b
+
+
+_log_mem = a0_log.Log()
+_mem_items = _simulate_memorize(_log_mem)
+_log_mem.set_initial_progress()      # A0's _90_waiting_for_input_msg
+for _it in _mem_items:               # the background thread, later
+    _it.update(heading="Memorization completed: 3 memories processed")
+
+check("A0 keeps the status line parked through post-response memory updates",
+      _log_mem.progress_active is False,
+      f"progress_active={_log_mem.progress_active} progress={_log_mem.progress!r}")
+
+# The WebUI side of the same guarantee: trailing utilities must not reopen the
+# collapsible "Processing..." group under a finished answer. The rule lives in
+# `classifyMessageRenderUnits`, which only exists from A0 v2.8 — older builds
+# have no such classifier, so there is nothing to assert and the check is
+# reported as not applicable rather than failed.
+_mw = os.path.join(_A0, "webui", "js", "message-window.js")
+_mw_src = open(_mw, encoding="utf-8").read() if os.path.isfile(_mw) else ""
+if "classifyMessageRenderUnits" not in _mw_src:
+    print("N/A   A0's WebUI process-group classifier (added in v2.8) - not on this build")
+else:
+    check("A0's WebUI still refuses to reopen a process group after a response",
+          "post-response utilities cannot reopen the group" in _mw_src,
+          "message-window.js no longer documents the post-response util rule")
+
 print("=" * 60)
 if _failures:
     print("FAILURES:", _failures)

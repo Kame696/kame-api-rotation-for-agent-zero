@@ -1,15 +1,23 @@
 {
   "kame_version": "1.0.9",
   "verified_against": "v2.8",
-  "verified_on": "2026-08-10",
+  "verified_on": "2026-08-11",
   "a0_repo": "https://github.com/agent0ai/agent-zero",
   "supported_range": "Agent Zero v1.14+ and the whole V2 line",
-  "verified_versions": ["v1.14", "v1.20", "v2.1", "v2.4", "v2.7", "v2.8"],
+  "verified_versions": [
+    "v1.14",
+    "v1.20",
+    "v2.1",
+    "v2.4",
+    "v2.7",
+    "v2.8"
+  ],
   "note": "Baseline for tools/a0_upgrade_check.py. `fingerprints` are whitespace- and comment-insensitive hashes of each watched symbol's source in the verified Agent Zero tag. Re-pin ONLY through `--update-baseline`, and only after a clean audit. v1.0.9 shrank this list: KAME now delegates the model call to Agent Zero instead of re-implementing it, so the stream parser, the chunk accumulator, the transport parser, the result builder and litellm itself left KAME's compatibility surface entirely. Agent Zero's OAuth / subscription providers (Codex, Copilot, ...) are deliberately NOT in this list: KAME reads keys from the .env directly and never goes through models.get_api_key, which is where the OAuth plugin hooks in, so there is no shared symbol to fingerprint. That independence is guarded behaviorally instead, by the LIVE 3 block in tests/test_a0_compat.py.",
   "severity_legend": {
     "critical": "if this breaks, KAME does not rotate at all",
     "degraded": "if this breaks, ONE shield stops; rotation keeps working",
-    "adaptive": "KAME handles a change here automatically - the fingerprint is informational"
+    "adaptive": "KAME handles a change here automatically - the fingerprint is informational",
+    "optional": "the symbol only exists from some A0 version onward - MISSING is expected on older builds and never fails the check"
   },
   "watch": [
     {
@@ -88,6 +96,14 @@
       "symbol": "RepairableException",
       "severity": "degraded",
       "why": "In KAME's passthrough tuple - it must reach A0's repair loop, never be swallowed as a failed API call. If the import fails KAME degrades to an empty passthrough tuple rather than crashing."
+    },
+    {
+      "id": "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute",
+      "module": "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop",
+      "symbol": "StopUnusableResponseLoop.execute",
+      "severity": "degraded",
+      "optional": true,
+      "why": "Added in A0 v2.4: aborts a turn after N consecutive UNPARSEABLE model outputs. KAME's _95_kame_unusable_floor raises that limit to a floor, and to do so it reads A0's own counter out of loop_data.params_persistent['_unusable_response_failures'] and only ever clears a HandledException. If A0 renames that state key or stops staging the abort in data['exception'], the floor silently stops lifting and A0's own limit applies again - rotation is untouched. Absent on A0 < v2.4, where the shield is inert by design (marked optional: a MISSING here is expected, not a break)."
     }
   ],
   "fingerprints": {
@@ -101,6 +117,7 @@
     "helpers.history.Topic.summarize_messages": "038a86ccf0e0f9e8",
     "helpers.history.Bulk.summarize": "f09b763d8a201915",
     "helpers.rate_limiter.RateLimiter": "debd59b4e743b93b",
-    "helpers.errors.RepairableException": "8a331b4c4b1d03ba"
+    "helpers.errors.RepairableException": "8a331b4c4b1d03ba",
+    "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute": "d228502f1a1c77d4"
   }
 }

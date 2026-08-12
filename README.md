@@ -143,7 +143,7 @@ Look for this banner on startup:
 
 ---
 
-## 🛡️ The 14 Shields
+## 🛡️ The 15 Shields
 
 | # | Shield | What it gives you |
 |---|---|---|
@@ -160,6 +160,7 @@ Look for this banner on startup:
 | 11 | 📈 **Adaptive Backoff** | Provider-agnostic safety net: if the same key keeps hitting rate limits, its cooldown escalates (20s → 40s → 80s … up to the ceiling) and resets on the first success. |
 | 12 | 🔒 **Rate Limiter Deadlock Fix** | Replaces A0's `asyncio.Lock` with `threading.Lock`, eliminating an async deadlock under specific concurrency patterns. |
 | 13 | 🧹 **Clean Uninstall** | `hooks.py::uninstall()` reverts every monkey-patch. Drop the folder and KAME is gone — no leftover state. |
+| 15 | 🧯 **Unusable-Response Floor** | *(new)* Agent Zero ends a turn after N consecutive replies it cannot parse into a tool request — a cost circuit-breaker that defaults to **2** on A0 v2.4–v2.7 (and stays at 2 forever in a settings file written by one of those, even after you upgrade to v2.8, which raised it to 5). One JSON-escaping slip from the model then kills the turn. KAME applies its own **floor, never a ceiling**: `effective = max(A0's setting, kame_unusable_response_limit)`, default 5. Past that count A0's stop is left completely alone, so a model stuck in a formatting loop still can't drain your pool. Set `0` to never interfere. |
 | 14 | 🤝 **Delegated Execution** | *(new in v1.0.9)* KAME picks the key — **Agent Zero makes the call itself.** KAME no longer builds the request, parses the stream or constructs the result, so an Agent Zero update changes A0's own code path instead of a stale copy of it living inside the plugin. It also binds to A0's model layer **by signature, not by name**, and if a future Agent Zero ever moves out from under it, KAME prints one line and steps aside — your agent keeps running. |
 
 ---
@@ -200,7 +201,7 @@ flowchart TD
     style J fill:#3b82f6
 ```
 
-The whole engine is a single file (`kame_engine.py`), monkey-patching `LiteLLMChatWrapper.unified_call`, `LiteLLMChatWrapper.unified_turn` (A0 V2.1+), `Topic.summarize_messages`, `Bulk.summarize`, and the framework's rate limiter. KAME calls `litellm.acompletion` directly — bypassing A0's internal transport retry loops — so a 503 returns in ~1s and the carousel rotates instantly.
+The whole engine is a single file (`kame_engine.py`), monkey-patching `LiteLLMChatWrapper.unified_call`, `LiteLLMChatWrapper.unified_turn` (A0 V2.1+), `Topic.summarize_messages`, `Bulk.summarize`, and the framework's rate limiter. Since v1.0.9 the wrapper **delegates**: it picks the key, injects it as `api_key=`, and calls A0's own method, returning A0's result untouched. A0's *internal* retry loop is switched off for that one call (its knob names are read out of A0's source at runtime), so a 503 surfaces in ~1s and the carousel rotates instantly instead of being swallowed by a silent retry on the same dead key.
 
 ### Per-key health state
 
@@ -326,7 +327,22 @@ No — that's Agent Zero's own design. Since A0 V2 the WebUI **queues** a messag
 <details>
 <summary><b>"Agent stopped after 2 consecutive unusable model responses to prevent further API charges" — shouldn't KAME rotate past that?</b></summary>
 
-There's nothing to rotate. That's A0's cost circuit-breaker (`_90_stop_unusable_response_loop.py`), tripped when the model returns a misformatted or repeated reply twice in a row — the **API call succeeded**, the model just didn't follow A0's JSON contract (markdown fences, plain prose, etc.). KAME rotates on transport errors, not on bad content, so a different key would produce the same reply. Raise `max_consecutive_unusable_responses` in settings if you want more attempts, or switch to a model that keeps to the format.
+There's nothing to **rotate** — that stop is not an API error. It is A0's cost
+circuit-breaker (`_90_stop_unusable_response_loop.py`), tripped when the model returns
+a misformatted or repeated reply N times in a row. The **API call succeeded**; the
+model just didn't follow A0's JSON contract (markdown fences, an unescaped quote,
+plain prose). A different key would produce the same reply.
+
+What KAME *does* do about it is raise the number. A0's own default moved from **2**
+(v2.4–v2.7) to **5** (v2.8), but a settings file written by an older A0 keeps the tight
+`2` forever — so on an upgraded install a single escaping slip ends the turn. KAME
+applies a **floor**: `effective = max(A0's setting, kame_unusable_response_limit)`,
+default `5`, and past that count A0's stop is left alone. It is a floor, not a bypass:
+a model genuinely stuck in a formatting loop still cannot drain your pool. Change it in
+**Settings → Plugins → KAME → Unusable-response floor**, or set `0` to never interfere.
+If it keeps happening, the real fix is upstream of both: a model that keeps to the
+format, or an agent profile that stops printing ```json tool examples inside its own
+answer text.
 </details>
 
 <details>
@@ -358,6 +374,7 @@ Zero. Every log level is pure local instrumentation. Even `silent` still tracks 
 | `daily_quota_cooldown_seconds` | `3600` | How long to rest a key after a **daily-quota / out-of-credit** error (any provider). Also the adaptive-backoff ceiling. Clamped 1–86400. |
 | `key_log_style` | `fingerprint` | How keys appear in logs: `fingerprint` (anonymized id, never leaks the secret), `prefix8` (first 8 chars), or `full` (debug only). Exception: an **invalid/expired key** always shows a partial reveal (first 10 + last 4 chars) even under `fingerprint`, so you can find it in your provider console — that one event is always visible regardless of `kame_log_level`, since a dead key never self-recovers. |
 | `kame_collapse_storm_logs` | `true` | Collapse a repetitive 503/error **storm** at `normal` level into one aggregate line every ~20s (+ a "storm over" recap) instead of hundreds of identical warnings. `verbose` always prints every line. Pure logging. |
+| `kame_unusable_response_limit` | `5` | **Floor** for A0's "consecutive unusable model responses" cost stop (`effective = max(A0's setting, this)`). A0 shipped `2` in v2.4–v2.7 and `5` in v2.8, and an upgraded install keeps whatever its settings file was written with — so one JSON-escaping slip from the model can end a turn. Past this count A0's stop is honored untouched; `0` disables KAME's floor entirely. Only applies on A0 v2.4+, where that guard exists. |
 | `kame_log_full_errors` | `false` | Debug escape hatch: ALSO print the **raw** exception (type, status, retry attrs, full body) beside KAME's classification, so you can verify there's no misclassification. Independent of `kame_log_level`. |
 
 Everything else is opinionated and validated in production — the algorithm, sleep timing, jitter range, 60s RPM window, and quarantine logic are all tuned and tested.
@@ -413,7 +430,7 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8** (2026-08-10). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
+- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8** (2026-08-11). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **Subscription / OAuth models are untouched** — Codex, GitHub Copilot, Gemini API and xAI Grok sign in through Agent Zero's own OAuth plugin, not with API keys. KAME finds no key pool for them and hands the call straight to Agent Zero, exactly as if the plugin were not installed. Verified every run, on every supported Agent Zero version. Details: [COMPATIBILITY.md §4.1](COMPATIBILITY.md)
@@ -429,7 +446,7 @@ python tools/a0_upgrade_check.py /path/to/agent-zero    # the real audit
 ```
 
 It does three things: asks GitHub for A0's newest tag, **fingerprints the source of
-all 11 A0 symbols KAME patches or depends on** and diffs them against the pinned
+all 12 A0 symbols KAME patches or depends on** and diffs them against the pinned
 baseline in `a0_compat.json`, then runs the live harness that applies KAME's real
 patches to the real classes *and drives a real key rotation through them*. Exit `0` =
 compatible. Exit `1` = it names the exact function that changed and *why KAME cares
@@ -437,7 +454,10 @@ about it* — no hunting through A0's tree.
 
 That list used to be 14. v1.0.9 delegated the model call back to Agent Zero, which
 retired the stream parser, the chunk accumulator, the transport parser and the result
-builder from KAME's compatibility surface entirely. Each remaining symbol also
+builder from KAME's compatibility surface entirely (11), then added back one
+**optional** entry for A0's unusable-response guard — optional meaning the checker
+reports `not present (optional)` instead of failing when you audit an A0 that predates
+it (< v2.4). Each remaining symbol also
 carries a **severity**, so the output tells you whether you are looking at "rotation
 is down" or "one shield is down" — or at `adaptive`, which means KAME absorbs that
 change on its own and the flag is informational.

@@ -28,7 +28,8 @@ Three consequences that matter when you audit a new A0:
 
 1. **The stream parser, the chunk accumulator, the transport parser, the result
    builder and `litellm` itself left KAME's compatibility surface entirely.** The
-   watch list went 14 → 11 and, more importantly, the remaining model-layer entries
+   watch list went 14 → 11 (12 today — 1.0.9 later added one *optional*,
+   version-gated entry, §4.2) and, more importantly, the remaining model-layer entries
    are now `adaptive` rather than `critical` — A0 may rewrite those function bodies
    freely.
 2. **The entry points are found by SHAPE, not by name.** `_kame_find_entry_points()`
@@ -104,7 +105,7 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.0 | 1.0.9 | supported | |
 | V2.1 – V2.6 | 1.0.9 | **live-verified** (v2.1, v2.4) | monologue switched to `unified_turn`; KAME binds both |
 | V2.7 | 1.0.9 | **live-verified** | |
-| **V2.8** | **1.0.9** | **verified — current baseline** | 11/11 fingerprints unchanged, live harness green. See §2.1. |
+| **V2.8** | **1.0.9** | **verified — current baseline** | 12/12 fingerprints unchanged, live harness green. See §2.1. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real
@@ -134,7 +135,7 @@ matters — a silent skip looks like success.
 
 ## 3. Patch-point map — everything KAME touches in A0
 
-`tools/a0_upgrade_check.py` watches all 11 of these (see `a0_compat.json` for the
+`tools/a0_upgrade_check.py` watches all 12 of these (see `a0_compat.json` for the
 per-symbol `why` and `severity`). This is the map to read when one is flagged.
 
 ### 3.1 The rotation core — bound by shape, in three layers
@@ -182,6 +183,7 @@ A failure in any of these can no longer prevent rotation from installing.
 | `ResponseTool.execute` | `tools/response.py` | The arg shape KAME Shield heals into. Which keys it reads (`text` / `message`) decides whether the salvage lands. | degraded |
 | `RepairableException` | `helpers/errors.py` | In KAME's passthrough tuple — must reach A0's repair loop, never be swallowed as a failed API call. Degrades to an empty tuple if the import fails. | degraded |
 | `Agent.monologue` | `agent.py` | One of three activation doors (§3.3). | degraded |
+| `StopUnusableResponseLoop.execute` | `extensions/…/hist_add_warning/end/_90_stop_unusable_response_loop.py` | Extension folder for the unusable-response floor (§4.2). Reads A0's `_unusable_response_failures` counter and clears only the abort A0 staged. Absent (and inert) before A0 v2.4. | degraded, optional |
 
 ### 3.3 Activation — three independent doors
 
@@ -264,6 +266,88 @@ without editing the test. A control assertion in the same block proves KAME stil
 
 Verified green on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8. Mutation-tested:
 disabling the empty-pool passthrough guard makes every one of these fail.
+
+---
+
+## 4.2 The unusable-response floor (A0 v2.4+)
+
+**A0 symbol:** `extensions/python/_functions/agent/Agent/hist_add_warning/end/`
+`_90_stop_unusable_response_loop.py :: StopUnusableResponseLoop.execute`
+**KAME file:** `extensions/python/…/hist_add_warning/end/_95_kame_unusable_floor.py`
+**Severity:** `degraded`, `optional` (absent before A0 v2.4)
+
+### What upstream does
+
+A0 v2.4 (commit `d33cac3b`, "Stop runaway unusable response loops") counts
+CONSECUTIVE `fw.msg_misformat.md` / `fw.msg_repeat.md` warnings — turns where the
+*model's own output* could not be parsed into a tool request — in
+`loop_data.params_persistent["_unusable_response_failures"]`. At
+`max_consecutive_unusable_responses` it logs the stop text and stages a
+`HandledException` in `data["exception"]`, which the `@extensible` decorator then
+raises, ending the turn.
+
+Note the layer: this counts **parse failures of the model's output**, not API
+errors. It is entirely independent of rotation, and KAME's carousel is neither
+consulted nor affected by it.
+
+### Why KAME lifts it
+
+The stop text states the reason: *"to prevent further API charges"*. Against a
+rotated free-tier pool that reasoning is weak. Upstream itself moved the number —
+the default was **2** in v2.4–v2.7 and **5** in v2.8 — but a `settings.json`
+written by an older Agent Zero wins over the new default, so long-running installs
+silently keep the tight 2 and one JSON-escaping slip from the model ends the turn.
+
+KAME applies a **floor, never a ceiling**:
+
+```
+effective limit = max(A0's max_consecutive_unusable_responses,
+                      kame_unusable_response_limit)   # default 5
+```
+
+`kame_unusable_response_limit: 0` disables the shield entirely and leaves A0's
+behaviour exactly as shipped.
+
+### Safety properties (each has a test)
+
+| Property | Why it matters |
+|---|---|
+| Only a `HandledException` is ever cleared | A genuine error raised by `hist_add_warning` must keep propagating. |
+| Only cleared while `count < floor` | It is a floor, not a bypass — a model stuck in a formatting loop still cannot drain the pool. |
+| Never cleared when `data["result"]` is still `_UNSET` | Clearing then would make the decorator return `None` to a caller that immediately reads `wmsg.id`. |
+| `execute` is **synchronous** | `hist_add_warning` is a sync `@extensible`; `call_extensions_sync` raises on an awaitable result. |
+| Runs at `_95` | Must sort after A0's `_90`. `_get_extension_classes` sorts globally by module basename, across plugins. |
+| Inert when the guard is absent | On A0 < v2.4 nothing stages the exception, so the shield never fires. |
+
+### What breaks it, and how loudly
+
+If A0 renames `_unusable_response_failures`, stops staging the abort in
+`data["exception"]`, or moves the guard out of `hist_add_warning/end`, the floor
+silently stops lifting and A0's own limit applies again. Rotation is untouched.
+The symbol is fingerprinted in `a0_compat.json`, so the upgrade checker flags the
+change; the live harness drives A0's real guard end-to-end, with a control
+assertion proving the guard still aborts on the build under test.
+
+### Not fixed here, on purpose: memory notifications after the answer
+
+A frequent report is that memory notifications appear *below* the response and the
+chat looks unfinished. That is upstream by design and there is nothing for KAME to
+do:
+
+- `agent.py` calls the `monologue_end` extension point inside a `finally`, i.e.
+  after `process_llm_result_tools` returned the final response. A0's `_memory`
+  plugin hooks memorization there (`_50_memorize_fragments`, `_51_memorize_solutions`)
+  and hands the work to a background thread. Moving it earlier would mean holding
+  every answer back until memorization finished.
+- The two visible side effects are already handled upstream:
+  `Log.set_progress` pins `progress_no = len(self.logs)`, so later updates to log
+  items created *before* the park cannot re-arm the status line; and
+  `webui/js/message-window.js :: classifyMessageRenderUnits` (v2.8) documents that
+  *"post-response utilities cannot reopen the group"*.
+
+`tests/test_a0_compat.py` asserts both upstream guarantees so a regression shows up
+in this runbook rather than in a user's chat. The WebUI assertion is reported `N/A`
+on builds predating the classifier.
 
 ---
 
@@ -354,7 +438,7 @@ kame_engine.py          the whole engine: key selection, classification, delegat
 kame_activation.py      shared, idempotent activate() — the three doors all call it
 hooks.py                plugin entry point — calls apply_kame_patch()
 plugin.yaml             name/version/description (the [VERIFIED ON A0 ...] tag)
-a0_compat.json          pinned baseline: 11 watched symbols + severities + hashes
+a0_compat.json          pinned baseline: 12 watched symbols + severities + hashes
 COMPATIBILITY.md        this file
 CHANGELOG.md            per-version history
 tools/
@@ -371,5 +455,6 @@ extensions/python/
   monologue_start/                                   activation door 3 (named)
   _functions/agent/Agent/validate_tool_request/start/ KAME Shield's arg healer
   message_loop_prompts_after/_91_recall_wait.py      recall-wait extension
+  _functions/agent/Agent/hist_add_warning/end/        unusable-response floor (§4.2)
 webui/config.html       settings UI
 ```

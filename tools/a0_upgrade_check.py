@@ -202,9 +202,13 @@ def main():
     by_id = {e["id"]: e for e in base["watch"]}
     recorded = base["fingerprints"]
 
-    gone, changed, same = [], [], []
+    gone, absent, changed, same = [], [], [], []
     for entry in missing:
-        gone.append(entry["id"])
+        # `optional` symbols exist only from some A0 version onward (e.g. the
+        # unusable-response guard, added in v2.4). Not finding one on an older
+        # checkout is the expected shape of the world, not a break — the shield
+        # that watches it is inert there by design. Report, never fail.
+        (absent if entry.get("optional") else gone).append(entry["id"])
     for key, value in current.items():
         (same if recorded.get(key) == value else changed).append(key)
 
@@ -216,12 +220,18 @@ def main():
         print(f"{BAD} MISSING  [{_sev(entry)}] {key}")
         print(f"         {entry['module'].replace('.', '/')}.py :: {entry['symbol']}")
         print(f"         why KAME cares: {entry['why']}")
+    for key in sorted(absent):
+        entry = by_id[key]
+        print(f"{OK} not present (optional) {key}")
+        print(f"         this Agent Zero predates it; KAME's matching shield "
+              f"stays inert. Nothing to do.")
     for key in sorted(changed):
         entry = by_id[key]
         print(f"{WARN} CHANGED  [{_sev(entry)}] {key}  {recorded.get(key, '-')} -> {current[key]}")
         print(f"         {entry['module'].replace('.', '/')}.py :: {entry['symbol']}")
         print(f"         why KAME cares: {entry['why']}")
-    print(f"{OK} unchanged: {len(same)}/{len(base['watch'])}")
+    print(f"{OK} unchanged: {len(same)}/{len(base['watch']) - len(absent)}"
+          + (f" ({len(absent)} optional symbol(s) not on this build)" if absent else ""))
 
     # v1.0.9: a changed fingerprint on an `adaptive` symbol is EXPECTED noise -
     # KAME delegates the call and finds the entry points by shape, so A0 is free

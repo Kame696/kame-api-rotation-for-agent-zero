@@ -34,6 +34,20 @@ key_log_style: fingerprint
 # 'silent'), and it never changes rotation/cooldown behavior — pure data.
 kame_log_full_errors: false
 
+# Floor for Agent Zero's "consecutive unusable response limit".
+# A0 v2.4+ aborts a turn after N consecutive UNPARSEABLE model outputs
+# (fw.msg_misformat / fw.msg_repeat), stating the reason as "to prevent further
+# API charges". With a rotated key pool that reason is much weaker, and A0 has
+# itself moved the number: the default was 2 in v2.4-v2.7 and 5 in v2.8 — but a
+# settings.json written by an older A0 keeps 2 forever, so one JSON-escaping
+# slip from the model ends the turn.
+# KAME applies this as a FLOOR, never a ceiling:
+#     effective limit = max(A0's setting, this value)
+# It is not a bypass: once this many unusable responses pile up, A0's abort is
+# left alone, so a model stuck in a formatting loop cannot drain the pool.
+# Default 5 (A0 v2.8's own default). Set 0 to never interfere.
+kame_unusable_response_limit: 5
+
 # Collapse repetitive 503-storm logs. On by default. During a sustained outage
 # the per-rotation failure lines are near-identical and can number in the
 # hundreds (one real Gemini outage logged 1,063 of them in 83 min). When true,
