@@ -18,7 +18,7 @@
 
 **API key rotation, rate-limit recovery and 429 failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or a provider that does not exist yet.**
 
-[Install](#-install--quick-start-3-steps) · [The 16 Shields](#️-the-16-shields) · [Settings](#-faq) · [Compatibility](#-compatibility) · [Evolution](#-evolution-version-history) · [Changelog](CHANGELOG.md) · [Hermes port](https://github.com/Kame696/kame-api-rotation-for-hermes)
+[Install](#-install--quick-start-3-steps) · [The 16 Shields](#-the-16-shields) · [Settings](#-faq) · [Compatibility](#-compatibility) · [Evolution](#-evolution-version-history) · [Changelog](CHANGELOG.md) · [Hermes port](https://github.com/Kame696/kame-api-rotation-for-hermes)
 
 </div>
 
