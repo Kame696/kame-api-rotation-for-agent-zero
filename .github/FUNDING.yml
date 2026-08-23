@@ -1,0 +1,6 @@
+# Puts a "Sponsor" button at the top of the repository page.
+#
+# GitHub's funding file takes URLs, not payment addresses, so the button points
+# at the README section that carries the Bitcoin address. One hop, and the
+# address lives in exactly one place -- which is the only way it stays correct.
+custom: ["https://github.com/Kame696/kame-api-rotation-for-agent-zero#-support-the-project"]

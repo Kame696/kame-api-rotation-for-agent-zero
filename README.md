@@ -16,6 +16,11 @@
 
 ### *4P1 R0T4T10N — 4FRE3D0M*
 
+[![Donate Bitcoin](https://img.shields.io/badge/donate-bitcoin-f7931a.svg)](#-support-the-project)
+
+**Free and MIT — built and paid for by one person.** If KAME saved a run, a tip keeps it going:
+**BTC `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`** — *any amount helps, genuinely.*
+
 **API key rotation, rate-limit recovery and 429 failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or a provider that does not exist yet.**
 
 [Install](#-install--quick-start-3-steps) · [The 16 Shields](#-the-16-shields) · [Settings](#-faq) · [Compatibility](#-compatibility) · [Evolution](#-evolution-version-history) · [Changelog](CHANGELOG.md) · [Hermes port](https://github.com/Kame696/kame-api-rotation-for-hermes)
