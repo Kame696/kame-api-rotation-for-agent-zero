@@ -1,5 +1,31 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+Every release, newest first. Each one opens with **In short** — the whole
+release as a handful of lines — and folds the reasoning, the logs it came from
+and the verification underneath, so this page reads as a list of releases
+rather than as a wall of prose.
+
+---
+
+## 📌 At a glance
+
+| Version | Headline | What changed for you |
+|---|---|---|
+| **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
+| **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
+| **1.0.8** | Stop when asked, quarantine when denied | Honors A0's early-stop contract; a permanently denied key is benched instead of retried |
+| **1.0.7** | Response Shield | Heals empty `response`-tool arguments that crashed the host with `KeyError: 'message'` |
+| **1.0.6** | Faster failover, honest numbers | Quicker recovery, verifiable quota logging, gentler empty-stream handling, invalid keys made visible |
+| **1.0.5** | Daily quota, correctly | Daily-quota logic fixed, and the chat pauses instead of burning requests |
+| **1.0.4** | Alive on Agent Zero V2 | A0 went 1.2 → V2.0 → V2.1 and moved the model entry point; one engine now serves both majors |
+| **1.0.3** | Observability | Full raw errors on request, precise durations, storm-log collapse, invalid-key rotation. Selection path untouched |
+| **1.0.2** | A 5xx is not a daily quota | A transient server error could cool the entire pool for an hour. It cannot any more |
+| **1.0.1** | Quotas across providers | Daily-quota and account-limit awareness, plus a full log overhaul |
+| **1.0.0** | First stable release | Production-validated, with zero engine changes from v0.5.8.0 |
+
+Everything below **v1.0.0** is the pre-stable history, kept in full for anyone
+tracing why a decision was made.
+
 ```mermaid
 graph LR
     A["v0.4.1<br/>The Seed"] --> B["v0.4.4<br/>The Shield"]
@@ -14,7 +40,10 @@ graph LR
     J --> K["v0.5.4<br/>The Zenith"]
     K --> L["v0.5.6<br/>The Trust"]
     L --> M["v0.5.7"]
-    style M fill:#2ecc71,color:#fff
+    M --> N["v1.0.0<br/>First stable"]
+    N --> O["v1.0.9<br/>Delegation"]
+    O --> P["v1.2.0<br/>Current"]
+    style P fill:#2ecc71,color:#fff
 ```
 
 > Note: from v0.5.7 onward, releases are plain semver without codenames.
@@ -35,6 +64,16 @@ is working, and the settings screen before it ever runs.
 no Agent Zero counterpart — Agent Zero does not own the stream since 1.0.9, so
 there was nothing to fix. The version line is shared by MAJOR.MINOR, so Agent
 Zero rejoins it at 1.2.0. See `PARITY.md`.)*
+
+**In short**
+
+- A long wait no longer looks like a hung agent.
+- The settings screen is Agent Zero's screen now.
+- Verified against Agent Zero v2.10.
+- Also in this release.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### A long wait no longer looks like a hung agent
 
@@ -114,11 +153,26 @@ needed — the 1.0.9 delegation architecture absorbed the release. The baseline 
 
 ---
 
+</details>
+
 ## v1.0.9
 
 **Agent Zero now makes the call; KAME only chooses the key.**
 The rotation engine is unchanged. What changed is architecture: KAME stopped
 being a parallel copy of Agent Zero's most-refactored file.
+
+**In short**
+
+- The problem this release exists to solve.
+- The change.
+- Shape-based binding — a rename no longer disables rotation.
+- Activation has three independent doors.
+- Also in this release.
+- Not changed, on purpose.
+- Verification.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### The problem this release exists to solve
 
@@ -284,6 +338,8 @@ check, have no v2.4 unusable-response guard to drive, and v1.14 has no
 seam: they assert the same *behaviors*, against the code that now implements them.
 
 ---
+
+</details>
 
 ## v1.0.8
 
@@ -655,6 +711,17 @@ Triggered by a real ~6-hour Gemini run (02-06-2026) where the chat froze for
 selection/rotation engine is UNCHANGED, so with >=1 healthy key behavior is
 identical to v1.0.0/1.0.1. Hence a patch (1.0.2).
 
+**In short**
+
+- Why (the bug, from the log).
+- Fixed.
+- Explicitly NOT changed.
+- Files changed.
+- Verified.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
+
 ### Why (the bug, from the log)
 
 `gemini-3.5-flash` threw a wave of **503** errors whose verbose bodies carried
@@ -727,6 +794,8 @@ the operator waited past it and saw nothing happen.
 
 ---
 
+</details>
+
 ## v1.0.1
 
 **Multi-provider daily-quota & account-limit awareness + a full log overhaul.**
@@ -735,6 +804,19 @@ log self-explanatory — without touching the proven selection/rotation engine.
 When at least one key is healthy, KAME's selection behavior is identical to
 v1.0.0 — these changes only affect cooldown *duration* on failures, the
 all-keys-sick sleep cadence, and what gets written to the log.
+
+**In short**
+
+- Why (the bug).
+- Fixed / Added.
+- Reliability fixes (intervention, mid-stream, server outages).
+- Logging overhaul.
+- New settings (all optional, safe defaults).
+- Engine API additions (backwards compatible).
+- Verified.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### Why (the bug)
 
@@ -877,6 +959,8 @@ it as KAME retrying the *same* key three times — it actually meant three
 
 ---
 
+</details>
+
 ## v1.0.0 (FIRST STABLE RELEASE)
 
 **Production-validated.** Zero engine changes from v0.5.8.0. This release
@@ -884,6 +968,17 @@ consolidates the journey, renames the plugin to its proper full name
 **"Key-Aware Management Engine (API Rotation)"** for public discoverability,
 ships a GitHub-ready README aimed at attracting users, and bumps to a
 1.x line to communicate API stability.
+
+**In short**
+
+- What "v1.0.0" means.
+- Production validation evidence.
+- Changed (cosmetic / branding).
+- What did NOT change from v0.5.8.0.
+- Pending (user-side).
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### What "v1.0.0" means
 
@@ -967,6 +1062,8 @@ intensive Agent Zero usage on May 25, 2026. From the log:
 
 ---
 
+</details>
+
 ## v0.5.8.0 — superseded by v1.0.0 (BEHAVIORAL FIX — ETA-driven sleep on exhausted pool)
 
 **Significant fix discovered from real production logs.** When all keys
@@ -974,6 +1071,20 @@ in the pool are simultaneously sick, prior versions burned wasted API
 requests against still-sick keys every 2-3 seconds. v0.5.8.0 sleeps
 until the soonest recovery instead, eliminating the waste and the
 self-inflicted cooldown re-arm spiral.
+
+**In short**
+
+- The bug.
+- The fix.
+- Plus: long-delay warning.
+- What did NOT change (still v0.5.7.x identical).
+- Expected difference on the v0.5.7.4 test log scenario.
+- Files changed.
+- Compatibility.
+- Credit.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### The bug
 
@@ -1090,12 +1201,25 @@ already knows when the next key recovers, why is it pulsing blindly?"
 
 ---
 
+</details>
+
 ## v0.5.7.4 — superseded (UX refinements; engine algorithm UNCHANGED)
 
 Pure-quality-of-life release on top of v0.5.7.3. Three additions, all
 either opt-in or never-blocking. The selection algorithm, the pulse,
 the quarantine logic, and the retry-delay cap (3600s) are **identical**
 to v0.5.7.3.
+
+**In short**
+
+- Added.
+- Wiring.
+- Explicitly NOT changed.
+- Files changed.
+- Compatibility.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### Added
 
@@ -1168,9 +1292,21 @@ to v0.5.7.3.
 
 ---
 
+</details>
+
 ## v0.5.7.3 — superseded
 
 **Rollback of the `request_log` "double-count fix" that was wrongly attributed as a bug in v0.5.7.**
+
+**In short**
+
+- Restored.
+- Kept from the v0.5.7 line.
+- Net behavior vs v0.5.6.
+- Versions withdrawn.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### Restored
 
@@ -1220,9 +1356,23 @@ could trigger avoidable 429s on tight quotas. v0.5.7.3 reverts.
 
 ---
 
+</details>
+
 ## v0.5.7.2 — withdrawn
 
 **Stable release after the v0.5.7 / v0.5.7.1 line of compression-related regressions. Adopts the v0.5.6 compression design verbatim (zero KAME extensions in `message_loop_prompts_before`) and layers in only the safe engine refinements + packaging fixes from the v0.5.7 effort.**
+
+**In short**
+
+- Compression behavior (back to what worked).
+- Engine refinements (carried over from the v0.5.7 effort).
+- Packaging fixes (carried over from the v0.5.7 effort).
+- Versions withdrawn from the public timeline.
+- Compatibility.
+- Pending (out of scope).
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### Compression behavior (back to what worked)
 
@@ -1267,6 +1417,8 @@ v0.5.7.2 sidesteps the entire problem class by adopting v0.5.6's deliberate desi
 
 ---
 
+</details>
+
 ## v0.5.7.1 — withdrawn (post-fix regression risk)
 
 Renamed KAME's `_90_` extension to `_80_kame_history_announce.py`. Did not fully solve compression issues in practice; superseded by v0.5.7.2's removal of the extension entirely.
@@ -1276,6 +1428,16 @@ Renamed KAME's `_90_` extension to `_80_kame_history_announce.py`. Did not fully
 ## v0.5.7 — withdrawn (had compression regression)
 
 **Marketplace-ready release.** Engine refined; packaging brought into full Agent Zero v1.15 compliance.
+
+**In short**
+
+- Engine refinements.
+- Packaging fixes.
+- Compatibility.
+- Pending (out of scope for v0.5.7).
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
 
 ### Engine refinements
 
@@ -1306,6 +1468,8 @@ Renamed KAME's `_90_` extension to `_80_kame_history_announce.py`. Did not fully
 - Smoke tests in a running A0 environment.
 
 ---
+
+</details>
 
 ## v0.5.6 — "The Trust"
 
@@ -1472,7 +1636,7 @@ Renamed KAME's `_90_` extension to `_80_kame_history_announce.py`. Did not fully
 
 ---
 
-## v0.5.3 — "The Speedster" ⭐ CURRENT
+## v0.5.3 — "The Speedster"
 
 **Compression stability + Rate-Limit Intelligence.**
 
@@ -1544,4 +1708,3 @@ Diagnosed via live 90K token test: Quick Mode (v0.5.2) bailed after 2 key attemp
 | Exhausted wait | Fixed 2s | Dynamic | **Never (for 429)** | **Dynamic** | **Dynamic** | **Dynamic** |
 | Compression | ~90s | ~90s | **~15s** | **~15s** | **Killed (25s limit)** | **Natural (No limit)** |
 | 90K chat (15 keys) | N/A | N/A | **Infinite loop** | **~10-30s** | **Timeout Spam** | **~10-30s (Smooth)** |
-

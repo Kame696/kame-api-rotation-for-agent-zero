@@ -16,6 +16,10 @@
 
 ### *4P1 R0T4T10N — 4FRE3D0M*
 
+**API key rotation, rate-limit recovery and 429 failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or a provider that does not exist yet.**
+
+[Install](#-install--quick-start-3-steps) · [The 16 Shields](#️-the-16-shields) · [Settings](#-faq) · [Compatibility](#-compatibility) · [Evolution](#-evolution-version-history) · [Changelog](CHANGELOG.md) · [Hermes port](https://github.com/Kame696/kame-api-rotation-for-hermes)
+
 </div>
 
 ---
@@ -471,27 +475,30 @@ live in **[COMPATIBILITY.md](COMPATIBILITY.md)**.
 
 ## 🪪 Evolution (version history)
 
-KAME has been in development since early 2026, learning from real production logs at every step:
+KAME has been in development since early 2026, learning from real production logs at every step.
+**Every entry below is one line on purpose** — the full story of each release, with the logs it came
+from and the verification that closed it, is in [CHANGELOG.md](CHANGELOG.md), where each version
+opens with a short **In short** list and folds the detail underneath.
 
-| Version | Focus | Key insight |
+| Version | Focus | In one line |
 |---|---|---|
-| **v1.2.0** | **The wait stops looking like a crash, and the settings screen stops pretending twelve knobs are twelve equal knobs** | The rotation engine is untouched — every line of selection, cooldown maths and carousel logic is byte-for-byte 1.0.9's. What changed is the two places a person actually meets the plugin. **(1)** When the whole pool is cooling, KAME sleeps until a key recovers and said so *on the console*, which is where an operator reading a Docker log lives and not where the person watching the chat lives. To them it looked like a hung agent, and the obvious move — restart Agent Zero — threw away the wait and the context with it. A wait past ~90s now puts one item in the chat and keeps it updated with the resting count, the earliest recovery, the elapsed time and a reminder that stop works; it closes itself on success, on stop and on a terminal error, carries counts and a pool name but never a key, and can never break rotation (a missing or hostile chat just disables it for that call). **(2)** The settings screen was rebuilt in Agent Zero's own markup with two labelled shelves — *what KAME tells you* and *tuning* — opening with the line that matters: **KAME works with none of these touched**. `kame_collapse_storm_logs` reached the screen at last after shipping invisibly since 1.0.3, and every control gained an `x-init` default, because `get_plugin_config` returns the saved config rather than merging the defaults — so a newly added on-by-default toggle used to render unchecked and then save that lie over a working default. Verified against **Agent Zero v2.10**: 12/12 fingerprints unchanged, live harness green across 71 checks. There is no 1.1.x on Agent Zero — that series was three Hermes-only stream fixes, and Agent Zero has not owned the stream since 1.0.9. |
-| **v1.0.9** | **Future-proofing: KAME stops re-implementing Agent Zero** | The plugin's real fragility was never the rotation logic — it was that KAME had reimplemented A0's model call inside itself (build the request, call `litellm.acompletion`, parse every stream chunk, accumulate, construct the result). That copy went stale on every A0 release, and keeping it in sync was manual work each time. v1.0.9 inverts it: **KAME only chooses the key**, injects it as `api_key=`, and calls *Agent Zero's own* method — A0 owns the request, the stream, the parsing and the result, which is returned untouched. Five upstream symbols and `litellm` itself left KAME's dependency surface (watch list 14 → 11), so A0 is now free to rewrite its model layer without breaking the plugin. On top of that: entry points are found **by signature shape**, so an upstream *rename* is survivable; A0's own internal retry loop is switched off per call by reading its knob names out of A0's source at runtime (a rename there is picked up automatically too); activation moved from one silent single point of failure to **three independent doors**; and if a future A0 ever moves out from under all of it, KAME prints one honest line and steps aside instead of breaking the agent. Live-verified end to end — real classes, real rotation — on **v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8**, one code path for all six. No new settings, no new dependencies, no notifications, and rotation behaves exactly as before. |
-| **v1.0.8** | Honors A0's early-stop contract, quarantines denied keys + verified on Agent Zero v2.7 | **(1)** Since Agent Zero V2 the streamed response callback *returns* the accumulated text as soon as a complete tool request has been streamed, and native A0 breaks the stream there. KAME owned the stream but discarded that return value, so the model kept generating past every finished tool call — wasted output tokens and latency on each turn, plus trailing junk after the tool JSON. v1.0.8 breaks the stream exactly like native A0, and a blank early stop is no longer mistaken for an empty stream. **(2)** A `403 PERMISSION_DENIED` (suspended project / API not enabled / model not authorized for that key) is permanent, not a 20s blip — it used to land in the generic 20s bucket, so a dead key came back to the front of the carousel three times a minute and burned a round trip on nearly every turn. It is now quarantined for the daily cooldown, per `provider:model`, and always logged. **(3)** The cosmetic emoji banner can no longer make `apply_kame_patch()` report "Patch Failed" on a non-UTF-8 Windows console. Also: the v1.0.7 `KeyError` claim is corrected (A0 v2.6+ fixed it upstream — the wrong-key salvage is the part that still pays off), and a new `tests/test_a0_compat.py` runs KAME's patches against a real Agent Zero checkout. Rotation engine otherwise unchanged. |
-| **v1.0.7** | Response Shield — heals empty/wrong-key response-tool args | A model (seen with Codex-style models) can emit the `response` tool with empty, null, or wrongly-keyed arguments. On Agent Zero up to v2.5 that crashed the turn with `KeyError: 'message'`; A0 v2.6+ turned it into a repair request instead. The KAME Shield extension guarantees a usable argument either way: empty/null args get `{"text": ""}` injected; a reply stranded under a wrong key (`content` / `answer` / `response` / `answer_text`) is salvaged into `text` so the message is preserved instead of costing a repair round-trip; `{"text": null}` is coerced to `""`; non-dict `tool_args` are normalized first. Normal calls and all other tools untouched — rotation engine unchanged. |
-| **v1.0.6** | Faster failover + verifiable quota logs + gentler empty-stream + visible invalid keys | **(1)** Near-instant key failover — dropped the fixed 50ms inter-rotation delay for a zero-delay event-loop yield (saved ~750ms per 15-key storm). **(2)** Every quota failure line now shows the provider's own quota tag inline (`[quota: PerDay]` / `[quota: PerMinute]`) so daily/per-minute classification is verifiable at `normal` level. **(3)** One transient empty stream no longer cools a healthy key — it gets an un-penalized retry; only a 2nd empty from the same key rests it. **(4)** An invalid/expired key is now always shown, even at `silent` log level (previously silenced — contradicted the documented promise). **(5)** That message now shows enough of the key (first 10 + last 4 chars) to actually find it in your provider console, instead of a useless anonymized hash. Daily-quota cooldown stays exactly the configured interval (no jitter); cooldowns still never shorten. |
-| **v1.0.5** | Daily-quota logic fix + chat pause | Two confirmed bugs fixed from overnight log analysis: **(1)** daily-quota cooldown now always uses the configured `daily_quota_cooldown_seconds` — Google's retryDelay is ignored for daily quotas since it is often wrong; **(2)** existing cooldowns can never be shortened — a 503 (10s) can no longer wipe a 1h daily-quota protection (fixed by `max()` on `sick_until`). Plus: the carousel now honors chat **pause** (waits until unpaused, resumes cleanly). Rotation / selection / ETA-sleep unchanged from 1.0.4. (An early 1.0.5 build's key-status panel was removed in 1.0.6 — it showed incorrect data.) |
-| **v1.0.4** | Agent Zero V2 / V2.1 compatibility | Three V2/V2.1 changes broke 1.0.3, all fixed here. **(1)** V2 moved streaming to a transport layer and removed `models._parse_chunk`; 1.0.4 detects the A0 version once and picks the right parser automatically. **(2)** V2.1 split the entry point — the agent monologue now calls `unified_turn`, not `unified_call`, so 1.0.3's rotation was bypassed entirely; 1.0.4 also wraps `unified_turn`, calling `litellm.acompletion` directly (bypassing A0's internal Responses transport so 503s return in ~1s instead of ~40s). **(3)** V2.1's free-tier prompt-caching 429 is sidestepped by disabling explicit caching. The selection / health / cooldown carousel is unchanged from 1.0.3. |
-| **v1.0.3** | Observability + faster recovery + invalid-key fix | Two real Gemini-`503` outages (one **83 minutes straight**) proved the engine handled outages correctly — but the **logs** were hard to read and recovery **trickled**. Added: raw full-error toggle, precise durations (`1m30s` not "2m"), fast pool recovery (`_thaw_server_cooled_keys`), 503-storm log collapse, and an **invalid-key fix** so an expired/typo'd 400 key is quarantined + rotated instead of aborting the run. Selection path UNCHANGED. |
-| **v1.0.2** | Critical 5xx-misclassification fix + deeper nudge + honest waiting | A real ~6-hour Gemini run froze the chat ~38 min: transient `503`s whose bodies mentioned "daily" were misclassified as daily-quota and cooled the whole pool for 1h. Fixed by classifying any 5xx as a short server retry BEFORE the quota-text check. Plus interruptible cooling sleep and the true recovery clock. Engine selection path unchanged. |
-| **v1.0.1** | Quota awareness + reliability fixes + log overhaul | Google sends a misleading `retryDelay: 1s` on a daily 429 — trusting it re-probed a dead key once per second. Fixed with strict daily/account detection + provider-agnostic adaptive backoff. Logs reworked into a clear `silent`/`normal`/`verbose` tri-state. Engine selection path unchanged. |
-| **v1.0.0** | First stable release | Engine validated: 1,163 ops / 117 rate limits / 0 crashes. ETA-driven sleep proven in production. |
-| v0.5.8.0 | The ETA Fix | Real log revealed: pulsing every 2s against sick keys burned ~45 wasted 429s in 26s. Fixed by sleeping exactly until next recovery. |
-| v0.5.7.4 | Verbose Trace | Added opt-in observability: key short id, selection latency, pool snapshot, cascade summary. |
-| v0.5.7 | Packaging Cleanup | A0 v1.15 schema compliance, clean uninstall hooks. |
-| v0.5.6 | The Trust | "Trust the Connection" philosophy formalized — zero artificial timeouts. |
-| v0.5.0 - v0.5.5 | The Commander → The Refined | Identity-aware health, anti-dogpile, anti-thundering-herd, smart quarantine. |
-| v0.4.x | The Seed → The Strategist | Foundational rotation, eternal carousel, basic RPM-awareness. |
+| **v1.2.0** | The wait, said out loud | An all-keys-cooling wait now appears **in the chat**, not only on the console — and the settings screen was rebuilt so an on-by-default toggle stops rendering as off and saving that lie back. Verified on A0 **v2.10**. |
+| **v1.0.9** | KAME stops re-implementing Agent Zero | KAME only **chooses the key**; A0 owns the request, the stream, the parsing and the result. Five upstream symbols and `litellm` left the dependency surface. Live-verified on six A0 tags, one code path. |
+| **v1.0.8** | Early stop + denied keys | The stream now breaks where native A0 breaks it (no generation past a finished tool call), and a `403 PERMISSION_DENIED` is quarantined instead of returning to the carousel every 20 seconds. |
+| **v1.0.7** | Response Shield | A `response` tool arriving with empty, null or wrongly-keyed arguments is healed instead of crashing the turn — the reply is salvaged rather than paid for with a repair round-trip. |
+| **v1.0.6** | Faster failover, honest numbers | Zero-delay rotation (~750 ms saved per 15-key storm), the provider's own quota tag printed inline, one transient empty stream forgiven, and an invalid key always shown — with enough of it to find in your console. |
+| **v1.0.5** | Daily quota, correctly | The configured daily cooldown always wins over the provider's misleading hint, an existing cooldown can never be shortened, and the carousel honours chat **pause**. |
+| **v1.0.4** | Alive on Agent Zero V2 / V2.1 | V2 moved streaming to a transport layer and V2.1 split the entry point to `unified_turn` — rotation was being bypassed entirely. One engine now serves both majors. |
+| **v1.0.3** | Observability + faster recovery | Two real Gemini 503 outages (one **83 minutes**) proved the engine was right and the logs were unreadable. Precise durations, storm collapse, fast pool thaw, and invalid-key rotation. |
+| **v1.0.2** | A 5xx is not a daily quota | A transient 503 whose body mentioned "daily" cooled the whole pool for an hour and froze a chat for 38 minutes. Any 5xx is now classified as a short server retry **before** the quota text is read. |
+| **v1.0.1** | Quota awareness across providers | Google sends `retryDelay: 1s` on a daily 429; trusting it re-probed a dead key once per second. Strict daily/account detection, adaptive backoff, and a `silent`/`normal`/`verbose` log tri-state. |
+| **v1.0.0** | First stable release | Validated in production: 1,163 operations, 117 rate limits, 0 crashes. ETA-driven sleep proven. |
+| v0.5.8.0 | The ETA Fix | Pulsing every 2s against sick keys burned ~45 wasted 429s in 26 seconds. Fixed by sleeping exactly until the next recovery. |
+| v0.5.7.4 | Verbose Trace | Opt-in observability: key short id, selection latency, pool snapshot, cascade summary. |
+| v0.5.7 | Packaging cleanup | A0 v1.15 schema compliance, clean uninstall hooks. |
+| v0.5.6 | The Trust | "Trust the Connection" formalized — zero artificial timeouts. |
+| v0.5.0–v0.5.5 | The Commander → The Refined | Identity-aware health, anti-dogpile, anti-thundering-herd, smart quarantine. |
+| v0.4.x | The Seed → The Strategist | Foundational rotation, eternal carousel, basic RPM awareness. |
 
 > **The lesson across versions:** the only way to build something this reliable is to **run it in production and read the logs honestly**. Every major improvement in KAME came from a real log showing real behavior — not from theory.
 
@@ -544,6 +551,17 @@ When all 15 keys went cold, KAME announced the outage **once**, slept quietly, a
 > v1.0.0 would have trusted the provider's misleading short `retryDelay` and re-probed dead keys roughly once per second for hours. v1.0.1 rested each one for a real hour, slept through the total outage, and lost **zero** requests.
 
 </details>
+
+---
+
+## 🐢 The Hermes sibling
+
+KAME also runs on [Hermes](https://github.com/NousResearch/hermes). Same decision core, same version
+line: **the same MAJOR.MINOR means the same generation of behaviour on both hosts**, and the patch
+number moves independently. The 1.1.x series exists only on Hermes, because it fixed stream handling
+that Agent Zero has owned itself since 1.0.9 — the two lines rejoin at 1.2.0.
+
+**→ [kame-api-rotation-for-hermes](https://github.com/Kame696/kame-api-rotation-for-hermes)**
 
 ---
 
