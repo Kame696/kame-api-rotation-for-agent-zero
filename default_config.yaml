@@ -57,3 +57,15 @@ kame_unusable_response_limit: 5
 # kame_log_full_errors overrides this (shows every line). Set false to restore
 # one line per failure at 'normal'. Pure observability — rotation is unchanged.
 kame_collapse_storm_logs: true
+
+# Tell the user, in the chat, when every key in a pool is cooling. On by
+# default. KAME already announces a long wait on the console — which is not
+# where the person waiting is looking, so a pool waiting out a daily quota is
+# indistinguishable from a hung agent, and the only move that looks available
+# is restarting Agent Zero (throwing the wait and the context away). When true,
+# a wait longer than ~90s puts ONE log item in the chat and keeps it updated:
+# how many keys are resting, when the earliest is expected back, how long it
+# has run, and that stop still works. Counts and the pool name only — never a
+# key — and UI-only, so it never enters the model's history. Pure
+# observability: rotation, cooldowns and give-up behavior are unchanged.
+kame_wait_notice: true

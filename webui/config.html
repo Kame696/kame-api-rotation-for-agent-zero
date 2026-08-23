@@ -1,110 +1,203 @@
 <!--
-  Settings UI for the api_rotation_by_kame plugin (A0 plugin settings modal).
-  Settings are re-read on each monologue start and are pure configuration —
-  the rotation/selection algorithm is unaffected. (A legacy verbose_trace: true
+  Settings screen for the api_rotation_by_kame plugin (A0's plugin settings modal).
+
+  v1.2.0 rewrote this file twice over:
+
+    * It now uses Agent Zero's own settings markup (section-title /
+      section-description / field / field-label / field-control), so KAME's
+      screen looks like every other plugin's instead of like a page that came
+      from somewhere else. The checkbox toggles are A0's, not hand-rolled.
+
+    * Every control carries an x-init default. `get_plugin_config` returns the
+      SAVED config.json when one exists — it is not merged with
+      default_config.yaml — so a setting added after the user last pressed Save
+      arrives here as `undefined`. Without the x-init, an on-by-default toggle
+      would render unchecked and then SAVE that lie back over a working
+      default. The x-init values must therefore match default_config.yaml.
+
+  Settings are re-read on every monologue start. (A legacy verbose_trace: true
   still maps to the "verbose" log level.)
 -->
 <html>
 <head>
   <title>KAME — API Rotation Settings</title>
-  <script type="module">
-    import { store } from "/components/plugins/plugin-settings-store.js";
-  </script>
 </head>
 <body>
-  <div x-data>
-    <h2>KAME — API Rotation</h2>
-    <p>
-      Multi-key rotation with smart quarantine and an eternal carousel. The
-      engine is intentionally opinionated — these are the only knobs.
-    </p>
+<div x-data>
+  <template x-if="config">
+    <div>
+      <div class="section-title">KAME — API Rotation</div>
+      <div class="section-description">
+        Multi-key rotation with smart quarantine and an eternal carousel.
+        <b>KAME works with none of these touched.</b> They are on two labelled
+        shelves because they are not equally interesting: the first only changes
+        what you are told, the second changes a number.
+      </div>
 
-    <h3>Logging</h3>
+      <div class="section-title">What KAME tells you</div>
+      <div class="section-description">
+        Pure observability. Nothing here changes which key is picked, how long a
+        key rests, or when a turn gives up — only how much of that reaches you,
+        and where.
+      </div>
 
-    <div class="setting-row">
-      <label>
-        Log level
-        <select x-model="config.kame_log_level">
-          <option value="silent">silent — no plugin output (hard errors only)</option>
-          <option value="normal">normal — one line per success + events (recommended)</option>
-          <option value="verbose">verbose — full diagnostics</option>
-          <option value="verbose+errors">verbose+errors — verbose AND the full raw error on every failure</option>
-        </select>
-      </label>
-      <p class="hint">
-        How much KAME writes to the Docker log; the rotation algorithm is the
-        same at every level. <strong>normal</strong> shows the pool count only
-        when degraded, <strong>silent</strong> keeps KAME out of the log
-        entirely, <strong>verbose</strong> adds heartbeat, timing, pool
-        snapshot and a session summary, and <strong>verbose+errors</strong>
-        also dumps the complete raw exception on every failure — use it to
-        confirm KAME's classification (e.g. that a "daily-quota" line really
-        carries a PerDay quota) is correct.
-      </p>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Log level</div>
+          <div class="field-description">
+            How much KAME writes to the Docker log; the rotation algorithm is
+            the same at every level.<br>
+            <b>silent</b>: no routine output — hard errors only.<br>
+            <b>normal</b>: one line per successful call, plus rotations, limits
+            and sleeps. Shows the pool count only when it is degraded.<br>
+            <b>verbose</b>: adds a heartbeat, per-call timing, the full pool
+            snapshot and a periodic session summary.<br>
+            <b>verbose+errors</b>: also dumps the complete raw exception on
+            every failure — use it to confirm KAME's classification is right
+            (that a "daily-quota" line really carries a PerDay quota).
+          </div>
+        </div>
+        <div class="field-control">
+          <select
+            x-model="config.kame_log_level"
+            x-init="if (config.kame_log_level === undefined || config.kame_log_level === null) config.kame_log_level = 'normal'"
+          >
+            <option value="silent">silent — hard errors only</option>
+            <option value="normal">normal — one line per call (recommended)</option>
+            <option value="verbose">verbose — full diagnostics</option>
+            <option value="verbose+errors">verbose+errors — and the raw error on every failure</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Key display in logs</div>
+          <div class="field-description">
+            <b>fingerprint</b> is a hash like <code>k3f9a1</code> — not your
+            key, so the secret never reaches the log. <b>prefix8</b> shows the
+            first 8 characters. <b>full</b> writes the entire key; local
+            debugging only.
+          </div>
+        </div>
+        <div class="field-control">
+          <select
+            x-model="config.key_log_style"
+            x-init="if (config.key_log_style === undefined || config.key_log_style === null) config.key_log_style = 'fingerprint'"
+          >
+            <option value="fingerprint">fingerprint — anonymized id (recommended)</option>
+            <option value="prefix8">prefix8 — first 8 characters</option>
+            <option value="full">full — the entire key (debug only)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Say in the chat when every key is cooling</div>
+          <div class="field-description">
+            When a whole pool is waiting out a quota, KAME says so on the Docker
+            log — which is not where you are looking. On this side it looks like
+            the agent hung, and the only move that looks available is restarting
+            Agent Zero, which throws the wait and the context away. With this on,
+            a wait longer than about 90 seconds puts <b>one</b> item in the chat
+            and keeps it updated: how many keys are resting, when the earliest is
+            expected back, how long it has run, and that <b>stop still works</b>.
+            Counts and the pool name only — never a key — so it is safe in a
+            screenshot, and it never enters the model's history.
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.kame_wait_notice"
+              x-init="if (config.kame_wait_notice === undefined || config.kame_wait_notice === null) config.kame_wait_notice = true"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Collapse repeated failures during an outage</div>
+          <div class="field-description">
+            A sustained provider outage produces one near-identical failure line
+            per rotation — a real Gemini outage logged <code>1,063</code> of them
+            in 83 minutes. With this on, <b>normal</b> prints the first failure,
+            then one aggregate line every ~20s, then a "storm over" recap when a
+            key answers again. <b>verbose</b> still prints every line, and
+            <b>verbose+errors</b> overrides this entirely. Turn it off to get one
+            line per failure back at <b>normal</b>.
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.kame_collapse_storm_logs"
+              x-init="if (config.kame_collapse_storm_logs === undefined || config.kame_collapse_storm_logs === null) config.kame_collapse_storm_logs = true"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="section-title">Tuning</div>
+      <div class="section-description">
+        Two numbers, already set to what this plugin was built and tested
+        against. Change them only if you know your provider disagrees.
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Daily-quota cooldown (seconds)</div>
+          <div class="field-description">
+            How long to rest a key after a <b>daily-quota</b> or
+            <b>account / out-of-credit</b> limit, on any provider. This is the
+            one case where the provider's own retry hint is ignored on purpose:
+            it reports seconds for a counter that does not roll until midnight.
+            KAME probes the key again after this interval. Per-minute limits are
+            unaffected. Default <code>3600</code> (1h); range 1–86400.
+          </div>
+        </div>
+        <div class="field-control">
+          <input
+            type="number" min="1" max="86400" step="1"
+            x-model.number="config.daily_quota_cooldown_seconds"
+            x-init="if (config.daily_quota_cooldown_seconds === undefined || config.daily_quota_cooldown_seconds === null) config.daily_quota_cooldown_seconds = 3600"
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Unusable-response floor</div>
+          <div class="field-description">
+            Agent Zero stops a turn after N consecutive model outputs it cannot
+            parse into a tool request, <i>"to prevent further API charges"</i>.
+            With a rotated pool that reason is much weaker — and A0 has itself
+            moved the number (it was <code>2</code> in v2.4–v2.7, <code>5</code>
+            in v2.8), so a settings file written by an older A0 keeps the tight
+            <code>2</code> forever and one JSON-escaping slip ends the turn. KAME
+            applies this as a <b>floor, never a ceiling</b>:
+            <code>effective = max(A0's setting, this)</code>. It is not a bypass
+            — past this count A0's stop is left alone, so a model stuck in a
+            formatting loop still cannot drain the pool. Default <code>5</code>;
+            set <code>0</code> to never interfere.
+          </div>
+        </div>
+        <div class="field-control">
+          <input
+            type="number" min="0" step="1"
+            x-model.number="config.kame_unusable_response_limit"
+            x-init="if (config.kame_unusable_response_limit === undefined || config.kame_unusable_response_limit === null) config.kame_unusable_response_limit = 5"
+          />
+        </div>
+      </div>
     </div>
-
-    <div class="setting-row">
-      <label>
-        Key display in logs
-        <select x-model="config.key_log_style">
-          <option value="fingerprint">fingerprint — anonymized id (recommended)</option>
-          <option value="prefix8">prefix8 — first 8 characters of the key</option>
-          <option value="full">full — the entire key (debug only)</option>
-        </select>
-      </label>
-      <p class="hint">
-        <strong>fingerprint</strong> is a hash like <code>k3f9a1</code> — not
-        your real key, so the secret never reaches the log.
-        <strong>full</strong> writes the whole key; use only for local debugging.
-      </p>
-    </div>
-
-    <h3>Limits</h3>
-
-    <div class="setting-row">
-      <label>
-        Daily-quota cooldown (seconds)
-        <input
-          type="number"
-          min="1"
-          max="86400"
-          step="1"
-          x-model.number="config.daily_quota_cooldown_seconds"
-        />
-      </label>
-      <p class="hint">
-        How long to rest a key after a <strong>daily-quota</strong> or
-        <strong>account / out-of-credit</strong> limit (any provider). KAME
-        probes the key again after this interval — the provider's own retry
-        hint is ignored for daily quotas since it is frequently wrong or
-        misleading. Default <code>3600</code> (1h); range 1–86400.
-      </p>
-    </div>
-
-    <div class="setting-row">
-      <label>
-        Unusable-response floor
-        <input
-          type="number"
-          min="0"
-          step="1"
-          x-model.number="config.kame_unusable_response_limit"
-        />
-      </label>
-      <p class="hint">
-        Agent Zero stops a turn after N consecutive model outputs it cannot
-        parse into a tool request, <em>"to prevent further API charges"</em>.
-        With a rotated pool that reason is much weaker — and A0 has itself
-        moved the number (it was <code>2</code> in v2.4–v2.7, <code>5</code> in
-        v2.8), so a settings file written by an older A0 keeps the tight
-        <code>2</code> forever and one JSON-escaping slip ends the turn. KAME
-        applies this as a <strong>floor, never a ceiling</strong>:
-        <code>effective = max(A0's setting, this)</code>. It is not a bypass —
-        past this count A0's stop is left alone, so a model stuck in a
-        formatting loop still cannot drain the pool. Default <code>5</code>;
-        set <code>0</code> to never interfere.
-      </p>
-    </div>
-  </div>
+  </template>
+</div>
 </body>
 </html>

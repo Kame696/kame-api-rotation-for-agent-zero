@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.0.9"
+KAME_VERSION = "1.2.0"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -287,6 +287,28 @@ _KAME_LONG_HEARTBEAT_S = 300.0  # 5 min
 # Minimum real-time gap between repeated "all keys cooling" sleep log lines
 # while the soonest recovery is still near (avoids per-cycle spam).
 _KAME_SLEEP_LOG_MIN_INTERVAL_S = 5.0
+
+# --- v1.2.0: the wait, said where the user is actually looking ---
+#
+# Everything above writes to the console. That is the right place for an
+# operator reading a Docker log and the wrong place for the person watching the
+# chat: to them a pool that is waiting out a daily quota is an agent that has
+# stopped, with no way to tell it from a hang. ADR 0002 removed the rotation
+# ceiling and named this as what it leaves open — "the user typically restarts
+# A0 in that scenario" — and a restart is not a decision the user made, it is
+# one the silence made for them.
+#
+# So the same facts the console already gets are put into the chat as ONE log
+# item that keeps updating: how many keys are resting, when the earliest is
+# expected, how long the wait has run, and that stop cancels. Counts and
+# fingerprints only, never a key, so the line is safe in a screenshot.
+_KAME_WAIT_NOTICE = True
+# A short wait says nothing at all. Under this, the pool recovers before anybody
+# has time to wonder, and a notice would be noise on every rotation.
+_KAME_WAIT_NOTICE_AFTER_S = 90.0
+# How often the one item is refreshed once it is on screen. It is an update to
+# an existing item, not a new message, so this is a countdown rather than spam.
+_KAME_WAIT_NOTICE_REFRESH_S = 10.0
 
 # --- v1.0.1: key id display style (configurable) ---
 # "fingerprint" (default): anonymized stable hash id, never leaks the secret.
@@ -420,6 +442,22 @@ def set_collapse_storm_logs(enabled) -> None:
         _KAME_COLLAPSE_STORM_LOGS = enabled.strip().lower() in ("true", "1", "yes", "on")
     else:
         _KAME_COLLAPSE_STORM_LOGS = bool(enabled)
+
+
+def set_wait_notice(enabled) -> None:
+    """Enable/disable the chat-side "waiting for a key" notice (v1.2.0).
+
+    Called by the activation extension from the `kame_wait_notice` plugin
+    setting. Accepts a bool or a truthy string ('true'/'1'/'yes'/'on'). Pure
+    observability — it never changes which key is picked, how long anything
+    rests, or when the carousel gives up. Turning it off only means a long wait
+    is announced on the console and nowhere else.
+    """
+    global _KAME_WAIT_NOTICE
+    if isinstance(enabled, str):
+        _KAME_WAIT_NOTICE = enabled.strip().lower() in ("true", "1", "yes", "on")
+    else:
+        _KAME_WAIT_NOTICE = bool(enabled)
 
 
 def set_current_agent(agent) -> None:
@@ -1589,7 +1627,9 @@ class _KameSleepState:
     (so the ETA-driven sleep can be shared between the unified_call and the V2.1
     unified_turn carousels without duplicating the logic)."""
     __slots__ = ("sleep_count", "cooldown_overhead_s", "long_cool_logged",
-                 "last_sleep_log_at", "last_long_heartbeat_at")
+                 "last_sleep_log_at", "last_long_heartbeat_at",
+                 # v1.2.0 — the chat-side wait notice (see _kame_wait_notice_tick)
+                 "cold_since", "notice_item", "notice_refreshed_at", "notice_broken")
 
     def __init__(self):
         self.sleep_count = 0
@@ -1597,6 +1637,124 @@ class _KameSleepState:
         self.long_cool_logged = False
         self.last_sleep_log_at = 0.0
         self.last_long_heartbeat_at = 0.0
+        self.cold_since = 0.0
+        self.notice_item = None
+        self.notice_refreshed_at = 0.0
+        self.notice_broken = False
+
+
+def _kame_pool_counts(identity: str, all_keys: list):
+    """(healthy, total) for one pool, right now. Counts only — never a key."""
+    now = time.time()
+    with _KAME_LOCK:
+        state = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+        total = len(all_keys)
+        healthy = sum(
+            1 for k in all_keys
+            if float((state.get(k) or {}).get("sick_until") or 0) < now
+        )
+    return healthy, total
+
+
+def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> None:
+    """Show — and keep refreshing — one chat log item while the pool is cold.
+
+    Everything else KAME says about a wait goes to the console, which the person
+    watching the chat is not reading. To them a pool waiting out a daily quota
+    looks exactly like a hung agent, and the only move that looks available is
+    restarting Agent Zero — which throws away the wait and the context with it.
+
+    So the facts already in the console are put where the decision is made, as a
+    SINGLE item that updates in place: how many keys are resting, when the first
+    one is expected back, how long this has run, and that stop still works. The
+    item carries counts and a pool name only, so it is safe on screen and in a
+    screenshot, and it is UI-only — `context.log` never enters the model's
+    history, so nothing here can change what the agent thinks it was told.
+
+    Best-effort by construction: any failure marks the notice broken for the
+    rest of this call and rotation carries on untouched. A wait that is not
+    narrated is a worse experience; a wait that is not survived is a bug.
+    """
+    if not _KAME_WAIT_NOTICE or st.notice_broken:
+        return
+    now = time.time()
+    if not st.cold_since:
+        st.cold_since = now
+    waited = now - st.cold_since
+    if waited < _KAME_WAIT_NOTICE_AFTER_S:
+        return
+    if st.notice_item is not None and (now - st.notice_refreshed_at) < _KAME_WAIT_NOTICE_REFRESH_S:
+        return
+
+    try:
+        agent = _KAME_CURRENT_AGENT.get()
+        log = getattr(getattr(agent, "context", None), "log", None)
+        if log is None:
+            st.notice_broken = True     # no chat to talk to (CLI, tests, a task runner)
+            return
+
+        healthy, total = _kame_pool_counts(identity, all_keys)
+        eta = _next_recovery_seconds(identity, all_keys)
+        if eta is None:
+            eta_line = "A key is free now — resuming."
+        else:
+            eta_line = (
+                f"Earliest key expected back in ~{_fmt_duration(eta)} "
+                f"(around {time.strftime('%H:%M:%S', time.localtime(now + eta))})."
+            )
+        resting = total - healthy
+        content = (
+            f"{resting} of {total} keys are resting on {identity}. {eta_line}\n"
+            f"Waited {_fmt_duration(waited)} so far. No API calls are being made "
+            f"while they cool.\n"
+            f"This resumes by itself the instant a key answers. Press stop to cancel."
+        )
+        kvps = {
+            "pool": identity,
+            "model": f"{call_type}|{model_short}",
+            "keys resting": f"{resting} of {total}",
+            "earliest recovery": "now" if eta is None else f"~{_fmt_duration(eta)}",
+            "waited": _fmt_duration(waited),
+        }
+        heading = f"KAME — waiting for an API key ({_fmt_duration(waited)})"
+
+        if st.notice_item is None:
+            st.notice_item = log.log(
+                type="util", heading=heading, content=content, kvps=kvps
+            )
+        else:
+            st.notice_item.update(heading=heading, content=content, kvps=kvps)
+        st.notice_refreshed_at = now
+    except Exception:
+        st.notice_broken = True
+
+
+def _kame_wait_notice_finish(st, outcome: str) -> None:
+    """Close the wait notice: 'resumed' after a key answered, 'stopped' otherwise.
+
+    Called on every way out of the carousel, so the chat never keeps a "waiting"
+    item that is no longer true. A no-op when no notice was ever shown (the
+    common case: the pool recovered before anybody could wonder)."""
+    item = st.notice_item
+    if item is None:
+        return
+    st.notice_item = None
+    try:
+        waited = _fmt_duration(time.time() - st.cold_since) if st.cold_since else "?"
+        if outcome == "resumed":
+            item.update(
+                heading=f"KAME — a key came back after {waited}",
+                content=f"A key answered after {waited} of waiting. Continuing.",
+                kvps={"waited": waited, "outcome": "resumed"},
+            )
+        else:
+            item.update(
+                heading=f"KAME — stopped waiting after {waited}",
+                content=f"The wait ended after {waited} without a key coming back.",
+                kvps={"waited": waited, "outcome": "stopped"},
+            )
+    except Exception:
+        st.notice_broken = True
 
 
 async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st):
@@ -1652,12 +1810,20 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
                 f"Sleeping {wait:.1f}s (no API calls) — earliest recovery ~{_eta_label}."
             )
 
+    if not st.cold_since:
+        st.cold_since = _now_t
+
     _slept = 0.0
     while _slept < wait:
         _slice = min(1.0, wait - _slept)
         await asyncio.sleep(_slice)
         _slept += _slice
         await _kame_honor_intervention()
+        # v1.2.0: refresh the chat-side notice from inside the slice loop rather
+        # than once per sleep. A sleep can be a full minute long; a countdown
+        # that only moves every minute reads as frozen, which is the exact
+        # impression the notice exists to remove.
+        _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short)
     st.cooldown_overhead_s += (time.perf_counter() - _sleep_started)
 
 
@@ -1709,7 +1875,14 @@ async def _kame_carousel(self, ctx):
             # All keys sick. Sleep until the SOONEST key recovers (capped) instead
             # of pulsing the API with sick keys. After the sleep we `continue` so we
             # re-select - we NEVER call the model with a key we know is cooling.
-            await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st)
+            try:
+                await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st)
+            except BaseException:
+                # The user pressed stop / nudged mid-sleep (InterventionException
+                # comes out of _kame_honor_intervention, not out of the call
+                # below), so the "waiting" item must not be left standing.
+                _kame_wait_notice_finish(st, "stopped")
+                raise
             continue
         elif _lvl_verbose():
             # Additive trace line: which key was picked + selection time.
@@ -1775,6 +1948,7 @@ async def _kame_carousel(self, ctx):
             # pool at least once), thaw the other server-cooled keys so the pool
             # snaps back fast instead of trickling. Scoped to 5xx cooldowns only.
             if st.sleep_count > 0:
+                _kame_wait_notice_finish(st, "resumed")
                 _thawed = _thaw_server_cooled_keys(identity, key)
                 if _thawed and _lvl_normal():
                     PrintStyle.success(
@@ -1813,11 +1987,13 @@ async def _kame_carousel(self, ctx):
             # delegation these are raised by A0's own streaming callbacks, exactly
             # as they are without KAME installed.
             if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
+                _kame_wait_notice_finish(st, "stopped")
                 raise
             # Only a genuinely TERMINAL error surfaces — everything else (incl. a
             # transient mid-stream drop) is cooled + rotated, never re-raised
             # (the v1.0.4 eternal-carousel promise).
             if _is_terminal_error(e):
+                _kame_wait_notice_finish(st, "stopped")
                 raise e
             if ctx["progress"]["any"] and _lvl_normal():
                 PrintStyle.warning(
@@ -2156,7 +2332,7 @@ def apply_kame_patch():
             f"[KAME v{KAME_VERSION}] This Agent Zero build changed its model layer "
             f"in a way KAME does not recognize, so KAME stayed OUT of the way — "
             f"Agent Zero is running natively and unmodified (no rotation). "
-            f"Please report this at https://github.com/Kame696/kame-api-engine/issues"
+            f"Please report this at https://github.com/Kame696/kame-api-rotation-for-agent-zero/issues"
         )
         return False
 

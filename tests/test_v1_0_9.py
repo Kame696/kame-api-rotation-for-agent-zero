@@ -536,7 +536,14 @@ check("E3 a None callback stays None (A0 must still see a NON-streaming call)",
 # =============================================================================
 # F. VERSION SINGLE-SOURCING + LAYER-3 SAFETY
 # =============================================================================
-check("F1 KAME_VERSION is 1.0.9", K.KAME_VERSION == "1.0.9")
+# Loosened in 1.2.0: this asserts the floor 1.0.9 established, not the exact
+# number. Pinning the current version inside an old release's suite means every
+# release has to edit tests that are not about the release — and a test edited
+# on every release stops being read.
+check("F1 KAME_VERSION is a version string, at or past the 1.0.9 floor",
+      re.fullmatch(r"\d+\.\d+\.\d+", K.KAME_VERSION) is not None
+      and tuple(int(p) for p in K.KAME_VERSION.split(".")) >= (1, 0, 9),
+      K.KAME_VERSION)
 _engine_src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"),
                    encoding="utf-8").read()
 _banner_src = inspect.getsource(K._print_shield_status)
@@ -557,7 +564,7 @@ check("F3 the removed 1.0.8 stream machinery is really gone",
                        "_kame_unified_call", "_kame_unified_turn", "acompletion")
            if hasattr(K, n)]))
 check("F4 layer 3 warns the user in the console and links the issue tracker",
-      "github.com/Kame696/kame-api-engine/issues" in _apply_src)
+      "github.com/Kame696/kame-api-rotation-for-agent-zero/issues" in _apply_src)
 check("F5 accessory shields cannot take down the rotation core",
       _apply_src.index("_patch_rate_limiters()") > _apply_src.index("_kame_bind_entry_points"))
 

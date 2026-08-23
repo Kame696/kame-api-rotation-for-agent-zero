@@ -1,4 +1,4 @@
-"""KAME activation — the one place that turns the engine on (v1.0.9).
+"""KAME activation — the one place that turns the engine on (v1.0.9+).
 
 Why this module exists
 ----------------------
@@ -31,6 +31,8 @@ History kept from the original extension:
   "verbose" so existing configs keep working.
   v1.0.2 stashes the live agent (``set_current_agent``) so the engine's
   all-keys-cooling sleep can honor a user message / "nudge".
+  v1.2.0 threads ``kame_wait_notice`` — whether a long all-keys-cooling wait is
+  announced in the chat as well as on the console.
 """
 
 
@@ -51,6 +53,15 @@ def activate(agent=None):
             set_collapse_storm_logs,
             set_current_agent,
         )
+        # v1.2.0. Fetched by name rather than imported with the rest on purpose:
+        # a half-copied plugin directory (new activation file, older engine)
+        # would fail the whole import tuple and leave KAME uninstalled — a
+        # missing log line is not worth losing rotation over.
+        try:
+            from usr.plugins.api_rotation_by_kame import kame_engine as _kame_engine
+            set_wait_notice = getattr(_kame_engine, "set_wait_notice", None)
+        except Exception:
+            set_wait_notice = None
 
         # Pick up plugin settings (best-effort; defaults preserve behavior).
         try:
@@ -74,6 +85,10 @@ def activate(agent=None):
             set_key_log_style(cfg.get("key_log_style", "fingerprint"))
             # v1.0.3: collapse repetitive 503-storm logs (on by default).
             set_collapse_storm_logs(cfg.get("kame_collapse_storm_logs", True))
+            # v1.2.0: tell the user in the chat when the whole pool is cooling
+            # (on by default — the console said it, the person did not see it).
+            if set_wait_notice is not None:
+                set_wait_notice(cfg.get("kame_wait_notice", True))
         except Exception:
             # Older A0 versions may lack get_plugin_config; fall back to defaults.
             pass

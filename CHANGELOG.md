@@ -21,7 +21,100 @@ graph LR
 
 ---
 
-## v1.0.9 — current
+## v1.2.0 — current
+
+**The wait is said where the user is looking, and the settings screen admits
+that its settings are not equally interesting.**
+
+The rotation engine is untouched. Every line of key selection, cooldown maths,
+storm collapsing and carousel logic is byte-for-byte what 1.0.9 shipped. What
+changed is the two places a person actually meets this plugin: the chat while it
+is working, and the settings screen before it ever runs.
+
+*(There is no 1.1.x here. The 1.1 series was three Hermes-only stream fixes with
+no Agent Zero counterpart — Agent Zero does not own the stream since 1.0.9, so
+there was nothing to fix. The version line is shared by MAJOR.MINOR, so Agent
+Zero rejoins it at 1.2.0. See `PARITY.md`.)*
+
+### A long wait no longer looks like a hung agent
+
+When every key in a pool is cooling, KAME sleeps until the exact moment one
+recovers, and says so — on the console. That is the right place for an operator
+reading a Docker log and the wrong place for the person watching the chat. To
+them, a pool waiting out a daily quota and a crashed turn are indistinguishable,
+and the only move that looks available is restarting Agent Zero, which throws
+away the wait *and* the context. ADR 0002 named this exact scenario when it
+removed the rotation ceiling and left it open.
+
+A wait longer than ~90 seconds now puts **one** log item in the chat and keeps it
+updated every ~10 seconds:
+
+```
+KAME — waiting for an API key (4m12s)
+15 of 15 keys are resting on gemini:gemini-3.5-flash. Earliest key expected
+back in ~41m (around 14:32:07).
+Waited 4m12s so far. No API calls are being made while they cool.
+This resumes by itself the instant a key answers. Press stop to cancel.
+```
+
+- **One item, edited in place.** Not one message per rotation — a 40-minute
+  quota is a single line with a moving countdown.
+- **Counts and a pool name only.** Never a key, in any field, on any path. The
+  screen stays safe in a screenshot.
+- **UI-only.** It goes through `context.log`, which never enters the model's
+  history, so nothing here can change what the agent thinks it was told.
+- **Closed on every exit.** "A key came back after 4m12s" on success; "stopped
+  waiting" when you press stop, when a terminal error surfaces, or when a nudge
+  breaks the sleep. The chat never keeps a "waiting" line that is no longer true.
+- **Never able to break rotation.** No agent, no context, no log, or a log that
+  raises: each one disables the notice for that call and rotation carries on. A
+  wait that is not narrated is a worse experience; a wait that is not survived
+  would be a bug.
+
+Controlled by `kame_wait_notice` (on by default). Turning it off restores 1.0.9's
+console-only behaviour exactly.
+
+### The settings screen is Agent Zero's screen now
+
+- **It uses Agent Zero's own settings markup** (`section-title` / `field` /
+  `field-title` / `field-control`, and A0's toggle widget), so KAME's screen
+  looks like every other plugin's instead of like a page from somewhere else.
+- **Two labelled shelves, each with a sentence saying what it is for.** *What
+  KAME tells you* is pure observability — nothing on that shelf changes which
+  key is picked, how long anything rests, or when a turn gives up. *Tuning* is
+  two numbers already set to what this plugin was built and tested against. The
+  screen opens by saying **KAME works with none of these touched**.
+- **`kame_collapse_storm_logs` is on the screen at last.** It has shipped since
+  1.0.3 and existed only in `default_config.yaml`, which means the only way to
+  change it was to hand-edit a file most users never open.
+- **Every control now carries an `x-init` default.** `get_plugin_config` returns
+  the *saved* `config.json` when one exists — it is not merged with
+  `default_config.yaml` — so any setting added after a user last pressed Save
+  arrived at the screen as `undefined`. An on-by-default toggle would have
+  rendered unchecked and then saved that lie back over a working default. Every
+  x-init value is asserted against `default_config.yaml` by the test suite.
+
+### Verified against Agent Zero v2.10
+
+Full audit re-run: **12/12 fingerprints unchanged**, the live patch harness green
+across **71 checks**, and every offline suite passing. No compatibility work was
+needed — the 1.0.9 delegation architecture absorbed the release. The baseline in
+`a0_compat.json` is re-pinned to v2.10, and `COMPATIBILITY.md` records the audit.
+
+### Also in this release
+
+- **`tests/test_v1_2_0.py`** — 45 checks covering the threshold, the
+  one-item-updated-in-place contract, the absence of key material on every path,
+  all four close paths, four ways the chat can be missing or hostile, and the
+  agreement between the engine, the extension, the YAML defaults and the screen.
+- **The plugin's display title is now `KAME API Rotation`**, matching the Hermes
+  build and the repository name. The settings key (`name: api_rotation_by_kame`)
+  is deliberately unchanged — renaming it would orphan every existing install's
+  settings.
+
+---
+
+## v1.0.9
 
 **Agent Zero now makes the call; KAME only chooses the key.**
 The rotation engine is unchanged. What changed is architecture: KAME stopped

@@ -1,7 +1,7 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.0.9 — verified against Agent Zero v2.8 (2026-08-09).**
-Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8**.
+**KAME 1.2.0 — verified against Agent Zero v2.10 (2026-08-23).**
+Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10**.
 Supported range: Agent Zero **v1.14+** and the **whole V2 line**.
 
 This file is the single source of truth for *"Agent Zero shipped a new version — is
@@ -78,7 +78,7 @@ so it does not read as a red flag.
 After you have audited whatever it flagged **and the live harness is green**:
 
 ```bash
-python tools/a0_upgrade_check.py /tmp/a0 --update-baseline v2.8
+python tools/a0_upgrade_check.py /tmp/a0 --update-baseline v2.10
 ```
 
 That rewrites `a0_compat.json` (fingerprints + `verified_against` + `verified_on`).
@@ -105,7 +105,9 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.0 | 1.0.9 | supported | |
 | V2.1 – V2.6 | 1.0.9 | **live-verified** (v2.1, v2.4) | monologue switched to `unified_turn`; KAME binds both |
 | V2.7 | 1.0.9 | **live-verified** | |
-| **V2.8** | **1.0.9** | **verified — current baseline** | 12/12 fingerprints unchanged, live harness green. See §2.1. |
+| V2.8 | 1.0.9 | **live-verified** | 12/12 fingerprints unchanged. See §2.1. |
+| V2.9 | 1.2.0 | supported | not separately audited; v2.10 was verified over it |
+| **V2.10** | **1.2.0** | **verified — current baseline** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real
@@ -125,6 +127,25 @@ v2.8 is a large release, but nothing it touches is load-bearing for KAME.
 | `a0_api_mode: chat` added to 17 more providers (9 → 26, **including `google`**) | Neutral. Since 1.0.9 KAME does not choose the mode at all — A0 does, exactly as it would without the plugin. |
 | `litellm_transport` request builder sets `tool_choice: "required"` + `parallel_tool_calls: False` when tools are present | Now **inside** what KAME delegates to. In 1.0.8 KAME bypassed this and lost the behavior; in 1.0.9 the plugin inherits it for free. |
 | `monologue_start/_60_rename_chat.py` moved into a `_chat_naming` plugin | Unrelated extension point. |
+
+### 2.2 What Agent Zero v2.10 changed (audited 2026-08-23)
+
+**Nothing that KAME depends on.** All 12 fingerprints came back unchanged and the
+live harness passed 71/71 with KAME 1.2.0's code in place. No compatibility work
+was needed — this is the delegation architecture from 1.0.9 doing exactly what it
+was built for.
+
+Facts re-confirmed against the v2.10 source while building 1.2.0, because 1.2.0
+newly *depends* on two of them:
+
+| v2.10 fact | Where | Why KAME cares now |
+|---|---|---|
+| `Log.log(type, heading, content, kvps, update_progress, id) -> LogItem` and `LogItem.update(type, heading, content, kvps, update_progress)` | `helpers/log.py` | The 1.2.0 wait notice is one `log()` plus repeated `update()` calls. Both signatures are keyword-compatible with what KAME passes. |
+| `Type` includes `"util"` and `"warning"`; `HEADING_MAX_LEN = 120`, `CONTENT_MAX_LEN = 15_000`, `KEY_MAX_LEN = 60`, `VALUE_MAX_LEN = 5000` | `helpers/log.py` | KAME uses `"util"`; every string it writes is far under the caps, so nothing is silently truncated. |
+| `context.log` is **UI state only** — it is not the message history the model is given | `helpers/log.py`, `agent.py` | This is what makes the notice safe: it can never change what the agent thinks it was told. |
+| `get_plugin_config()` returns the **saved** `config.json` when one exists; it does **not** merge `default_config.yaml` into it | `helpers/plugins.py` | Any setting added after a user last pressed Save arrives as absent. KAME reads every setting with an explicit default, and every control on the settings screen carries a matching `x-init` — otherwise a new on-by-default toggle would render unchecked and save that lie back. |
+| Plugin settings screens bind to `config`, which is `context.settings` from the settings store, and are rendered inside `<template x-if="config">` | `webui/components/plugins/plugin-settings.html` | 1.2.0 rewrote `webui/config.html` to A0's own markup and added the `x-if` guard, so the screen cannot bind before the settings load. |
+| `max_consecutive_unusable_responses` default is still **5** | `helpers/settings.py` | The `kame_unusable_response_limit` floor default of 5 still matches upstream. |
 
 KAME is deliberately **defensive**: every patch target is looked up with
 `getattr(..., None)` and skipped if absent, so a missing symbol degrades one feature
@@ -264,7 +285,7 @@ auto-discovered from the checkout (registry on v1.20+, falling back to parsing t
 without editing the test. A control assertion in the same block proves KAME still
 *does* inject when keys exist, so the checks cannot pass by KAME being inert.
 
-Verified green on v1.14, v1.20, v2.1, v2.4, v2.7 and v2.8. Mutation-tested:
+Verified green on v1.14, v1.20, v2.1, v2.4, v2.7, v2.8 and v2.10. Mutation-tested:
 disabling the empty-pool passthrough guard makes every one of these fail.
 
 ---
@@ -391,7 +412,8 @@ Do these in order. Every step is verifiable.
    too if you changed `kame_engine.py`:
    ```bash
    python tests/test_a0_compat.py <a0-path>   # LIVE: real patches, real rotation
-   python tests/test_v1_0_9.py                # current architecture
+   python tests/test_v1_2_0.py                # current release
+   python tests/test_v1_0_9.py                # the delegation architecture
    python tests/test_v1_0_8.py                # and the earlier regressions
    ```
 6. **Re-pin** — `python tools/a0_upgrade_check.py <path> --update-baseline vX.Y`.
