@@ -568,6 +568,9 @@ that Agent Zero has owned itself since 1.0.9 — the two lines rejoin at 1.2.0.
 
 **→ [kame-api-rotation-for-hermes](https://github.com/Kame696/kame-api-rotation-for-hermes)**
 
+Both ports, the parity rule and the table of what each host already does itself:
+**[kame-api-rotation](https://github.com/Kame696/kame-api-rotation)** — the family's front door.
+
 ---
 
 ## 🗑️ Uninstall
