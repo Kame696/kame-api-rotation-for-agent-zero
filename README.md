@@ -117,8 +117,8 @@ KAME doesn't look like a bot. KAME looks like a thoughtful human who took a coff
 ## ⚡ Install — Quick start (3 steps)
 
 1. **Copy** the `api_rotation_by_kame/` folder into `/a0/usr/plugins/`
-2. **In Agent Zero → Settings → Model Provider**, enter your keys separated by commas:
-   `key1, key2, key3, key4, ...`
+2. **In Agent Zero → Settings → Model Provider**, paste all your keys into that **one** API key field, glued together with commas — one string, no separate fields, no spaces needed:
+   `key1,key2,key3,key4,etc`
 3. **Restart Agent Zero.** That's it.
 
 No config required. No tuning. No code changes anywhere. The plugin hooks Agent Zero's model layer at boot and reverts cleanly on uninstall.
