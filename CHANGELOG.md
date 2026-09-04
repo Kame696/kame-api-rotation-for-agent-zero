@@ -53,7 +53,20 @@ graph LR
 
 ---
 
-## v1.6.0.4 — current
+## Unreleased — on `main`, never run
+
+> **v1.6.0.1, v1.6.0.3 and v1.6.0.4 below are not releases.** They are built,
+> their tests pass, and not one of them has been installed into a real Agent
+> Zero or answered a single turn. The tags and GitHub releases for them were
+> withdrawn on 2026-09-04 at the owner's instruction, for exactly that reason.
+> The last released version is **v1.2.0**.
+>
+> A further fix exists in the Hermes port and is **not** here yet: a daily cap
+> still climbs `20s, 40s, 80s …` in this engine, so a key whose day is spent
+> needs eight refusals to earn an hour off and spends a request on each rung.
+> See the Hermes changelog, v1.7.0.0.
+
+## v1.6.0.4
 
 **A thinking token is not an answer.**
 
@@ -531,7 +544,7 @@ deliberately, and the reasoning is in
 
 ---
 
-## v1.2.0
+## v1.2.0 — current (last released)
 
 **The wait is said where the user is looking, and the settings screen admits
 that its settings are not equally interesting.**
