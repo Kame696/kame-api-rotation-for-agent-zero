@@ -205,11 +205,30 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.6.0.1"
+KAME_VERSION = "1.6.0.3"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
 _KAME_LOCK = threading.Lock()
+
+#: The longest rest each ``provider:model`` has ever been **told** to take on a
+#: throttle. v1.6.0.3, and it is not a cooldown — nothing rests for it. It is
+#: the answer to "what does this provider's short window actually look like",
+#: used only when a later throttle arrives naming no number at all.
+#:
+#: Google is why it exists. Its free-tier 429 comes in two wordings: spelled
+#: out with ``Please retry in Ns``, and terse — ``Resource has been exhausted
+#: (e.g. check quota).`` — with nothing at all. They are the same condition,
+#: and in a 46-minute Hermes run 168 arrived spelled out (never above 59.8s)
+#: and 232 arrived terse. Inventing a number for the terse ones while holding
+#: 168 measurements of the same window is not caution.
+#:
+#: Read and written under :data:`_KAME_LOCK`. Only throttles teach it, and
+#: only ones at or under :data:`_KAME_RL_BACKOFF_CAP_S`: a *daily* cap on
+#: Gemini also classifies as a rate limit and arrives sized at an hour, and
+#: one exhausted day must not teach every terse throttle afterwards to rest
+#: for an hour.
+_KAME_STATED_RL = {}  # { "provider:model": float seconds }
 _KAME_PATCHED = False
 _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
 # v1.0.2: the live A0 agent for the current async task, stashed by the activation
@@ -1048,6 +1067,74 @@ def _extract_quota_marker(exc) -> str:
         return ""
 
 
+#: The three spellings the quota id arrives under. ``quotaId`` is what Google
+#: puts in ``google.rpc.QuotaFailure.violations[]``; ``quota_limit`` is the
+#: snake_case form a parsed payload uses; ``quotaLimit`` is the camelCase one
+#: some adapters keep. All three name the same field.
+_QUOTA_ID_PATTERNS = (
+    re.compile(r'"quotaid"\s*:\s*"([^"]+)"'),
+    re.compile(r"'quota_?id'\s*:\s*'([^']+)'"),
+    re.compile(r'quota_?limit["\']?\s*[:=]\s*["\']([^"\']+)'),
+)
+
+
+def _quota_window_from_id(exc) -> str:
+    """``"per_day"``, ``"per_minute"`` or ``""`` — from the quota id ALONE.
+
+    v1.6.0.3, and the difference from :func:`_extract_quota_marker` is the
+    whole point: that function falls back to scanning the entire message when
+    it finds no id, which is right for a log tag and wrong for a decision.
+    This one reads the provider's own field or says nothing.
+
+    Why it has to exist. Google reports **both** free-tier quotas under the
+    identical metric name —
+    ``generativelanguage.googleapis.com/generate_content_free_tier_requests``
+    — and separates them only here:
+
+    ====================================================  ================
+    quotaId                                               what it means
+    ====================================================  ================
+    ``GenerateRequestsPerMinutePerProjectPerModel-...``   seconds
+    ``GenerateRequestsPerDayPerProjectPerModel-...``      the rest of the day
+    ====================================================  ================
+
+    :func:`_is_daily_or_account_limit` decides the same question by searching
+    the *whole* message for ``"daily"``, ``"per day"``, ``"/day"`` or
+    ``"rpd"``. Its docstring calls that strict, on the reasoning that a
+    per-minute message cannot contain those words. It can. A host may append
+    its own prose — Hermes welds *"a few hundred requests/day for Gemini Flash
+    models"* onto the sentence — and a quota list may name several counters
+    while violating one. Either way a per-minute throttle is read as a daily
+    cap and a healthy key sits out an hour.
+
+    So when the provider names the window, the provider decides, in **both**
+    directions: a ``PerMinute`` id means this is not daily no matter what the
+    prose says, and a ``PerDay`` id means it is daily even if the prose is
+    silent. The substring heuristic keeps its job for everything that files no
+    id at all — most providers, most of the time.
+
+    Never raises. Classification must not be the thing that ends a turn.
+    """
+    try:
+        text = _evidence_text(exc)
+        raw = ""
+        for pattern in _QUOTA_ID_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                raw = match.group(1).lower()
+                break
+        if not raw:
+            return ""
+        if any(t in raw for t in ("perday", "per_day", "per-day", "per day", "/day", "rpd")):
+            return "per_day"
+        if any(t in raw for t in ("perminute", "per_minute", "per-minute",
+                                  "per minute", "/minute", "rpm")):
+            return "per_minute"
+        return ""
+    except Exception:
+        return ""
+
+
 def _parse_duration_to_seconds(text):
     """Parse a duration EXPRESSION into seconds.
 
@@ -1163,7 +1250,8 @@ def _get_identity_state(identity, all_keys):
     return state
 
 
-def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
+def _mark_key_health(identity, key, success=True, delay=20, kind="other",
+                     sized_by: str = ""):
     """Update health state for a key after a completed (or failed) attempt.
 
     Returns the ACTUAL delay applied (after any adaptive-backoff escalation)
@@ -1255,18 +1343,53 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
                 escalated = min(20.0 * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S)
                 applied = max(applied, escalated)
             elif kind == "per_minute":
-                # v1.0.2: per-minute (RPM) keys recover in ~60s. Trust the
-                # provider's honest delay on the FIRST strike (no 20s floor), and
-                # if the SAME key keeps failing, escalate only up to the
-                # per-minute ceiling (NOT the 1h daily one) — so a healthy-but-
-                # busy RPM key is never cooled toward an hour. (The blind-daily
-                # case — a daily-dead key with no marker — still escalates here,
-                # just bounded at _KAME_RL_BACKOFF_CAP_S instead of 1h.)
+                # v1.6.0.3. This used to raise a floor of 20s, 40s, 80s ... over
+                # the deadline from the second strike on, whatever the provider
+                # had said. `applied` starts as the classifier's number, so a
+                # provider asking for 41s and refusing four times in a row was
+                # held for 80 — a number nobody stated, over one that was.
+                #
+                # Repeating a throttle is not evidence that the provider lied.
+                # On a rolling window it is the ordinary case: the key is asked
+                # again while its window is still full, and the provider
+                # recomputes and answers correctly again. Escalating on that
+                # reads a restatement as a refutation.
+                #
+                # So the streak is still counted — the reports read it, and a
+                # key failing five times in a row is worth seeing — but it no
+                # longer sizes anything the provider already sized. When the
+                # provider named nothing, `_extract_retry_delay` has already
+                # supplied its flat 20s default and that stands: a rate limit
+                # is a rolling window (seconds, and the provider says so) or a
+                # daily cap (hours, a different counter, handled above), and
+                # nothing lives between them for a ladder to climb through.
+                #
+                # The same rule, in the same words, governs
+                # `core/carousel.py::_escalate` in the Hermes port. See
+                # PARITY.md.
                 cnt = int(kd.get("consecutive_rl", 0)) + 1
                 kd["consecutive_rl"] = cnt
-                if cnt >= 2:
-                    escalated = min(20.0 * (2 ** (cnt - 2)), _KAME_RL_BACKOFF_CAP_S)
-                    applied = max(applied, escalated)
+                if sized_by == "provider":
+                    # Stated for this very refusal. Learn the shape of this
+                    # provider's short window, and change nothing else.
+                    if 0 < applied <= _KAME_RL_BACKOFF_CAP_S:
+                        _KAME_STATED_RL[identity] = max(
+                            _KAME_STATED_RL.get(identity, 0.0), float(applied)
+                        )
+                else:
+                    # Nothing was stated. Before inventing anything, ask what
+                    # this provider has said about this model before — that is
+                    # a measurement, and a ladder is not.
+                    learned = _KAME_STATED_RL.get(identity, 0.0)
+                    if learned > 0:
+                        applied = min(learned, _KAME_RL_BACKOFF_CAP_S)
+                    # And when it has never said anything at all, the flat 20s
+                    # `_extract_retry_delay` already supplied stands. No climb:
+                    # a rate limit is a rolling window (seconds) or a daily cap
+                    # (hours, handled above), and a ladder from 20s to 300s
+                    # spends its whole range between two regimes that do not
+                    # meet. Erring short costs one request that fails in
+                    # milliseconds; erring long costs a healthy key, silently.
             elif kind == "server":
                 # v1.0.1 fix: gentle escalation for a SUSTAINED 5xx outage.
                 # First failure stays ~5s; a key that keeps failing climbs
@@ -1503,7 +1626,23 @@ def _extract_retry_delay(exc, with_source: bool = False):
     # 3. Parse from error message text. Capture the duration EXPRESSION right
     #    after a retry keyword, then parse it (handles "6m 11.52s", "37s",
     #    "2970.93s", "retryDelay: 1s", "Please try again in 2h 30m").
-    err_msg = str(exc)
+    #
+    #    v1.6.0.3 reads the STRUCTURED evidence here, not just `str(exc)`.
+    #    Every other reader in this file moved to `_evidence_text` when it
+    #    turned out that adapters spend the response body and leave the
+    #    provider's own fields reachable only through the parsed payload or
+    #    `exc.response` — and this one, the reader whose whole job is to find
+    #    the number, was left behind. On a Gemini 429 that meant
+    #    `"retryDelay": "41.3s"` sitting in `exc.response.text`, three lines
+    #    from a `quotaId` this file already reads from exactly there, while
+    #    the function returned its 20-second default and reported the source
+    #    as `default` — so the tally recorded "the provider said nothing"
+    #    about a refusal in which the provider had said precisely how long.
+    #
+    #    The regex is unchanged and still anchors on a retry keyword before
+    #    capturing, so widening the haystack cannot turn a model name or an
+    #    id into a duration.
+    err_msg = _evidence_text(exc) or str(exc)
     match = re.search(
         r'(?:retry[_\s-]*(?:after|delay|in)|try\s+again\s+in)[:\s"\']*([0-9][0-9hms\.\s]*)',
         err_msg,
@@ -1675,7 +1814,17 @@ def _classify_error(exc):
     # Rate limits / quota (only when it is NOT an explicit server 5xx above)
     if status_code == 429 or any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
         parsed = _extract_retry_delay(exc)
-        if _is_daily_or_account_limit(exc):
+        # v1.6.0.3. The provider's own field first, and it settles the question
+        # in both directions. A ``PerMinute`` quota id means this is a rolling
+        # window whatever words surround it — which is what stops a host
+        # footer saying "a few hundred requests/day" from turning a 40-second
+        # throttle into an hour — and a ``PerDay`` id means a daily cap even
+        # when the prose never says so. Only when the provider files no id at
+        # all does the substring heuristic below get to decide.
+        named_window = _quota_window_from_id(exc)
+        if named_window == "per_minute":
+            return parsed, "per_minute", (status_code or 429)
+        if named_window == "per_day" or _is_daily_or_account_limit(exc):
             kind = "insufficient_quota" if "insufficient" in err_msg else "daily"
             # v1.0.5: always use the configured daily cooldown interval regardless of
             # Google's retryDelay. The configured 1h cap is intentional — it means
@@ -2920,8 +3069,15 @@ async def _kame_carousel(self, ctx):
                 _tally_failure(identity, _auth_kind, _auth_sc, "kame")
             else:
                 delay, kind, sc = _classify_error(e)
-                applied = _mark_key_health(identity, key, False, delay, kind)
-                _tally_failure(identity, kind, sc, _delay_source(e, kind))
+                # v1.6.0.3: computed once and used twice. The tally has always
+                # wanted to know whether the provider named this number; so
+                # does `_mark_key_health`, which must not raise a floor over a
+                # deadline the provider stated.
+                _sized_by = _delay_source(e, kind)
+                applied = _mark_key_health(
+                    identity, key, False, delay, kind, sized_by=_sized_by
+                )
+                _tally_failure(identity, kind, sc, _sized_by)
                 _log_failure(call_type, model_short, key, e,
                              kind, applied, sc, identity, all_keys)
 

@@ -138,18 +138,45 @@ check("timeout text -> 'timeout'", K._classify_error(FakeErr("Request timed out"
 # ==========================================================================
 IDENT = "test:model"
 K._get_identity_state(IDENT, ["KEYA"])
-a1 = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute")
-check("per-minute 1st strike trusts honest 8s (no 20s floor)", a1 == 8)
-a2 = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute")
-check("per-minute 2nd strike escalates to 20s", a2 == 20)
-aN = a2
+
+# v1.6.0.3 rewrote the three checks that used to live here. They asserted that
+# the second strike escalated to 20s and the twenty-seventh reached the 300s
+# ceiling — a floor of KAME's own raised over a deadline the provider had
+# stated. Repeating a throttle is not evidence the provider lied: on a rolling
+# window the key is simply asked again while its window is still full, and the
+# provider recomputes and answers correctly again.
+a1 = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute", sized_by="provider")
+check("per-minute 1st strike obeys the stated 8s", a1 == 8)
+aN = a1
 for _ in range(25):
-    aN = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute")
-check("per-minute escalation capped at per-minute ceiling (300s, NOT 3600)",
-      aN == K._KAME_RL_BACKOFF_CAP_S == 300.0)
+    aN = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute", sized_by="provider")
+check("a stated number is obeyed on EVERY strike, never multiplied", aN == 8)
 K._mark_key_health(IDENT, "KEYA", True)  # success resets the counter
-aR = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute")
-check("per-minute counter resets on success (back to honest 8s)", aR == 8)
+aR = K._mark_key_health(IDENT, "KEYA", False, 8, "per_minute", sized_by="provider")
+check("per-minute counter resets on success (still the honest 8s)", aR == 8)
+
+# What the provider stated is remembered, and answers the terse refusals that
+# name no number at all. Google sends both wordings for the same condition.
+K._get_identity_state(IDENT, ["KEYC"])
+K._mark_key_health(IDENT, "KEYC", False, 54, "per_minute", sized_by="provider")
+aU = K._mark_key_health(IDENT, "KEYC", False, 20, "per_minute", sized_by="kame")
+check("an unsized throttle uses what this provider said before (54s)", aU == 54)
+
+# A daily-length number must never teach the short window: on Gemini a daily
+# cap classifies as a rate limit too and arrives sized at an hour.
+IDENT2 = "test:model2"
+K._get_identity_state(IDENT2, ["KEYD"])
+K._mark_key_health(IDENT2, "KEYD", False, 3600, "per_minute", sized_by="provider")
+aP = K._mark_key_health(IDENT2, "KEYD", False, 20, "per_minute", sized_by="kame")
+check("one exhausted day does not teach every terse throttle an hour", aP == 20)
+
+# And a provider that has never named anything gets the flat re-probe, with no
+# climb behind it, however many times it refuses.
+IDENT3 = "test:model3"
+K._get_identity_state(IDENT3, ["KEYE"])
+flat = [K._mark_key_health(IDENT3, "KEYE", False, 20, "per_minute", sized_by="kame")
+        for _ in range(12)]
+check("an unsized throttle rests flat and never climbs", flat == [20] * 12)
 
 # Daily escalation still allowed up to the 1h ceiling (delay passed already floored).
 K._get_identity_state(IDENT, ["KEYB"])

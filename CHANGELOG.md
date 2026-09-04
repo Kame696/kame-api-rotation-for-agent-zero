@@ -11,6 +11,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.6.0.3** | The provider names the window, and the provider names the wait | Google reports its per-minute and per-day free-tier quotas under the **identical** metric name and separates them only in `quotaId` — a field this engine already extracted, for a log tag, while the actual daily-or-not decision was made by searching the whole message for the word "day". A host that appends *"a few hundred requests/day"* to the sentence was enough to turn a 40-second throttle into an hour on the bench. The quota id now decides, in both directions. Alongside it, two numbers that were being invented over numbers the provider had stated: the per-minute branch raised a floor of 20s, 40s, 80s … from the second refusal, over whatever Google had asked for — repeating a throttle is not evidence the provider lied, it is what a rolling window does — and `_extract_retry_delay` read only `str(exc)`, so on a Gemini 429 it returned its 20-second default while `"retryDelay": "41.3s"` sat in the response body, three lines from the `quotaId` this same file reads from exactly there. Every rest is now a number somebody measured: what the provider said for this refusal, what it said for an earlier one on the same model, or a flat re-probe — never a curve |
 | **1.6.0.1** | A refusal is not a clock, and the rotation is on the screen | A live indicator beside the composer says how many keys can answer right now; a bare 401 rests twenty seconds instead of an hour and leaves rotation after three; a key the provider names dead leaves at once; and a 403 refusing **one model** never costs you the key |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
 | **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
@@ -51,7 +52,128 @@ graph LR
 
 ---
 
-## v1.6.0.1 — current
+## v1.6.0.3 — current
+
+**The provider names the window, and the provider names the wait.**
+
+Two rules, one sentence: KAME never invents a number when the provider has
+stated one, and never invents a window when the provider has named one. Both
+came out of measurement, not out of reasoning about how providers ought to
+behave.
+
+### Where the measurement came from
+
+The Hermes port of this plugin ran 46 minutes against Gemini on 2026-09-03 and
+collected 340 refusals. Every one that carried a number carried a freshly
+computed one:
+
+| | |
+|---|---|
+| shortest Google asked for | 1.5s |
+| median | 41.1s |
+| **longest** | **59.8s** |
+
+That port held keys for five minutes on ten of them. The two ports had the
+same defect in different arithmetic — Hermes *multiplied* the stated number,
+this engine raised a *floor* over it — and both are removed in this release.
+
+### The quota id was a log tag, and it should have been the decision
+
+Google reports both free-tier quotas under the identical metric name,
+`generativelanguage.googleapis.com/generate_content_free_tier_requests`, and
+separates them only here:
+
+| quotaId | what it means |
+|---|---|
+| `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` | seconds |
+| `GenerateRequestsPerDayPerProjectPerModel-FreeTier` | the rest of the day |
+
+`_extract_quota_marker` has read that field since v1.0.6 — to print a tag in
+the log. The decision was made by `_is_daily_or_account_limit`, which searches
+the **whole** message for `"daily"`, `"per day"`, `"/day"` or `"rpd"`. Its
+docstring calls that strict, reasoning that a per-minute message cannot
+contain those words.
+
+It can. A host may append its own prose to the provider's sentence — Hermes
+welds *"a few hundred requests/day for Gemini Flash models"* onto every
+free-tier 429 — and a quota list may name several counters while violating
+one. Either way a per-minute throttle was read as a spent day and a healthy
+key sat out an hour for it. There is a test in `tests/test_v1_6_0_3.py` that
+asserts the old heuristic is fooled by exactly that footer.
+
+**`_quota_window_from_id` now decides, from the provider's own field alone,
+and in both directions**: a `PerMinute` id means this is not daily whatever
+the prose says, and a `PerDay` id means it is daily even when the prose is
+silent. The substring heuristic keeps its job for every provider that files no
+id at all, which is most of them.
+
+The other direction is why this engine learned to distrust `retryDelay` in the
+first place, back in v1.0.5. Google's own forum thread shows a daily quota of
+250 requests exhausted, arriving with `retryDelay: "1s"`. That rule was always
+right; until now it had no reliable way to know it was looking at a daily cap.
+
+### Two numbers invented over numbers the provider had stated
+
+**The per-minute floor.** From the second refusal on, this branch applied
+`max(delay, 20 × 2ⁿ)` — 20s, 40s, 80s, capped at 300s. `applied` starts as the
+classifier's number, so a provider asking for 41s and refusing four times in a
+row was held for 80: a number nobody stated, over one that was.
+
+Repeating a throttle is not evidence that the provider lied. On a rolling
+window it is the ordinary case — the key is asked again while its window is
+still full, and the provider recomputes and answers correctly again.
+Escalating on that reads a restatement as a refutation. The streak is still
+counted, because the reports read it and a key failing five times in a row is
+worth seeing, but it no longer sizes anything the provider already sized.
+
+**The delay that was sitting in the response body.** `_extract_retry_delay`
+parsed only `str(exc)`. Every other reader in that file moved to
+`_evidence_text` — which reads `exc.response.text` — when it turned out that
+adapters spend the body and leave the provider's fields reachable only
+through the parsed payload. The one reader whose entire job is to find the
+number was left behind. On a Gemini 429 that meant returning the 20-second
+default, and reporting the source as `default`, while `"retryDelay": "41.3s"`
+sat in the response three lines from a `quotaId` this same file reads from
+exactly there. The tally recorded *"the provider said nothing"* about a
+refusal in which the provider had said precisely how long.
+
+### What a throttle rests for now
+
+| what is known | what the key rests for |
+|---|---|
+| the provider sized *this* refusal | exactly that |
+| it sized an earlier one on this `provider:model` | that number |
+| it has never sized one at all | the flat 20s default |
+
+There is no ladder between them, and that is deliberate: a rate limit is a
+rolling window — seconds, and the provider tells you — or a daily cap, which
+is hours under a different counter with a different name. No provider
+documents "come back in five minutes", so a curve from 20s to 300s spent its
+whole range interpolating between regimes that do not meet.
+
+The middle row is new (`_KAME_STATED_RL`) and it is what the terse refusal
+needed. Google sends two wordings for the same condition: spelled out with
+`Please retry in Ns`, and terse — `Resource has been exhausted (e.g. check
+quota).` — with nothing. In that 46-minute run, 168 arrived spelled out and
+232 arrived terse. A daily-length number is refused as a teacher, because on
+Gemini a daily cap classifies as a throttle too and arrives sized at an hour.
+
+Erring short is the deliberate half: a rest that is too short costs one
+request that fails in milliseconds, and one that is too long costs a healthy
+key for its whole duration, silently.
+
+### Verification
+
+| gate | result |
+|---|---|
+| all 12 test scripts | pass, including 18 new checks in `tests/test_v1_6_0_3.py` |
+| mutation | 6 rules broken one at a time; **all 6 turn the suite red** |
+
+The Hermes port ships the same rules in the same release. See `PARITY.md`.
+
+---
+
+## v1.6.0.1
 
 **A refusal is not a clock, and the rotation is finally on the screen.**
 
