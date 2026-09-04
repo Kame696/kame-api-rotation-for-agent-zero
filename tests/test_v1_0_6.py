@@ -172,10 +172,19 @@ check("auth display is NOT the same as the routine fingerprint display",
 check("auth display never exposes the FULL key when style is fingerprint",
       _LONG_KEY not in _auth_disp)
 
-# prefix8 / full styles are respected as-is (user already opted into more reveal)
-K._KAME_KEY_LOG_STYLE = "full"
-check("auth display respects an explicit 'full' style (shows the whole key)",
-      K._key_display_auth(_LONG_KEY) == _LONG_KEY)
+# v1.6.0.1 REMOVED the `full` style. This block used to assert that an explicit
+# `full` showed the whole key; it now asserts the opposite, which is the point of
+# removing it. A log is copied into bug reports and screenshots by people who are
+# not thinking about what is in it, and Agent Zero v2.11 masks credentials on its
+# own — KAME's switch had become the only thing in the stack that deliberately
+# un-redacted one. A config that still says `full` is not an error: it is read as
+# `prefix8`, which answers the question `full` was actually used for.
+K.set_key_log_style("full")
+check("a legacy 'full' style is folded into prefix8, not honoured",
+      K._KAME_KEY_LOG_STYLE == "prefix8")
+check("no display path returns the whole key, whatever the config says",
+      K._key_display_auth(_LONG_KEY) != _LONG_KEY
+      and K._key_display(_LONG_KEY) != _LONG_KEY)
 K._KAME_KEY_LOG_STYLE = "prefix8"
 check("auth display respects an explicit 'prefix8' style (unchanged)",
       K._key_display_auth(_LONG_KEY) == K._key_display(_LONG_KEY))

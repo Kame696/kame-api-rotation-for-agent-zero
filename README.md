@@ -4,10 +4,10 @@
 
 ### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0.1-blue.svg)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
-[![Verified against](https://img.shields.io/badge/verified_against-A0_v1.14_%E2%86%92_v2.10-purple.svg)](COMPATIBILITY.md)
+[![Verified against](https://img.shields.io/badge/verified_against-A0_v1.14_%E2%86%92_v2.11-purple.svg)](COMPATIBILITY.md)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/status-production--validated-brightgreen.svg)](#production-validation)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-rotation-for-agent-zero?style=social)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/stargazers)
@@ -123,13 +123,13 @@ KAME doesn't look like a bot. KAME looks like a thoughtful human who took a coff
 
 No config required. No tuning. No code changes anywhere. The plugin hooks Agent Zero's model layer at boot and reverts cleanly on uninstall.
 
-> **Agent Zero v1.x *and* the V2 line (through v2.10) are both supported.** Since v1.0.9 KAME does not re-implement Agent Zero's model call at all — it picks the key and lets Agent Zero make the call. That is why one build works across both majors, and why a new Agent Zero release is far less likely to break it. Verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8 and v2.10**. Nothing for you to configure.
+> **Agent Zero v1.x *and* the V2 line (through v2.11) are both supported.** Since v1.0.9 KAME does not re-implement Agent Zero's model call at all — it picks the key and lets Agent Zero make the call. That is why one build works across both majors, and why a new Agent Zero release is far less likely to break it. Verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10 and v2.11**. Nothing for you to configure.
 
 Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.2.0 — ACTIVE
+  🐢⚡ KAME v1.6.0.1 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -275,7 +275,7 @@ No. A0 hot-reloads plugins: dropping KAME into your plugins folder (or toggling 
 </details>
 
 <details>
-<summary><b>Does KAME work on the new Agent Zero V2 line (V2 / V2.1 / v2.7 / v2.8 / v2.10)?</b></summary>
+<summary><b>Does KAME work on the new Agent Zero V2 line (V2 / V2.1 / v2.7 / v2.8 / v2.10 / v2.11)?</b></summary>
 
 Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made three changes that KAME 1.0.3 didn't survive; 1.0.4 handles all of them:
 
@@ -283,7 +283,7 @@ Yes, as of **v1.0.4** — both A0 majors, auto-detected. Agent Zero V2/V2.1 made
 2. **The model entry point split** — V2.1's agent monologue calls `unified_turn`, not `unified_call`. 1.0.3 patched only `unified_call`, so rotation never engaged on V2.1. 1.0.4 wraps `unified_turn` too.
 3. **Free-tier prompt caching** — V2.1 tries to cache big prompts, but free-tier keys have zero cache storage and 429 on it. 1.0.4 disables caching for its calls.
 
-Behavior on A0 v1.x is unchanged. **v1.0.9 went further and removed the reason those breakages were possible**: KAME no longer parses A0's stream or rebuilds its result — it chooses the key and hands the call to Agent Zero. It also finds A0's model methods *by signature* rather than by name, so an upstream rename no longer disables rotation. Verified green end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8 and v2.10**. If you're on the V2 line, just install the latest KAME.
+Behavior on A0 v1.x is unchanged. **v1.0.9 went further and removed the reason those breakages were possible**: KAME no longer parses A0's stream or rebuilds its result — it chooses the key and hands the call to Agent Zero. It also finds A0's model methods *by signature* rather than by name, so an upstream rename no longer disables rotation. Verified green end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10 and v2.11**. If you're on the V2 line, just install the latest KAME.
 </details>
 
 <details>
@@ -441,7 +441,7 @@ The sleep is **interruptible** — a message or *nudge* during a cooldown is hon
 
 ## 🔧 Compatibility
 
-- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7, v2.8 and v2.10** (2026-08-23). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
+- **Agent Zero**: v1.14+ through the v1.x line **and the whole V2 line — verified green end-to-end on v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10 and v2.11** (2026-09-03). Since v1.0.9 KAME delegates the call to Agent Zero and binds to its model layer by signature, so it adapts on its own. Run `python tests/test_a0_compat.py /path/to/agent-zero` to re-verify against any newer build yourself.
 - **Python**: 3.10+
 - **Providers**: any LiteLLM-supported provider (Google, OpenAI, Anthropic, Mistral, Groq, DeepSeek, xAI, Together, ...)
 - **Subscription / OAuth models are untouched** — Codex, GitHub Copilot, Gemini API and xAI Grok sign in through Agent Zero's own OAuth plugin, not with API keys. KAME finds no key pool for them and hands the call straight to Agent Zero, exactly as if the plugin were not installed. Verified every run, on every supported Agent Zero version. Details: [COMPATIBILITY.md §4.1](COMPATIBILITY.md)
@@ -487,6 +487,7 @@ opens with a short **In short** list and folds the detail underneath.
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.6.0.1** | A refusal is not a clock, and the rotation is on the screen | A ring beside the composer says how many keys can answer **right now**; a bare 401 rests 20s instead of an hour and is offered last; a key the provider names dead leaves rotation; a 403 refusing **one model** never costs you the key. `/kame doctor`, a build fingerprint, and `key_log_style: full` removed. Verified on A0 **v2.11**. |
 | **v1.2.0** | The wait, said out loud | An all-keys-cooling wait now appears **in the chat**, not only on the console — and the settings screen was rebuilt so an on-by-default toggle stops rendering as off and saving that lie back. Verified on A0 **v2.10**. |
 | **v1.0.9** | KAME stops re-implementing Agent Zero | KAME only **chooses the key**; A0 owns the request, the stream, the parsing and the result. Five upstream symbols and `litellm` left the dependency surface. Live-verified on six A0 tags, one code path. |
 | **v1.0.8** | Early stop + denied keys | The stream now breaks where native A0 breaks it (no generation past a finished tool call), and a `403 PERMISSION_DENIED` is quarantined instead of returning to the carousel every 20 seconds. |

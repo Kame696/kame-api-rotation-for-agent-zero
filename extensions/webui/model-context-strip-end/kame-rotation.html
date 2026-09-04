@@ -1,0 +1,294 @@
+<!--
+  KAME rotation chip — v1.6.0.1.
+
+  Lives in Agent Zero v2.11's `model-context-strip-end` WebUI plugin slot, a
+  couple of centimetres from where the person types. That placement is the whole
+  point: rotation used to be visible only in a console, and a pool waiting out a
+  quota was indistinguishable from a hung agent to anyone watching the chat.
+
+  The composer PLACEHOLDER was considered for this and rejected — it disappears
+  the moment somebody types, which is exactly when they are waiting and reaching
+  for the keyboard. The chip is in the same place and survives typing.
+
+  Counts and fingerprints only. The endpoint behind this cannot return a key.
+-->
+<script type="module">
+  import { store } from "/plugins/api_rotation_by_kame/webui/kame-rotation-store.js";
+</script>
+
+<div x-data>
+  <template x-if="$store.kameRotation && ($store.preferences?.isUiControlVisible?.('kameRotation') ?? true)">
+    <div class="kame-rot-anchor"
+         x-create="$store.kameRotation.onMount($watch)"
+         x-destroy="$store.kameRotation.cleanup()"
+         @click.outside="$store.kameRotation.open = false"
+         @keydown.escape.window="$store.kameRotation.open = false">
+
+      <button type="button"
+              class="kame-rot-button"
+              :class="'kame-rot-' + $store.kameRotation.view.tone"
+              :aria-expanded="$store.kameRotation.open"
+              :aria-label="$store.kameRotation.view.ariaLabel"
+              :title="$store.kameRotation.view.headline"
+              @click="$store.kameRotation.toggle()">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <circle class="kame-rot-track" cx="18" cy="18" r="15.5"></circle>
+          <circle class="kame-rot-value" cx="18" cy="18" r="15.5" pathLength="100"
+                  :stroke-dasharray="$store.kameRotation.view.ringPercent + ' 100'"></circle>
+        </svg>
+        <span x-text="$store.kameRotation.view.ringLabel"></span>
+      </button>
+
+      <div class="kame-rot-popover"
+           x-show="$store.kameRotation.open"
+           x-transition.opacity
+           style="display: none;"
+           role="dialog"
+           aria-label="KAME key rotation">
+
+        <div class="kame-rot-header">
+          <strong>Key rotation</strong>
+          <span class="kame-rot-version"
+                x-text="'KAME ' + ($store.kameRotation.view.version || '')"></span>
+        </div>
+
+        <div class="kame-rot-headline"
+             :class="'kame-rot-' + $store.kameRotation.view.tone"
+             x-text="$store.kameRotation.view.headline"></div>
+
+        <template x-if="!$store.kameRotation.view.hasPools">
+          <div class="kame-rot-empty">
+            KAME learns a pool on the first model call of a chat. Nothing here
+            yet is not a fault.
+          </div>
+        </template>
+
+        <template x-for="pool in $store.kameRotation.view.pools" :key="pool.identity">
+          <div class="kame-rot-pool">
+            <div class="kame-rot-pool-head">
+              <span class="kame-rot-pool-name" x-text="pool.identity"></span>
+              <span class="kame-rot-pool-count"
+                    x-text="pool.ready + '/' + pool.total + ' ready'"></span>
+            </div>
+
+            <div class="kame-rot-meter" aria-hidden="true">
+              <span :style="'width:' + (pool.total ? Math.round(pool.ready / pool.total * 100) : 0) + '%'"></span>
+            </div>
+
+            <div class="kame-rot-pool-sub">
+              <span x-show="pool.resting"
+                    x-text="pool.resting + ' resting' + (pool.etaLabel ? ' · next back in ' + pool.etaLabel : '')"></span>
+              <span x-show="pool.retired" class="kame-rot-bad"
+                    x-text="pool.retired + ' left rotation'"></span>
+            </div>
+
+            <div class="kame-rot-keys">
+              <template x-for="row in pool.keys" :key="row.id">
+                <div class="kame-rot-key" :class="'kame-rot-key-' + row.state">
+                  <span class="kame-rot-key-id" x-text="row.id"></span>
+                  <span class="kame-rot-key-state" x-text="row.state"></span>
+                  <span class="kame-rot-key-note"
+                        x-text="row.leftLabel || row.strikesLabel"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="$store.kameRotation.view.retired">
+          <!--
+            The one sentence in this panel that asks the reader to DO something.
+            Retiring is not deleting: KAME never writes credentials, the row
+            stays where it is, and a working key put in its place brings it back
+            on the next successful call.
+          -->
+          <div class="kame-rot-action">
+            Nothing was deleted — paste a working key over the retired one in
+            your <code>.env</code> and it returns by itself.
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</div>
+
+<style>
+  .kame-rot-anchor {
+    position: static;
+    display: flex;
+    align-items: center;
+  }
+  .kame-rot-button {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 1.8rem;
+    height: 1.8rem;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    opacity: .82;
+  }
+  .kame-rot-button:hover {
+    background: var(--color-background-hover);
+    opacity: 1;
+  }
+  .kame-rot-button svg {
+    position: absolute;
+    inset: 2px;
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
+    transform: rotate(-90deg);
+    fill: none;
+    stroke-width: 3;
+  }
+  .kame-rot-track {
+    stroke: color-mix(in srgb, var(--color-text) 18%, transparent);
+  }
+  .kame-rot-value {
+    stroke: var(--color-highlight);
+    stroke-linecap: round;
+    transition: stroke-dasharray .18s ease;
+  }
+  /* Tone is carried by the ring, never by colour alone — the label always says
+     the same numbers, so a colour-blind reader loses nothing. */
+  .kame-rot-warn .kame-rot-value { stroke: #d99a2b; }
+  .kame-rot-bad  .kame-rot-value { stroke: #d9534f; }
+  .kame-rot-idle .kame-rot-value { stroke: color-mix(in srgb, var(--color-text) 30%, transparent); }
+  .kame-rot-button > span {
+    position: relative;
+    z-index: 1;
+    font-family: var(--font-family-main);
+    font-size: .42rem;
+    font-weight: 600;
+    letter-spacing: -.03em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kame-rot-popover {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    z-index: 1050;
+    width: min(21rem, calc(100vw - 2rem));
+    max-height: min(28rem, 70vh);
+    overflow-y: auto;
+    padding: .9rem;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background-color: color-mix(in srgb, var(--color-panel) 90%, black 10%);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, .3);
+  }
+  .kame-rot-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .75rem;
+    font-size: .86rem;
+  }
+  .kame-rot-version {
+    font-family: var(--font-family-code);
+    font-size: .7rem;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  }
+  .kame-rot-headline {
+    margin: .45rem 0 .7rem;
+    font-size: .78rem;
+    color: color-mix(in srgb, var(--color-text) 78%, transparent);
+  }
+  .kame-rot-headline.kame-rot-warn { color: #d99a2b; }
+  .kame-rot-headline.kame-rot-bad  { color: #d9534f; }
+  .kame-rot-empty {
+    padding: .35rem 0 .15rem;
+    color: color-mix(in srgb, var(--color-text) 62%, transparent);
+    font-size: .78rem;
+  }
+  .kame-rot-pool {
+    padding-top: .6rem;
+    margin-top: .6rem;
+    border-top: 1px solid var(--color-border);
+  }
+  .kame-rot-pool:first-of-type { border-top: 0; margin-top: 0; }
+  .kame-rot-pool-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: .5rem;
+    align-items: baseline;
+    font-size: .8rem;
+  }
+  .kame-rot-pool-name {
+    font-family: var(--font-family-code);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kame-rot-pool-count {
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--color-text) 72%, transparent);
+  }
+  .kame-rot-meter {
+    height: .35rem;
+    margin: .35rem 0 .4rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-text) 9%, transparent);
+  }
+  .kame-rot-meter > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-highlight);
+    transition: width .18s ease;
+  }
+  .kame-rot-pool-sub {
+    display: flex;
+    gap: .75rem;
+    font-size: .74rem;
+    color: color-mix(in srgb, var(--color-text) 66%, transparent);
+  }
+  .kame-rot-bad { color: #d9534f; }
+  .kame-rot-keys {
+    display: grid;
+    gap: .18rem;
+    margin-top: .45rem;
+  }
+  .kame-rot-key {
+    display: grid;
+    grid-template-columns: 4rem 4.5rem minmax(0, 1fr);
+    gap: .4rem;
+    align-items: baseline;
+    font-size: .72rem;
+    color: color-mix(in srgb, var(--color-text) 72%, transparent);
+  }
+  .kame-rot-key-id { font-family: var(--font-family-code); }
+  .kame-rot-key-note {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .kame-rot-key-resting .kame-rot-key-state { color: #d99a2b; }
+  .kame-rot-key-retired .kame-rot-key-state { color: #d9534f; }
+  .kame-rot-action {
+    margin-top: .7rem;
+    padding-top: .6rem;
+    border-top: 1px solid var(--color-border);
+    font-size: .74rem;
+    color: color-mix(in srgb, var(--color-text) 78%, transparent);
+  }
+  .kame-rot-action code {
+    font-family: var(--font-family-code);
+    font-size: .95em;
+  }
+  @media (max-width: 25rem) {
+    .kame-rot-popover {
+      right: 1.25rem;
+      width: min(18rem, calc(100vw - 3rem));
+    }
+  }
+  .light-mode .kame-rot-popover {
+    background: var(--color-panel);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  }
+</style>

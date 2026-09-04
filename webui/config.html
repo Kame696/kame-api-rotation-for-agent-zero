@@ -76,18 +76,21 @@
           <div class="field-description">
             <b>fingerprint</b> is a hash like <code>k3f9a1</code> — not your
             key, so the secret never reaches the log. <b>prefix8</b> shows the
-            first 8 characters. <b>full</b> writes the entire key; local
-            debugging only.
+            first 8 characters. A refused key is always shown with a head and a
+            tail whichever you pick, so you can find it in your provider
+            console. The old <b>full</b> option was removed in 1.6.0.1: it wrote
+            the whole secret into a log that ends up in screenshots and bug
+            reports, and Agent Zero now masks credentials on its own. To see why
+            a call failed, turn on <i>Full raw errors</i> below instead.
           </div>
         </div>
         <div class="field-control">
           <select
             x-model="config.key_log_style"
-            x-init="if (config.key_log_style === undefined || config.key_log_style === null) config.key_log_style = 'fingerprint'"
+            x-init="if (config.key_log_style === undefined || config.key_log_style === null || config.key_log_style === 'full') config.key_log_style = 'fingerprint'"
           >
             <option value="fingerprint">fingerprint — anonymized id (recommended)</option>
             <option value="prefix8">prefix8 — first 8 characters</option>
-            <option value="full">full — the entire key (debug only)</option>
           </select>
         </div>
       </div>

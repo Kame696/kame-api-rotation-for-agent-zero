@@ -1,0 +1,4 @@
+name: kame
+description: "Show KAME's key rotation: which build is running, what each pool holds, and what needs a human."
+type: script
+script_path: kame_command.py

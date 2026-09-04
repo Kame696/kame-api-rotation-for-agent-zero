@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.2.0"
+KAME_VERSION = "1.6.0.1"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -278,6 +278,92 @@ _KAME_SERVER_BACKOFF_CAP_S = 90.0
 # toward the 1h daily ceiling. Cap per-minute escalation here instead.
 _KAME_RL_BACKOFF_CAP_S = 300.0  # 5 min
 
+# --- v1.6.0.1: the wait, said before ninety seconds have passed --------------
+#
+# The chat item in `_kame_wait_notice_tick` waits ninety seconds because it
+# writes a permanent row into the conversation, and a row for every twenty-
+# second throttle would bury the conversation in bookkeeping. That threshold is
+# right for what it guards and wrong as the only surface: with a real pool the
+# whole thing is rarely cold for ninety seconds at once, so in practice the
+# notice almost never appeared and the owner's reasonable conclusion was that
+# nothing was working.
+#
+# Agent Zero's notification manager is the better home for the early part of a
+# wait: `NotificationType.PROGRESS`, a stable id so it UPDATES in place instead
+# of stacking, and `add_notification` marks the WebUI state dirty, so it is
+# pushed over the WebSocket rather than waiting for a poll. Fifteen seconds is
+# long enough that a normal rotation never raises one — a rotation is
+# milliseconds — and short enough that a person who has started to wonder is
+# answered before they reach for the restart.
+_KAME_NOTICE_TOAST_AFTER_S = 15.0
+
+# --- v1.6.0.1: a refusal is not a clock -------------------------------------
+#
+# KAME's cooldowns divide in two, and until this release both got the same hour:
+#
+#   CLOCKS   — a per-minute throttle, a daily cap, an account allowance. The
+#              provider is metering time, and only time helps.
+#   REFUSALS — a 401, a revoked key, a 403 saying this key may not have this
+#              model. The provider is describing the credential. Waiting fixes
+#              nothing.
+#
+# The reasoning for giving a refusal the daily hour was that since waiting
+# cannot repair a refused key, the length hardly matters. It matters, because
+# the two ways of being wrong are not the same size:
+#
+#   too long  — the provider had an incident, or the 401 was transient
+#               → costs a HEALTHY KEY, for an hour
+#   too short — the key really is dead
+#               → costs ONE REQUEST, refused in milliseconds, never metered
+#
+# Twenty seconds is not an invented number: it is the base the escalation ladder
+# in `_mark_key_health` already applies to this kind. Measured side by side with
+# the five minutes tried first, the invented value did no work at all —
+#
+#     base  20s ->  20  40  80 160 320 640 1280 2560 3600 ...
+#     base 300s -> 300 300 300 300 320 640 1280 2560 3600 ...
+#
+# — both reach the hourly re-probe at the same point, and all the larger base
+# bought was flattening the first four strikes at five minutes, precisely the
+# window in which a re-check is most likely to find a transient refusal already
+# cleared.
+#
+# WARNING: this shorter bench is WRONG without the demotion in `_get_best_key`.
+# A key that answered 401 comes back with an empty request window and the oldest
+# `last_used` in the pool, which is exactly the profile the least-loaded /
+# least-recently-used rule reaches for — so the one key known not to work would
+# be the FIRST one tried, every twenty seconds. There is a test that fails when
+# the demotion is removed.
+_KAME_REFUSAL_REST_S = 20.0
+
+# How many consecutive refusals, with NO successful call in between, take a
+# credential out of rotation. Any success — or any failure of another kind —
+# resets the count to zero.
+#
+# Three, not one, because a bare 401 is ambiguous: it is what a proxy, a
+# gateway, and an OAuth token one second from refreshing all produce. A
+# provider that has genuinely retired a key says so in words, and that case
+# does not wait for three (see `_KAME_RETIRE_ON_SIGHT_KINDS`).
+_KAME_REFUSALS_BEFORE_RETIRING = 3
+
+# Kinds that can take a key out of rotation at all.
+#
+# `denied` is deliberately ABSENT, and this is the most expensive line in the
+# file to get wrong. A 403 saying "this key may not use THIS MODEL" is about the
+# PAIRING — a suspended project, an API never switched on, a model outside the
+# tier the key pays for. The same credential is very often the healthiest one in
+# the account on every other model, and retiring it would throw away a working
+# key over a permission that was never about the key. The Hermes port shipped
+# exactly that bug for one release: a model-scoped 403 reached the retirement
+# check labelled `auth`, and three of them retired a credential that worked
+# everywhere else.
+_KAME_RETIRING_KINDS = frozenset({"auth", "revoked"})
+
+# ...and the kind that does not wait for three. `revoked` means the provider
+# used the words — "API key not valid", "invalid api key", "key is no longer
+# valid". That is not ambiguous and one is enough.
+_KAME_RETIRE_ON_SIGHT_KINDS = frozenset({"revoked"})
+
 # --- v1.0.2: heartbeat cadence while the WHOLE pool cools for a long outage
 # (longer than the 60s re-check). Instead of one line then full silence, KAME
 # re-states "still cooling, ~Xm left, recovery around HH:MM" this often, so the
@@ -348,8 +434,67 @@ _KAME_STORM = {}
 _KAME_STATS = {
     "ok": 0, "per_minute": 0, "daily": 0, "insufficient_quota": 0,
     "server": 0, "timeout": 0, "auth": 0, "other": 0, "long_sleeps": 0,
+    # v1.6.0.1: the three refusals counted apart, because grouping them answers
+    # "is KAME reading these" and cannot answer the question an owner asks
+    # first — WHAT keeps happening, and is waiting even the right answer to it.
+    "revoked": 0, "denied": 0,
+    # How many times a credential left rotation this session. Zero is the only
+    # value that needs no explanation.
+    "retired": 0,
 }
 _KAME_CALL_COUNT = 0
+
+# --- v1.6.0.1: where each cooldown actually came from ------------------------
+#
+# Counting failures answers "is anything going wrong". It cannot answer the
+# question that matters after an upstream change: **is KAME still reading these,
+# or is it guessing?** A provider that renames a field, or a host that stops
+# forwarding a body, does not raise anything — it just quietly moves every
+# refusal into the generic bucket, and the plugin goes on rotating with a number
+# it invented. Nothing about that looks broken from the outside.
+#
+# So every failure is filed under where its deadline came from:
+#
+#   provider — the number is the provider's own (Retry-After, RetryInfo,
+#              a duration in the sentence). The best case.
+#   kame     — KAME recognised the KIND and applied its own rule (a daily cap
+#              gets an hour, a refusal gets twenty seconds). Correct, but the
+#              number is ours.
+#   default  — nothing was recognised at all. One or two is normal; a RISING
+#              share here is the shape of an install that has gone quiet.
+#
+# Counts only, keyed by pool. Never a key, never an error message.
+_KAME_TALLY = {}
+
+
+def _delay_source(exc, kind: str) -> str:
+    """provider / kame / default — see `_KAME_TALLY`."""
+    if kind == "other":
+        return "default"
+    if kind == "per_minute":
+        try:
+            return "provider" if _extract_retry_delay(exc, with_source=True)[1] != "default" else "kame"
+        except Exception:
+            return "kame"
+    return "kame"
+
+
+def _tally_failure(identity: str, kind: str, status, source: str) -> None:
+    """Record one failure under its pool, its kind, its status and its source."""
+    try:
+        with _KAME_LOCK:
+            row = _KAME_TALLY.setdefault(
+                identity or "?",
+                {"total": 0, "provider": 0, "kame": 0, "default": 0,
+                 "kinds": {}, "statuses": {}},
+            )
+            row["total"] += 1
+            row[source] = row.get(source, 0) + 1
+            row["kinds"][kind] = row["kinds"].get(kind, 0) + 1
+            key = str(status) if status is not None else "none"
+            row["statuses"][key] = row["statuses"].get(key, 0) + 1
+    except Exception:
+        pass  # a counter must never be able to end a run
 
 
 def set_log_level(level) -> None:
@@ -408,10 +553,34 @@ def set_daily_cooldown(seconds) -> None:
 
 
 def set_key_log_style(style) -> None:
-    """Set how API keys are shown in logs. Called by the activation extension."""
+    """Set how API keys are shown in logs. Called by the activation extension.
+
+    v1.6.0.1 REMOVED the `full` style, which wrote the entire secret into the
+    log. Three things made it indefensible rather than merely risky:
+
+    * Agent Zero v2.11 masks secrets in error output itself
+      (`extensions/python/error_format/_10_mask_errors.py`,
+      `helpers/secrets.py`), so KAME's option had become the only thing in the
+      stack that deliberately un-redacted a credential.
+    * The Hermes port of this plugin has never had it, redacts on every path
+      including the error path, and has not once wanted it back.
+    * A log is copied into bug reports, screenshots and support bundles by
+      people who are not thinking about what is in it. A debug switch whose
+      worst case is "the user pastes their key into a GitHub issue" is not a
+      debug switch worth keeping.
+
+    A config that still says `full` is not an error and does not fail: it is
+    read as `prefix8`, which answers the question `full` was actually used for
+    — *which of my keys is this* — without answering it to everyone who ever
+    reads the log. `kame_log_full_errors` still exists and still prints the
+    provider's untruncated message beside KAME's classification; that is the
+    setting people reached for `full` to get.
+    """
     global _KAME_KEY_LOG_STYLE
     s = str(style or "").strip().lower()
-    if s in ("fingerprint", "prefix8", "full"):
+    if s == "full":
+        s = "prefix8"
+    if s in ("fingerprint", "prefix8"):
         _KAME_KEY_LOG_STYLE = s
 
 
@@ -492,10 +661,11 @@ def _key_display(key: str) -> str:
     """
     if not key:
         return "------"
-    style = _KAME_KEY_LOG_STYLE
-    if style == "full":
-        return key
-    if style == "prefix8":
+    # v1.6.0.1: there is no branch here that returns the whole key any more.
+    # `set_key_log_style` folds a legacy `full` into `prefix8`, and this
+    # function has no way to express `full` even if something set the global
+    # directly — which is the point of removing it here as well as there.
+    if _KAME_KEY_LOG_STYLE == "prefix8":
         return key[:8] + "..."
     return _key_short_id(key)
 
@@ -509,12 +679,16 @@ def _key_display_auth(key: str) -> str:
     but useless here: you cannot look up a hash in Google/OpenAI's dashboard.
     So for this event ONLY, 'fingerprint' is upgraded to a partial reveal
     (first 10 + last 4 chars — enough to recognize the real key, not the whole
-    secret). If the user already configured 'prefix8' or 'full', that choice
-    is respected as-is (no change). Never affects any other log line.
+    secret). If the user already configured 'prefix8', that choice is respected
+    as-is. Never affects any other log line.
+
+    v1.6.0.1: `full` is gone (see `set_key_log_style`), so the widest reveal
+    any path in this file can produce is this one — a head and a tail, never
+    the middle.
     """
     if not key:
         return "------"
-    if _KAME_KEY_LOG_STYLE in ("full", "prefix8"):
+    if _KAME_KEY_LOG_STYLE == "prefix8":
         return _key_display(key)
     if len(key) <= 16:
         return key
@@ -631,12 +805,151 @@ def _session_summary_line() -> str:
     """Aggregate one-liner for the verbose periodic summary."""
     s = _KAME_STATS
     limited = s["per_minute"] + s["daily"] + s["insufficient_quota"]
+    refused = s["auth"] + s.get("revoked", 0) + s.get("denied", 0)
+    tail = ""
+    if s.get("retired"):
+        tail = f" · {s['retired']} left rotation"
     return (
         f"[KAME] Session: {s['ok']} ok · {limited} limited "
         f"(min {s['per_minute']}, daily {s['daily']}, quota {s['insufficient_quota']}) · "
         f"{s['long_sleeps']} long-sleep{'s' if s['long_sleeps'] != 1 else ''} · "
-        f"{s['server']} server · {s['timeout']} timeout · {s['auth']} auth · {s['other']} other"
+        f"{s['server']} server · {s['timeout']} timeout · "
+        f"{refused} refused (401 {s['auth']}, revoked {s.get('revoked', 0)}, "
+        f"model {s.get('denied', 0)}) · {s['other']} other{tail}"
     )
+
+
+def _build_report() -> dict:
+    """The integrity report, or an honest blank when it cannot be produced.
+
+    Fetched by name rather than imported at module scope, for the reason every
+    optional KAME import uses: a half-copied plugin directory must degrade to
+    one missing line, never to a plugin that will not load. `integrity.py` is
+    the module whose whole job is noticing a half-copied directory, so it would
+    be a poor joke if its absence took the engine down with it.
+    """
+    try:
+        from usr.plugins.api_rotation_by_kame import integrity
+        return integrity.report()
+    except Exception:
+        try:
+            import integrity  # running from the plugin directory, e.g. in tests
+            return integrity.report()
+        except Exception:
+            return {"fingerprint": "------------", "complete": None,
+                    "missing": [], "degraded": []}
+
+
+def pool_report() -> dict:
+    """Everything KAME can say about its own pools, for a screen.
+
+    v1.6.0.1. The reason this exists is that ordinary rotation was invisible.
+    The only thing this plugin ever put in the chat was the wait notice, and it
+    is gated three ways — ninety seconds of the WHOLE pool being cold, reached
+    only from the exhaustion sleep, and silently disabled for the rest of a call
+    if `context.log` ever throws. With fourteen keys that state is rare and
+    short, so a key being swapped, a key resting twenty seconds, and a key
+    leaving rotation all happened where nobody was looking.
+
+    **Counts and fingerprints only. Never a key, on any path.**
+
+    `_key_short_id` is used directly rather than `_key_display`, on purpose:
+    `_key_display` honours `key_log_style`, and a rendering setting meant for a
+    developer's console must never be able to put a secret on a web page. That
+    is a structural guarantee here, not a default.
+
+    Pure and framework-free: no Agent Zero import, no request, no clock beyond
+    `time.time()`. That is what lets it be called from an API handler, from a
+    slash command, and from a test with equal confidence.
+    """
+    now = time.time()
+    pools = []
+    totals = {"keys": 0, "ready": 0, "resting": 0, "retired": 0}
+    with _KAME_LOCK:
+        snapshot = {
+            ident: dict(state.get("keys") or {})
+            for ident, state in _KAME_KEY_HEALTH.items()
+        }
+        stats = dict(_KAME_STATS)
+        tally = {
+            ident: {
+                "total": row.get("total", 0),
+                "provider": row.get("provider", 0),
+                "kame": row.get("kame", 0),
+                "default": row.get("default", 0),
+                "kinds": dict(row.get("kinds") or {}),
+                "statuses": dict(row.get("statuses") or {}),
+            }
+            for ident, row in _KAME_TALLY.items()
+        }
+    for identity in sorted(snapshot):
+        keys = snapshot[identity]
+        rows, eta = [], None
+        ready = resting = retired = 0
+        for key in sorted(keys, key=_key_short_id):
+            kd = keys[key] or {}
+            sick_until = float(kd.get("sick_until") or 0)
+            is_retired = bool(kd.get("retired_at"))
+            if is_retired:
+                retired += 1
+                state = "retired"
+                left = None
+            elif sick_until > now:
+                resting += 1
+                state = "resting"
+                left = round(sick_until - now, 1)
+                if eta is None or left < eta:
+                    eta = left
+            else:
+                ready += 1
+                state = "ready"
+                left = None
+            rows.append({
+                "id": _key_short_id(key),
+                "state": state,
+                "seconds_left": left,
+                # How close this credential is to leaving rotation. Shown so a
+                # reader can tell "being tried" from "given up on" without
+                # having to know the threshold.
+                "strikes": int(kd.get("consecutive_refusals") or 0),
+                "limit": _KAME_REFUSALS_BEFORE_RETIRING,
+            })
+        total = len(keys)
+        pools.append({
+            "identity": identity,
+            "total": total,
+            "ready": ready,
+            "resting": resting,
+            "retired": retired,
+            # None when nothing is resting. The panel reads this as "no wait to
+            # report", which is not the same as "a wait of zero".
+            "eta": eta,
+            "keys": rows,
+        })
+        totals["keys"] += total
+        totals["ready"] += ready
+        totals["resting"] += resting
+        totals["retired"] += retired
+    return {
+        "version": KAME_VERSION,
+        # v1.6.0.1: the version is what somebody typed; the build is what is on
+        # disk. When they disagree, the build is the one telling the truth.
+        "build": _build_report(),
+        # Layer 3 means KAME bound nothing and Agent Zero is running natively.
+        # It is a safe end state, not a crash — but it is also the single most
+        # useful thing to see on screen when somebody reports "the plugin does
+        # nothing", so it is reported rather than hidden.
+        "active": bool(_KAME_PATCHED) and _KAME_LAYER in (1, 2),
+        "layer": _KAME_LAYER,
+        "bound": list(_KAME_BOUND_ENTRY_POINTS),
+        "pools": pools,
+        "totals": totals,
+        "stats": stats,
+        # Where each cooldown came from, per pool. A rising `default` share is
+        # the shape of an install that has gone quiet after an upstream change.
+        "tally": tally,
+        "generated_at": now,
+    }
 
 
 _RATE_LIMIT_INDICATORS = (
@@ -644,6 +957,32 @@ _RATE_LIMIT_INDICATORS = (
     "quota exceeded", "quota left", "no quota",
     "resource exhausted", "resource_exhausted",
     "tokens per min", "requests per min", "quota_exceeded",
+    # --- v1.6.0.1: families whose 429 says none of the words above ----------
+    # Every entry here is a spent counter on THIS credential, which is the
+    # definition of "rotate to another key". Before this release each one fell
+    # into the generic `other` bucket at a flat 20s, with no escalation and no
+    # daily/per-minute distinction — a whole provider's throttling read as an
+    # unrecognised error.
+    #
+    # `throttl` is a bare stem on purpose. Alibaba spells its entire 429 family
+    # with this one word and never with "rate limit": Throttling,
+    # Throttling.RateQuota, Throttling.BurstRate, Throttling.AllocationQuota.
+    # It arrives in the error CODE rather than the sentence, which is why the
+    # stem is worth more than any full phrase.
+    "throttl",
+    # Z.AI 1308 / 1310. A spent counter described without either of the two
+    # phrases every entry above depends on.
+    "usage limit reached",
+    "limit exhausted",
+    # A concurrency ceiling is a per-credential counter like any other — the
+    # next key has its own. Named by Kimi and MiniMax alongside RPM and TPM.
+    "concurrent limit", "concurrency limit", "concurrent requests limit",
+    # A counter named by its unit and its window and by nothing else:
+    # "You have exceeded your limit of 200000 tokens per day". The daily
+    # markers below already read the window out of the same words; nothing
+    # upstream had ever called this a quota failure, so they were never asked.
+    "tokens per day", "tokens per hour", "tokens per week", "tokens per month",
+    "requests per day", "requests per hour",
 )
 
 # --- v1.0.1: STRICT daily / account-limit markers (multi-provider) ---
@@ -671,7 +1010,7 @@ def _is_daily_or_account_limit(exc) -> bool:
     per-minute rate-limit message. Used to override a misleading short
     retryDelay with a proper long cooldown.
     """
-    text = str(exc).lower()
+    text = _evidence_text(exc)
     return any(ind in text for ind in _DAILY_LIMIT_INDICATORS)
 
 
@@ -686,8 +1025,14 @@ def _extract_quota_marker(exc) -> str:
     break rotation.
     """
     try:
-        text = str(exc)
-        m = re.search(r'"quotaId"\s*:\s*"([^"]+)"', text)
+        # v1.6.0.1: the quota id often survives only in a PARSED payload,
+        # because the adapter that raised this already spent the body — so the
+        # search runs over the structured evidence too, and accepts the
+        # snake_case spelling a parsed dict uses as well as the JSON one.
+        text = _evidence_text(exc)
+        m = (re.search(r'"quotaid"\s*:\s*"([^"]+)"', text)
+             or re.search(r"'quota_?id'\s*:\s*'([^']+)'", text)
+             or re.search(r'quota_?limit["\']?\s*[:=]\s*["\']([^"\']+)', text))
         raw = m.group(1) if m else ""
         hay = (raw or text).lower()
         if any(t in hay for t in ("perday", "per day", "per-day", "/day",
@@ -736,11 +1081,23 @@ def _parse_duration_to_seconds(text):
 
 # --- KEY HEALTH MANAGEMENT ---
 
+# v1.6.0.1: how long a row survives after nothing offers it any more.
+#
+# The grace is load-bearing. Two agents can hold different key lists for one
+# identity — a settings edit that has reached one and not the other, a subagent
+# built from an older config — and dropping a row the moment one of them looks
+# away would erase a cooldown the other one just earned. Five minutes is longer
+# than any plausible gap between two callers and far shorter than the daily
+# bench it protects.
+_KAME_POOL_GRACE_S = 300.0
+
+
 def _get_identity_state(identity, all_keys):
     global _KAME_KEY_HEALTH
     if identity not in _KAME_KEY_HEALTH:
         _KAME_KEY_HEALTH[identity] = {"keys": {}}
     state = _KAME_KEY_HEALTH[identity]
+    now = time.time()
     for k in all_keys:
         if k not in state["keys"]:
             state["keys"][k] = {
@@ -757,12 +1114,52 @@ def _get_identity_state(identity, all_keys):
                 # success). Separate from consecutive_rl so a server outage and a
                 # quota storm never inflate each other's cooldown.
                 "consecutive_server": 0,
+                # v1.6.0.1: consecutive CREDENTIAL refusals — a bare 401 or a
+                # revoked key. Reset by any success and by any failure of
+                # another kind, because "three in a row" has to mean in a row.
+                "consecutive_refusals": 0,
+                # v1.6.0.1: the same ladder for `denied`, kept in its own
+                # counter so a model-scoped 403 can never feed retirement.
+                "consecutive_denials": 0,
+                # v1.6.0.1: when this key left rotation, 0 while it has not.
+                # Retiring is not deleting: the row stays, the config is
+                # untouched, and one successful call brings it straight back.
+                "retired_at": 0,
+                # v1.6.0.1: the last time this key was among the candidates.
+                # Drives the pruning below.
+                "last_offered": now,
             }
         else:
             # Defensive: backfill for keys created on earlier versions.
             state["keys"][k].setdefault("last_sick_at", 0)
             state["keys"][k].setdefault("consecutive_rl", 0)
             state["keys"][k].setdefault("consecutive_server", 0)
+            state["keys"][k].setdefault("consecutive_refusals", 0)
+            state["keys"][k].setdefault("consecutive_denials", 0)
+            state["keys"][k].setdefault("retired_at", 0)
+            state["keys"][k]["last_offered"] = now
+
+    # v1.6.0.1: the pool now mirrors the live candidate list instead of only
+    # ever growing.
+    #
+    # Until this release nothing anywhere removed from `state["keys"]` — the
+    # only `pop` in this file is `_KAME_STORM`, which is the log collapser. So a
+    # key edited out of the .env kept its `sick_until`, kept its
+    # `consecutive_rl` ladder, and went on being counted in every "N of M keys
+    # resting" the user was shown. It becomes visible the moment that count
+    # reaches a screen, which is what v1.6.0.1 does.
+    #
+    # An EMPTY `all_keys` mirrors nothing at all. A loader that failed once — a
+    # settings read mid-write, a provider block momentarily absent — is not
+    # evidence that every key was deleted, and treating it as such would wipe a
+    # pool's entire cooldown history over a transient read.
+    if all_keys:
+        stale = [
+            k for k, kd in state["keys"].items()
+            if (now - float(kd.get("last_offered") or 0)) > _KAME_POOL_GRACE_S
+        ]
+        for k in stale:
+            state["keys"].pop(k, None)
     return state
 
 
@@ -810,11 +1207,46 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
             kd["request_log"].append(now)
             kd["consecutive_rl"] = 0       # rate-limit backoff reset
             kd["consecutive_server"] = 0   # server backoff reset
+            # v1.6.0.1: one answer is the whole of the evidence that a
+            # credential works. It clears the refusal streak AND brings a
+            # retired key straight back — retiring was never a deletion.
+            kd["consecutive_refusals"] = 0
+            kd["consecutive_denials"] = 0
+            kd["retired_at"] = 0
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
         else:
             applied = float(delay)
-            if kind in ("daily", "insufficient_quota"):
+            # v1.6.0.1: a refusal is not a clock. `auth`, `revoked` and `denied`
+            # all start at the refusal bench and climb the same doubling ladder
+            # toward the daily ceiling, so a permission that really is permanent
+            # reaches an hour by itself while a plan somebody upgrades, or a
+            # token that was mid-refresh, comes back in the seconds it actually
+            # took.
+            #
+            # The two counters are kept apart on purpose. `consecutive_refusals`
+            # is what retirement reads, and `denied` must never feed it: a model
+            # the key is not entitled to is not evidence about the key.
+            if kind in ("auth", "revoked"):
+                cnt = int(kd.get("consecutive_refusals", 0)) + 1
+                kd["consecutive_refusals"] = cnt
+                escalated = min(
+                    _KAME_REFUSAL_REST_S * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S
+                )
+                applied = max(applied, escalated)
+                if kind in _KAME_RETIRE_ON_SIGHT_KINDS or cnt >= _KAME_REFUSALS_BEFORE_RETIRING:
+                    if not kd.get("retired_at"):
+                        kd["retired_at"] = now
+                        _KAME_STATS["retired"] = _KAME_STATS.get("retired", 0) + 1
+            elif kind == "denied":
+                cnt = int(kd.get("consecutive_denials", 0)) + 1
+                kd["consecutive_denials"] = cnt
+                escalated = min(
+                    _KAME_REFUSAL_REST_S * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S
+                )
+                applied = max(applied, escalated)
+                # No retirement, ever. See _KAME_RETIRING_KINDS.
+            elif kind in ("daily", "insufficient_quota"):
                 # Real daily / account limit: the classifier already floored this
                 # at the daily cooldown; the escalation is a belt-and-suspenders
                 # safety net, capped at the SAME daily ceiling.
@@ -850,6 +1282,14 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other"):
             # server-busy (10s) or per-minute hit on the same key. Without this, a 503
             # on a daily-exhausted key would wipe the 1h protection and the key would
             # be re-probed 50 minutes too early (confirmed from log6 overnight analysis).
+            # v1.6.0.1: "three in a row" has to mean in a row. A 429 or a 503
+            # between two 401s is evidence that the credential reached the
+            # provider and was metered, which is exactly what a dead key cannot
+            # do — so it resets the streak.
+            if kind not in ("auth", "revoked"):
+                kd["consecutive_refusals"] = 0
+            if kind != "denied":
+                kd["consecutive_denials"] = 0
             kd["sick_until"] = max(kd.get("sick_until", 0), now + applied)
             kd["last_sick_at"] = now
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
@@ -896,8 +1336,116 @@ def _thaw_server_cooled_keys(identity, exclude_key, new_cooldown=3.0):
     return thawed
 
 
-def _extract_retry_delay(exc):
+# --- v1.6.0.1: the evidence that was already on the exception ----------------
+#
+# Everything before this release read `str(exc)` and the response headers. That
+# is most of the evidence and not all of it, and the part it missed is the part
+# providers have been moving TOWARDS: a parsed error object filed on the
+# exception, whose body has already been consumed by the adapter that raised it.
+# When that happens `str(exc)` is a human sentence and every machine-readable
+# field — the quota id, the reason, the RetryInfo — is sitting one attribute
+# away, unread.
+#
+# Two rules keep this from becoming a fishing expedition:
+#
+#   1. Only NAMED, structured fields are read. Not `__dict__`, not every
+#      attribute — a classifier that reads whatever it finds will eventually
+#      match a marker inside something that is not an error description.
+#   2. The result is BOUNDED. A provider that returns a megabyte of HTML must
+#      not turn every substring check in this file into a scan of it.
+_EVIDENCE_ATTRS = ("details", "body", "error", "code", "reason", "status")
+_EVIDENCE_MAX_CHARS = 4000
+
+
+def _evidence_text(exc) -> str:
+    """`str(exc)` plus the structured fields, lowercased and length-bounded.
+
+    Used everywhere this file used to call `str(exc).lower()` for a marker
+    check, so a marker that lives in a parsed payload is found by exactly the
+    same vocabulary that finds it in a sentence.
+    """
+    parts = [str(exc)]
+    try:
+        for name in _EVIDENCE_ATTRS:
+            value = getattr(exc, name, None)
+            if value is None or callable(value):
+                continue
+            if isinstance(value, (str, int, float)):
+                parts.append(str(value))
+            elif isinstance(value, (dict, list, tuple)):
+                parts.append(repr(value))
+        # The response object, when the SDK kept one. Body first: a provider
+        # that files its quota id anywhere files it there.
+        response = getattr(exc, "response", None)
+        if response is not None:
+            for name in ("text", "content"):
+                raw = getattr(response, name, None)
+                if isinstance(raw, (str, bytes)) and raw:
+                    parts.append(raw.decode("utf-8", "replace")
+                                 if isinstance(raw, bytes) else raw)
+                    break
+            headers = getattr(response, "headers", None)
+            if isinstance(headers, dict):
+                parts.append(repr(headers))
+    except Exception:
+        pass  # evidence gathering must never be the thing that raises
+    return " ".join(parts)[:_EVIDENCE_MAX_CHARS].lower()
+
+
+def _evidence_status(exc):
+    """The HTTP status, walking `__cause__` / `__context__` when it is not here.
+
+    litellm and the OpenAI SDK both re-wrap provider errors, and the wrapper
+    does not always carry the status the wrapped one had. Five levels, because
+    the chain is short in practice and an unbounded walk on a cyclic chain is a
+    hang rather than a bug.
+    """
+    # Wrapped whole, for the same reason `_evidence_text` is: `getattr` runs
+    # arbitrary provider code when the attribute is a property, and an SDK whose
+    # `.response` raises once the body is consumed would otherwise turn a
+    # recoverable 429 into an exception thrown from inside the classifier — a
+    # crash in the code whose entire job is to keep the run alive. Found by
+    # `tests/test_v1_6_0_1.py`, not by a provider.
+    try:
+        seen = set()
+        current = exc
+        for _ in range(5):
+            if current is None or id(current) in seen:
+                break
+            seen.add(id(current))
+            for attr in ("status_code", "code", "http_status"):
+                try:
+                    value = getattr(current, attr, None)
+                except Exception:
+                    continue
+                if isinstance(value, int) and 100 <= value <= 599:
+                    return value
+                if isinstance(value, str) and value.isdigit() and 100 <= int(value) <= 599:
+                    return int(value)
+            try:
+                response = getattr(current, "response", None)
+                value = getattr(response, "status_code", None)
+            except Exception:
+                value = None
+            if isinstance(value, int) and 100 <= value <= 599:
+                return value
+            current = (getattr(current, "__cause__", None)
+                       or getattr(current, "__context__", None))
+    except Exception:
+        return None
+    return None
+
+
+def _extract_retry_delay(exc, with_source: bool = False):
     """Extract retry-after from an API error. Falls back to 20s default.
+
+    v1.6.0.1 adds ``with_source``. When true this returns ``(value, source)``
+    where source is one of ``attr`` / ``retry_delay`` / ``header`` / ``text`` /
+    ``default``. Nothing about the number changes; what changes is that the
+    caller can now tell a deadline the PROVIDER stated from one this plugin
+    invented, which is the difference between a tally that means something and
+    a tally that only counts failures.
+
 
     Order: structured attributes -> HTTP headers -> regex on message text.
     Accepted range: 0 < val <= 86400s (24h). The ceiling rejects absurd /
@@ -915,7 +1463,7 @@ def _extract_retry_delay(exc):
         try:
             val = float(retry_after)
             if 0 < val <= cap:
-                return val
+                return (val, "attr") if with_source else val
         except (ValueError, TypeError):
             pass
 
@@ -934,7 +1482,7 @@ def _extract_retry_delay(exc):
             except (ValueError, TypeError):
                 secs = _parse_duration_to_seconds(str(rd))
         if secs is not None and 0 < secs <= cap:
-            return secs
+            return (secs, "retry_delay") if with_source else secs
 
     # 2. HTTP response headers
     headers = getattr(exc, "headers", None) or getattr(exc, "response_headers", None)
@@ -948,7 +1496,7 @@ def _extract_retry_delay(exc):
             try:
                 val = float(ra)
                 if 0 < val <= cap:
-                    return val
+                    return (val, "header") if with_source else val
             except (ValueError, TypeError):
                 pass
 
@@ -964,9 +1512,9 @@ def _extract_retry_delay(exc):
     if match:
         dur = _parse_duration_to_seconds(match.group(1))
         if dur is not None and 0 < dur <= cap:
-            return dur
+            return (dur, "text") if with_source else dur
 
-    return 20  # Safe default
+    return (20, "default") if with_source else 20  # Safe default
 
 
 # --- v1.0.8: permanently DENIED key/project (403) ---
@@ -984,13 +1532,73 @@ def _extract_retry_delay(exc):
 # project) instead of every 20 seconds.
 _PERMANENT_DENIAL_INDICATORS = (
     "permission_denied",
+    "permission denied",
     "denied access",
     "consumer_suspended",
     "service_disabled",
     "api_key_service_blocked",
     "has not been used in project",
     "is disabled for this project",
+    # --- v1.6.0.1 additions -------------------------------------------------
+    # A model outside the tier the key pays for. This is about the PAIRING, not
+    # about the credential: the same key is very often the healthiest one in the
+    # account on every other model, which is why `denied` is scoped per
+    # provider:model and is never allowed to retire a key.
+    "model not authorized",
+    "model not available",
+    # Z.AI 1311: "Your current subscription plan does not yet include access to
+    # ${model_name}". Per-model by construction — the plan is fine, this one
+    # model is outside it. Both spellings, because a substring match cannot see
+    # past the "yet".
+    "does not include access to",
+    "does not yet include access to",
 )
+
+# Deliberately NOT in the tuple above, with the reason attached, because an
+# omission nobody wrote down gets "fixed" by the next reader:
+#
+#   "model not found" — it is about the MODEL NAME, not the credential. The
+#     Hermes port had it in this family and its own corpus caught the cost: the
+#     host says `model_not_found` (try a different model, do not touch the key),
+#     KAME said `auth` and rotated — walking the entire pool over a misspelt
+#     model name and benching every key in it. Agent Zero already routes 404 to
+#     `_is_terminal_error`, which is the correct answer, and
+#     `tests/test_v1_6_0_1.py` asserts it stays that way.
+#
+#   The exception CLASS names `AuthenticationError` / `PermissionDeniedError` —
+#     these are the classes of every 401 and every 403 respectively, not a
+#     statement about this key. Mapping them would recreate, by a different
+#     road, the exact defect that removing `"unauthorized"` above repairs.
+_DENIAL_EXCLUDED_ON_PURPOSE = (
+    "model not found",
+    "AuthenticationError",
+    "PermissionDeniedError",
+)
+
+
+# v1.6.0.1: exception classes that mean "the connection did not happen".
+# Curated, never folded into a general lookup — see the note in
+# `_classify_error` for why a class name must not be allowed to state a
+# provider's verdict. Names only, so litellm/openai/httpx do not have to be
+# importable for this to work.
+_TRANSPORT_EXCEPTION_CLASSES = frozenset({
+    "APIConnectionError",
+    "APITimeoutError",
+    "ConnectError",
+    "ConnectTimeout",
+    "ConnectionError",
+    "ConnectionResetError",
+    "ReadError",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "WriteError",
+    "WriteTimeout",
+    "PoolTimeout",
+    "ProxyError",
+    "SSLError",
+    "Timeout",
+    "TimeoutException",
+})
 
 
 def _is_permanent_denial(exc: Exception) -> bool:
@@ -1001,9 +1609,9 @@ def _is_permanent_denial(exc: Exception) -> bool:
     `status_code` is not carried over, so the text check is not redundant.
     Never matches a 429: quota is classified before this in `_classify_error`.
     """
-    if getattr(exc, "status_code", None) == 403:
+    if _evidence_status(exc) == 403:
         return True
-    err_msg = str(exc).lower()
+    err_msg = _evidence_text(exc)
     return any(ind in err_msg for ind in _PERMANENT_DENIAL_INDICATORS)
 
 
@@ -1025,11 +1633,30 @@ def _classify_error(exc):
     # Timeouts: the key isn't broken, just slow/busy
     if isinstance(exc, (asyncio.TimeoutError, asyncio.CancelledError)):
         return 3, "timeout", None
-    err_msg = str(exc).lower()
+    err_msg = _evidence_text(exc)
     if "timeout" in err_msg or "timed out" in err_msg:
         return 3, "timeout", None
 
-    status_code = getattr(exc, "status_code", None)
+    # v1.6.0.1: the class name, for the one failure that carries nothing else.
+    # A transport error has no status code and no body, ever — the socket never
+    # got far enough to produce one — so every branch below this point finds
+    # nothing to read and it used to land in the generic `other` bucket at 20s.
+    # `type(exc).__name__` is the only evidence it has, and three seconds is the
+    # whole of the right answer: nothing is wrong with the key, the connection
+    # simply did not open.
+    #
+    # Only connection-shaped classes are listed. Classes that describe a
+    # PROVIDER verdict (RateLimitError, AuthenticationError,
+    # PermissionDeniedError) are deliberately absent — see
+    # `_DENIAL_EXCLUDED_ON_PURPOSE`. Reading a verdict off a class name would
+    # shadow the status code and the body, which say the same thing better.
+    if type(exc).__name__ in _TRANSPORT_EXCEPTION_CLASSES:
+        return 3, "timeout", None
+
+    # v1.6.0.1: the status may be on a wrapper's cause rather than on the
+    # wrapper. litellm and the OpenAI SDK both re-raise, and the outer object
+    # does not always carry the status the inner one had.
+    status_code = _evidence_status(exc)
 
     # Server / transient errors FIRST (v1.0.2). A 5xx is the provider being
     # momentarily overloaded, NOT the key being spent. Some providers (notably
@@ -1066,8 +1693,14 @@ def _classify_error(exc):
     # v1.0.8: a 403-class refusal (suspended project / API not enabled / model
     # not authorized for this key). Checked AFTER the quota branch so a 429 is
     # never mistaken for it. Quarantined for the daily cooldown, not 20s.
+    # v1.6.0.1: the OPENING rest, not the whole story. `denied` is on the
+    # doubling ladder in `_mark_key_health`, so a permission that really is
+    # permanent reaches the hourly re-probe by itself, while a plan somebody
+    # upgrades — or an API somebody switches on — comes back in the seconds it
+    # actually took rather than costing an hour of a key that was never broken.
+    # The hour was never load-bearing: only the ladder's ceiling is.
     if _is_permanent_denial(exc):
-        return _KAME_DAILY_COOLDOWN_S, "denied", (status_code or 403)
+        return _KAME_REFUSAL_REST_S, "denied", (status_code or 403)
 
     # Everything else
     return 20, "other", status_code
@@ -1076,6 +1709,40 @@ def _classify_error(exc):
 def _classify_error_delay(exc):
     """Backward-compatible thin wrapper: just the delay."""
     return _classify_error(exc)[0]
+
+
+def _retirement_suffix(identity: str, key: str) -> str:
+    """What to add after a refusal line: has this key left rotation, or not yet?
+
+    v1.6.0.1. Two sentences, never one, because they ask the reader for opposite
+    things — *act on this* versus *do not act on this yet*. Counts only; the key
+    itself is already rendered by the caller through `_key_display_auth`.
+    """
+    try:
+        with _KAME_LOCK:
+            pool = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+            kd = pool.get(key) or {}
+            retired_here = bool(kd.get("retired_at"))
+            strikes = int(kd.get("consecutive_refusals") or 0)
+            total = len(pool)
+            retired_total = sum(1 for v in pool.values() if v.get("retired_at"))
+            live = total - retired_total
+    except Exception:
+        return ""
+    if retired_here:
+        if live <= 0:
+            # The escape hatch. Every key refused means every key is offered
+            # again, so saying "left rotation" here would be a lie.
+            return (" — every key in this pool has now been refused, so all of "
+                    "them are being offered again and the provider's own error "
+                    "will come back")
+        return (f" — {retired_total} of {total} keys have left rotation, {live} "
+                f"still in it. Nothing was deleted: paste a replacement over it "
+                f"and it comes back by itself.")
+    if strikes:
+        return (f" — refusal {strikes} of {_KAME_REFUSALS_BEFORE_RETIRING}; it is "
+                f"still being tried, because one refusal is not proof")
+    return ""
 
 
 def _friendly_error_msg(kind, delay, status_code=None, exc=None):
@@ -1106,12 +1773,25 @@ def _friendly_error_msg(kind, delay, status_code=None, exc=None):
     if kind == "server":
         sc = status_code or 503
         return f"⏳ {sc} server-busy → key cooled {d} · rotating to next key..."
+    # v1.6.0.1: three sentences, because the three refusals ask the reader for
+    # three different things. Saying "invalid key — replace it" about a bare 401
+    # was false often enough to cost real keys, and saying it about a 403 that
+    # names one model was false twice over.
+    if kind == "revoked":
+        sc = status_code or 401
+        return (f"\U0001f512 {sc} the provider says this is not a valid key → "
+                f"out of rotation (nothing was deleted — paste a replacement "
+                f"over it and it comes back by itself)")
     if kind == "auth":
-        return f"\U0001f512 invalid key → quarantined {d}"
+        sc = status_code or 401
+        return (f"\U0001f512 {sc} refused with no explanation → key rests {d} and "
+                f"is offered last · rotating to next key...")
     if kind == "denied":
         sc = status_code or 403
-        return (f"\U0001f6ab {sc} access denied for this key/model → quarantined {d} "
-                f"(project suspended, API not enabled, or model not authorized)")
+        return (f"\U0001f6ab {sc} this key may not use THIS model → rested {d} "
+                f"for this model only; it is untouched everywhere else "
+                f"(project suspended, API not enabled, or model outside the "
+                f"key's tier)")
     name = type(exc).__name__ if exc is not None else "error"
     return f"⚠️ {name} → cooling {d} · next key..."
 
@@ -1283,16 +1963,38 @@ def _get_best_key(identity, all_keys):
         state = _get_identity_state(identity, all_keys)
         pool = state["keys"]
 
+        # 0. v1.6.0.1: RETIREMENT OUTRANKS READINESS, and that is the whole
+        #    reason it is worth having.
+        #
+        #    The demotion in step 3 handles the easy case, where a working key
+        #    is sitting there unused. The case it gets wrong is the one that
+        #    actually happens: the working key is resting twenty seconds off a
+        #    throttle, the refused key's own rest has lapsed, so the refused key
+        #    is the only thing "ready" — and the call goes to a credential the
+        #    provider has already told us is dead. That spends a request and
+        #    hands back an error where waiting twenty seconds would have handed
+        #    back an answer.
+        #
+        #    THE ESCAPE HATCH IS THE WHOLE SAFETY ARGUMENT. The rule applies
+        #    only while some key is not retired. If every key in a pool has been
+        #    refused, every key is offered again — the request goes out and the
+        #    provider's own error comes back, exactly as it would with no plugin
+        #    installed. Retiring can never take a pool to zero, so the worst
+        #    case of a wrong verdict is no worse than not having the rule.
+        candidates = [k for k in all_keys if not pool[k].get("retired_at")]
+        if not candidates:
+            candidates = list(all_keys)
+
         # 1. Clean expired request timestamps (>60s old) for all keys
         for k in all_keys:
             pool[k]["request_log"] = [t for t in pool[k]["request_log"] if t > cutoff]
 
         # 2. Filter healthy keys (not sick/quarantined)
-        healthy = [k for k in all_keys if pool[k]["sick_until"] < now]
+        healthy = [k for k in candidates if pool[k]["sick_until"] < now]
 
         if not healthy:
             # Eternal fallback: pick the one recovering soonest
-            best = min(all_keys, key=lambda k: pool[k]["sick_until"])
+            best = min(candidates, key=lambda k: pool[k]["sick_until"])
             return best, "EXHAUSTED_RETRY"
 
         # 2b. Compression-aware filter (additive, never empties the pool).
@@ -1307,7 +2009,24 @@ def _get_best_key(identity, all_keys):
 
         # 3. RPM-aware selection: fewest recent requests = most remaining capacity
         #    Tie-break: least recently used (LRU) for even spreading
+        #
+        #    v1.6.0.1 adds the DEMOTION as the first term. A key whose most
+        #    recent answer was a refusal is offered LAST among the ready ones —
+        #    never removed, so a pool of nothing but refused keys still works,
+        #    but never preferred either.
+        #
+        #    Without it the shorter refusal bench is worse than the hour it
+        #    replaced: a key that answered 401 comes back with an empty request
+        #    window and the oldest `last_used` in the pool, which is precisely
+        #    what the two terms below reach for. The one key known not to work
+        #    would be the first one tried, every twenty seconds. There is a test
+        #    that fails when this term is removed.
+        #
+        #    Both counters reset on any success and on any failure of another
+        #    kind, so "was refused" means "the last thing it did was refuse",
+        #    not "was refused once, an hour ago".
         best_key = min(healthy, key=lambda k: (
+            1 if (pool[k].get("consecutive_refusals") or pool[k].get("consecutive_denials")) else 0,
             len(pool[k]["request_log"]),
             pool[k]["last_used"],
         ))
@@ -1339,7 +2058,52 @@ _INVALID_KEY_INDICATORS = (
     "invalid api key",
     "invalid_api_key",
     "please renew the api key",
-    "unauthorized",
+    # --- v1.6.0.1 additions -------------------------------------------------
+    "invalid authentication",
+    "incorrect api key",
+    "api key is no longer valid",
+)
+
+# `"unauthorized"` was in that tuple until v1.6.0.1 and is not any more.
+#
+# It is the HTTP reason phrase for 401, so it arrives on EVERY bare 401 — a
+# proxy in front of the provider, a gateway, an OAuth token one second from
+# refreshing. Reading it as "this key is not a key" quarantines a healthy
+# credential over a refresh that was going to succeed. The Hermes port measured
+# the cost before removing it there in its own 1.4.0: **twenty-one healthy keys
+# quarantined for an hour each**, every one of them working again on the next
+# call. A provider that has genuinely retired a key always says more than
+# "Unauthorized", and each of those sentences is matched above or below.
+#
+# Removing the word does not make a 401 invisible: `_is_auth_error` still
+# returns True on `status_code == 401`. What changes in v1.6.0.1 is what a BARE
+# 401 costs — see `_classify_auth_kind` and the `auth` / `revoked` split.
+
+# Two providers state the same fact with the words the other way round, and no
+# substring in the tuple above can reach them:
+#
+#     Anthropic  "API key is invalid."
+#     DeepSeek   "Your api key: ****0000 is invalid"
+#
+# Every entry above reads "invalid key"; neither of those says that, so a
+# genuinely dead key on either provider used to be handed back as an ordinary
+# failure and rotated forever. The gap is bounded rather than open — the key
+# and the verdict must sit in the SAME clause, so a sentence that merely
+# mentions a key somewhere and the word "invalid" somewhere else does not
+# qualify. Twenty-four characters of slack because the widest real one is
+# twelve (DeepSeek's redacted `: ****0000 `), and every character past the
+# evidence is a sentence about something else this pattern can reach into.
+_INVALID_KEY_PATTERNS = (
+    re.compile(
+        r"(?:api[\s_-]*)?key\b[^.\n]{0,24}?\b(?:is|was)\s+"
+        r"(?:no[\s_-]*longer[\s_-]*valid|not[\s_-]*valid|invalid|revoked|expired)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:api[\s_-]*)?key[\s_-]*(?:has[\s_-]*been[\s_-]*)?"
+        r"(?:expired|revoked|deleted|disabled)",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -1351,17 +2115,40 @@ def _is_auth_error(exc: Exception) -> bool:
     not valid" / "API key expired. Please renew the API key.") for a bad or
     expired key. Such a call must be handled as auth (quarantine the key + rotate
     to the next), NOT as a terminal 400 that aborts the run. (v1.0.3)
+
+    v1.6.0.1: this answers "is this about the credential at all". It no longer
+    answers "is the credential dead" — `_classify_auth_kind` does that, and the
+    two questions have different answers for a bare 401.
     """
-    status_code = getattr(exc, "status_code", None)
-    if isinstance(status_code, int) and status_code == 401:
+    if _evidence_status(exc) == 401:
         return True
-    err_msg = str(exc).lower()
-    return any(ind in err_msg for ind in _INVALID_KEY_INDICATORS)
+    err_msg = _evidence_text(exc)
+    if any(ind in err_msg for ind in _INVALID_KEY_INDICATORS):
+        return True
+    return any(pat.search(err_msg) for pat in _INVALID_KEY_PATTERNS)
+
+
+def _is_revoked_key(exc: Exception) -> bool:
+    """True only when the provider USED THE WORDS: this is not a key.
+
+    The distinction this function exists for is the whole of v1.6.0.1's auth
+    story. A bare 401 is ambiguous — it is what a proxy, a gateway and an
+    expiring OAuth token all produce. A sentence naming the key as invalid,
+    expired or revoked is not ambiguous, and it is the only evidence strong
+    enough to take a credential out of rotation on the first refusal.
+
+    Deliberately does NOT look at the status code. A 401 with no explanation is
+    exactly the case this must not fire on.
+    """
+    err_msg = _evidence_text(exc)
+    if any(ind in err_msg for ind in _INVALID_KEY_INDICATORS):
+        return True
+    return any(pat.search(err_msg) for pat in _INVALID_KEY_PATTERNS)
 
 
 def _is_terminal_error(exc: Exception) -> bool:
     """Classify errors as terminal (don't retry) or transient (rotate key)."""
-    err_msg = str(exc).lower()
+    err_msg = _evidence_text(exc)
     # Rate-limit indicators always mean "try another key", never terminal
     if any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
         return False
@@ -1629,7 +2416,10 @@ class _KameSleepState:
     __slots__ = ("sleep_count", "cooldown_overhead_s", "long_cool_logged",
                  "last_sleep_log_at", "last_long_heartbeat_at",
                  # v1.2.0 — the chat-side wait notice (see _kame_wait_notice_tick)
-                 "cold_since", "notice_item", "notice_refreshed_at", "notice_broken")
+                 "cold_since", "notice_item", "notice_refreshed_at", "notice_broken",
+                 # v1.6.0.1 — the live toast, which arrives long before the
+                 # ninety-second chat item and is pushed over the WebSocket
+                 "toast_refreshed_at", "toast_shown", "toast_broken")
 
     def __init__(self):
         self.sleep_count = 0
@@ -1641,6 +2431,9 @@ class _KameSleepState:
         self.notice_item = None
         self.notice_refreshed_at = 0.0
         self.notice_broken = False
+        self.toast_refreshed_at = 0.0
+        self.toast_shown = False
+        self.toast_broken = False
 
 
 def _kame_pool_counts(identity: str, all_keys: list):
@@ -1654,6 +2447,73 @@ def _kame_pool_counts(identity: str, all_keys: list):
             if float((state.get(k) or {}).get("sick_until") or 0) < now
         )
     return healthy, total
+
+
+#: One stable id, so every update REPLACES the previous notification rather
+#: than stacking a new one beside it. `add_notification` looks an existing id up
+#: and overwrites it in place, which is the whole reason a live wait can be
+#: narrated without turning into a wall of toasts.
+_KAME_TOAST_ID = "kame-rotation-wait"
+
+
+def _kame_toast(kind: str, title: str, message: str, seconds: int = 4) -> bool:
+    """Push one live notification, updating the previous one in place.
+
+    v1.6.0.1. Best-effort by construction and returns False rather than raising:
+    a wait that is not narrated is a worse experience, a wait that is not
+    survived is a bug, and that ordering has been this plugin's rule since the
+    chat notice was written.
+
+    Counts only — the caller composes the text and no caller passes a key.
+    """
+    try:
+        from helpers.notification import (
+            NotificationManager, NotificationType, NotificationPriority,
+        )
+        NotificationManager.send_notification(
+            type=NotificationType(kind),
+            priority=NotificationPriority.NORMAL,
+            message=message,
+            title=title,
+            display_time=seconds,
+            group="kame",
+            id=_KAME_TOAST_ID,
+        )
+        return True
+    except Exception:
+        # Older Agent Zero, a renamed helper, or no manager yet. The chat item
+        # and the console still say everything this said.
+        return False
+
+
+def _kame_wait_notice_toast(st, identity, all_keys, waited: float) -> None:
+    """The early half of the wait, on a surface that is pushed, not polled."""
+    if st.toast_broken:
+        return
+    now = time.time()
+    if waited < _KAME_NOTICE_TOAST_AFTER_S:
+        return
+    if st.toast_shown and (now - st.toast_refreshed_at) < _KAME_WAIT_NOTICE_REFRESH_S:
+        return
+    healthy, total = _kame_pool_counts(identity, all_keys)
+    resting = total - healthy
+    eta = _next_recovery_seconds(identity, all_keys)
+    when = f" · next back in ~{_fmt_duration(eta)}" if eta else ""
+    ok = _kame_toast(
+        "progress",
+        f"KAME — waiting for a key ({_fmt_duration(waited)})",
+        f"{resting} of {total} keys resting on {identity}{when}. "
+        f"No requests are being made while they cool; this resumes by itself.",
+        # Just past the refresh cadence, so the toast is continuously replaced
+        # while the wait lasts and disappears on its own if the process dies
+        # mid-wait rather than hanging on screen for ever.
+        seconds=int(_KAME_WAIT_NOTICE_REFRESH_S) + 5,
+    )
+    if not ok:
+        st.toast_broken = True
+        return
+    st.toast_shown = True
+    st.toast_refreshed_at = now
 
 
 def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> None:
@@ -1675,12 +2535,21 @@ def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> No
     rest of this call and rotation carries on untouched. A wait that is not
     narrated is a worse experience; a wait that is not survived is a bug.
     """
-    if not _KAME_WAIT_NOTICE or st.notice_broken:
+    if not _KAME_WAIT_NOTICE:
         return
     now = time.time()
     if not st.cold_since:
         st.cold_since = now
     waited = now - st.cold_since
+
+    # v1.6.0.1: the live toast comes first and much earlier. It is a separate
+    # surface with its own failure flag, so a chat item that cannot be written
+    # (a CLI run, a task runner, a test) does not also silence the toast, and
+    # vice versa.
+    _kame_wait_notice_toast(st, identity, all_keys, waited)
+
+    if st.notice_broken:
+        return
     if waited < _KAME_WAIT_NOTICE_AFTER_S:
         return
     if st.notice_item is not None and (now - st.notice_refreshed_at) < _KAME_WAIT_NOTICE_REFRESH_S:
@@ -1735,6 +2604,21 @@ def _kame_wait_notice_finish(st, outcome: str) -> None:
     Called on every way out of the carousel, so the chat never keeps a "waiting"
     item that is no longer true. A no-op when no notice was ever shown (the
     common case: the pool recovered before anybody could wonder)."""
+    # v1.6.0.1: close the toast too, and close it FIRST — it is the surface most
+    # likely to have been shown, because it starts at fifteen seconds rather
+    # than ninety. A "waiting" toast left on screen after the wait ended is
+    # worse than never having shown one.
+    if st.toast_shown:
+        st.toast_shown = False
+        _waited = _fmt_duration(time.time() - st.cold_since) if st.cold_since else "?"
+        if outcome == "resumed":
+            _kame_toast("success", "KAME — a key came back",
+                        f"A key answered after {_waited}. Continuing.", seconds=4)
+        else:
+            _kame_toast("info", "KAME — stopped waiting",
+                        f"The wait ended after {_waited} without a key coming back.",
+                        seconds=6)
+
     item = st.notice_item
     if item is None:
         return
@@ -2001,21 +2885,43 @@ async def _kame_carousel(self, ctx):
                     f"⚠️ mid-stream drop after partial output → rotating + retrying"
                 )
 
-            # Auth errors: quarantine the key for a long time (likely permanently bad)
+            # Credential refusals. v1.6.0.1 splits what used to be one bucket,
+            # because the strongest evidence this plugin can gather was being
+            # worked out and then thrown away one line later:
+            #
+            #   revoked — the provider USED THE WORDS. Not a key. Out of
+            #             rotation on the first one.
+            #   auth    — a bare 401, no explanation. Could be a token mid-
+            #             refresh, a proxy, an incident. Twenty seconds,
+            #             offered last, out after three in a row.
+            #
+            # A 403 saying "this key may not use THIS MODEL" is neither: it is
+            # classified as `denied` below, is scoped per provider:model, and is
+            # never allowed to retire anything.
             if _is_auth_error(e):
                 _auth_sc = getattr(e, "status_code", None)
-                applied = _mark_key_health(identity, key, False, _KAME_DAILY_COOLDOWN_S, "auth")
-                # v1.0.6: an invalid/expired key is a PERMANENT, actionable problem —
-                # always shown, even at 'silent' (matches the documented "silent still
+                _auth_kind = "revoked" if _is_revoked_key(e) else "auth"
+                applied = _mark_key_health(
+                    identity, key, False, _KAME_REFUSAL_REST_S, _auth_kind
+                )
+                # v1.0.6: a refused credential is an actionable problem — always
+                # shown, even at 'silent' (matches the documented "silent still
                 # shows hard errors" promise).
                 PrintStyle.warning(
                     f"[KAME] {call_type}|{model_short} {_key_display_auth(key)} "
-                    f"{_friendly_error_msg('auth', applied, _auth_sc, e)}"
+                    f"{_friendly_error_msg(_auth_kind, applied, _auth_sc, e)}"
+                    f"{_retirement_suffix(identity, key)}"
                 )
-                _maybe_log_full_error(call_type, model_short, key, e, "auth", applied, _auth_sc)
+                _maybe_log_full_error(
+                    call_type, model_short, key, e, _auth_kind, applied, _auth_sc
+                )
+                # A credential refusal is always KAME's own number: no provider
+                # tells you when a rejected key will start working.
+                _tally_failure(identity, _auth_kind, _auth_sc, "kame")
             else:
                 delay, kind, sc = _classify_error(e)
                 applied = _mark_key_health(identity, key, False, delay, kind)
+                _tally_failure(identity, kind, sc, _delay_source(e, kind))
                 _log_failure(call_type, model_short, key, e,
                              kind, applied, sc, identity, all_keys)
 
@@ -2437,6 +3343,20 @@ def _kame_verified_against() -> str:
 def _print_shield_status():
     PrintStyle(font_color="#96E").print("=" * 55)
     PrintStyle(font_color="#96E").print(f"  \U0001f422⚡ KAME v{KAME_VERSION} — ACTIVE")
+    # v1.6.0.1: the version beside the build. The version is what somebody
+    # typed into plugin.yaml; the build is a hash of the modules that are
+    # actually on this disk. The one check worth making after an upgrade is
+    # whether this string changed, and it belongs where the upgrade is watched.
+    try:
+        _b = _build_report()
+        _line = f"     build {_b.get('fingerprint', '?')}"
+        if _b.get("complete") is False:
+            _line += f"  ⚠ INCOMPLETE — missing: {', '.join(_b.get('missing') or [])}"
+        elif _b.get("degraded"):
+            _line += f"  ({len(_b['degraded'])} optional file(s) absent)"
+        PrintStyle(font_color="#96E").print(_line)
+    except Exception:
+        pass
     shields = [
         "Identity-Aware Health",
         "Eternal Carousel Rotation",

@@ -22,7 +22,18 @@ daily_quota_cooldown_seconds: 3600
 # How API keys appear in logs:
 #   fingerprint — anonymized stable id like "k3f9a1" (default; never leaks)
 #   prefix8     — first 8 chars of the key (mild partial leak)
-#   full        — the entire key (debug only; writes the secret to the log)
+#
+# v1.6.0.1 REMOVED the third option, `full`, which wrote the entire secret into
+# the log. Agent Zero v2.11 masks secrets in its own error output, so KAME's
+# switch had become the only thing in the stack that deliberately un-redacted a
+# credential — and a log ends up in bug reports and screenshots taken by people
+# who are not thinking about what is in it. An existing config that still says
+# `full` keeps working and is read as `prefix8`.
+#
+# If you turned it on to see which key failed, the setting you actually want is
+# `kame_log_full_errors` below: it prints the provider's untruncated message
+# beside KAME's classification, and an invalid-key line already shows a head
+# and a tail of the key so you can find it in your provider console.
 key_log_style: fingerprint
 
 # Show the ENTIRE raw error on every failed call (debug). Off by default.
@@ -68,4 +79,15 @@ kame_collapse_storm_logs: true
 # has run, and that stop still works. Counts and the pool name only — never a
 # key — and UI-only, so it never enters the model's history. Pure
 # observability: rotation, cooldowns and give-up behavior are unchanged.
+#
+# v1.6.0.1: this now governs TWO surfaces, because ninety seconds turned out to
+# be the wrong and only threshold. With a real pool the whole thing is rarely
+# cold for ninety seconds at once, so in practice the chat item almost never
+# appeared and the reasonable conclusion was that nothing was working.
+#   * a live notification at ~15s, pushed over the WebSocket, updating itself
+#     in place and closing as "a key came back" or "stopped waiting";
+#   * the ~90s chat item, unchanged, because that one writes a permanent row
+#     into the conversation and a row per twenty-second throttle would bury it.
+# Turning this off silences both. The always-on rotation indicator beside the
+# composer is separate and is toggled from Agent Zero's own interface controls.
 kame_wait_notice: true

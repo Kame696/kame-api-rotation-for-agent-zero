@@ -191,8 +191,30 @@ _GEMINI_403 = _Err(
 _delay_403, _kind_403, _sc_403 = K._classify_error(_GEMINI_403)
 check("403 PERMISSION_DENIED classifies as 'denied'", _kind_403 == "denied")
 check("403 PERMISSION_DENIED reports its real status code", _sc_403 == 403)
-check("403 PERMISSION_DENIED is quarantined for the daily cooldown, not 20s",
-      _delay_403 == K._KAME_DAILY_COOLDOWN_S and _delay_403 > 20)
+# v1.6.0.1 moved this number, and the reason is worth keeping beside the test.
+# The opening rest is now the REFUSAL bench, not the daily hour. Waiting is not
+# what repairs a refused pairing, so the two ways of being wrong are not the
+# same size: too long costs a healthy key for an hour, too short costs one
+# request refused in milliseconds. The hour is not lost — `denied` sits on the
+# doubling ladder in `_mark_key_health`, so a permission that really is
+# permanent climbs to the daily ceiling by itself, while an API somebody
+# switches on comes back in the seconds it actually took.
+check("403 PERMISSION_DENIED opens at the refusal bench, not the daily hour",
+      _delay_403 == K._KAME_REFUSAL_REST_S)
+
+# ...and the ladder still gets there. Drive the same key through repeated
+# denials and confirm the applied rest climbs and saturates at the daily cap.
+K._KAME_KEY_HEALTH = {}
+_ladder_ident = "gemini:ladder-probe"
+K._get_identity_state(_ladder_ident, ["L1", "L2"])
+_climb = [K._mark_key_health(_ladder_ident, "L1", False, _delay_403, "denied")
+          for _ in range(12)]
+check("a repeated denial climbs the ladder",
+      _climb[0] == K._KAME_REFUSAL_REST_S and _climb[1] > _climb[0])
+check("...and saturates at the daily ceiling, never past it",
+      _climb[-1] == K._KAME_DAILY_COOLDOWN_S and max(_climb) <= K._KAME_DAILY_COOLDOWN_S)
+check("a denial never retires the key, no matter how many arrive",
+      not K._KAME_KEY_HEALTH[_ladder_ident]["keys"]["L1"].get("retired_at"))
 check("403 PERMISSION_DENIED is NOT terminal (KAME rotates, never aborts the run)",
       K._is_terminal_error(_GEMINI_403) is False)
 check("403 PERMISSION_DENIED is not misread as an invalid key",
@@ -214,7 +236,14 @@ check("a 503 is still classified as 'server', not 'denied'",
 # the friendly line must name the real cause, not a generic exception name
 _line = K._friendly_error_msg("denied", _delay_403, 403, _GEMINI_403)
 check("the denied log line is explicit and actionable",
-      "denied" in _line and "quarantined" in _line and "403" in _line)
+      "403" in _line and "this model" in _line.lower())
+# v1.6.0.1: and it must NOT say the thing that is false. Calling a model-scoped
+# refusal an invalid credential is wrong twice over — the key is fine, and it is
+# fine on every other model in the account.
+check("the denied log line never calls the credential invalid",
+      "invalid" not in _line.lower() and "not a valid key" not in _line.lower())
+check("the denied log line says the key still works elsewhere",
+      "everywhere else" in _line.lower())
 
 # a denied key must actually stop being re-selected while quarantined
 K._KAME_KEY_HEALTH = {}

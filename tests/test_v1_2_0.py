@@ -378,9 +378,18 @@ check("F13 both shelves are labelled and explained",
 # G. The release.
 # ==========================================================================
 _plugin_yaml = open(os.path.join(ROOT, "plugin.yaml"), encoding="utf-8").read()
-check("G1 the engine version moved", K.KAME_VERSION == "1.2.0", K.KAME_VERSION)
-check("G2 plugin.yaml agrees",
-      re.search(r"^version:\s*1\.2\.0\s*$", _plugin_yaml, re.M) is not None)
+# Loosened in 1.6.0.1 for the reason test_v1_0_9.py already wrote down: a test
+# that pins the CURRENT version inside an old release's suite has to be edited
+# on every release, and a test edited on every release stops being read. The
+# invariant worth defending here was never the digits — it is that the engine
+# and the manifest agree, because a plugin whose banner and manifest disagree is
+# how you end up debugging a version that is not installed.
+check("G1 the engine version is at or past this release's floor",
+      tuple(int(p) for p in K.KAME_VERSION.split(".")) >= (1, 2, 0), K.KAME_VERSION)
+_yaml_version = re.search(r"^version:\s*(\S+)\s*$", _plugin_yaml, re.M)
+check("G2 plugin.yaml agrees with the engine, to the digit",
+      _yaml_version is not None and _yaml_version.group(1) == K.KAME_VERSION,
+      f"yaml={_yaml_version.group(1) if _yaml_version else None} engine={K.KAME_VERSION}")
 check("G3 the settings key was NOT renamed (renaming it orphans every install)",
       re.search(r"^name:\s*api_rotation_by_kame\s*$", _plugin_yaml, re.M) is not None)
 check("G4 the changelog has a 1.2.0 entry",

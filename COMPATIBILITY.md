@@ -1,7 +1,7 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.2.0 — verified against Agent Zero v2.10 (2026-08-23).**
-Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10**.
+**KAME 1.6.0.1 — verified against Agent Zero v2.11 (2026-09-03).**
+Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10, v2.11**.
 Supported range: Agent Zero **v1.14+** and the **whole V2 line**.
 
 This file is the single source of truth for *"Agent Zero shipped a new version — is
@@ -107,7 +107,8 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.7 | 1.0.9 | **live-verified** | |
 | V2.8 | 1.0.9 | **live-verified** | 12/12 fingerprints unchanged. See §2.1. |
 | V2.9 | 1.2.0 | supported | not separately audited; v2.10 was verified over it |
-| **V2.10** | **1.2.0** | **verified — current baseline** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
+| V2.10 | 1.2.0 | **live-verified** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
+| **V2.11** | **1.6.0.1** | **verified — current baseline** | 10/12 unchanged; the 2 changed are both `degraded` and were read (§2.3). Live harness green. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real
@@ -146,6 +147,53 @@ newly *depends* on two of them:
 | `get_plugin_config()` returns the **saved** `config.json` when one exists; it does **not** merge `default_config.yaml` into it | `helpers/plugins.py` | Any setting added after a user last pressed Save arrives as absent. KAME reads every setting with an explicit default, and every control on the settings screen carries a matching `x-init` — otherwise a new on-by-default toggle would render unchecked and save that lie back. |
 | Plugin settings screens bind to `config`, which is `context.settings` from the settings store, and are rendered inside `<template x-if="config">` | `webui/components/plugins/plugin-settings.html` | 1.2.0 rewrote `webui/config.html` to A0's own markup and added the `x-if` guard, so the screen cannot bind before the settings load. |
 | `max_consecutive_unusable_responses` default is still **5** | `helpers/settings.py` | The `kame_unusable_response_limit` floor default of 5 still matches upstream. |
+
+### 2.3 What Agent Zero v2.11 changed (audited 2026-09-03)
+
+**10/12 fingerprints unchanged. The two that moved are both `degraded`, both were
+read, and neither needed code.** The live harness passed with KAME's real patches
+on A0's real classes.
+
+#### The two changed symbols
+
+| Symbol | Verdict |
+|---|---|
+| `agent.Agent.monologue` (`bcebd84a…` → `4bccdfc7…`) | **No action.** KAME binds activation at three doors — `agent_init`, `monologue_start`, and the derived `_functions/agent/Agent/monologue/start`. Both named points still exist in v2.11, so the derived one moving costs nothing. This is the three-door design from 1.0.9 absorbing an upstream edit exactly as intended. |
+| `_90_stop_unusable_response_loop.StopUnusableResponseLoop.execute` (`d2285021…` → `b58846f0…`) | **No code change; one decision.** See below. |
+
+#### The unusable-response guard grew a third trigger
+
+v2.11 changed A0's guard in two ways:
+
+1. It now counts **`fw.msg_empty_response.md`** alongside `fw.msg_misformat.md`
+   and `fw.msg_repeat.md`.
+2. `params_persistent["_unusable_response_failures"]` is a dict
+   `{"iteration": int, "count": int}` and the count only survives across
+   *consecutive* iterations.
+
+KAME's `_95_kame_unusable_floor.py` already reads the dict shape and pulls
+`entry.get("count")`, so the floor still lifts and nothing had to change. But
+**the floor now also lifts an abort triggered by an empty response**, and nobody
+decided that — it arrived with the upstream edit. It is kept, deliberately, and
+the reasoning is in `decisions/0003-empty-response-abort-and-the-floor.md`: an
+empty answer is the exact failure a squeezed free-tier key produces, KAME already
+rotates on it (`_KAME_EMPTY_RETRY_BUDGET`), and A0's own guard only sees an empty
+result after the whole pool produced one.
+
+#### Other v2.11 facts KAME now depends on, or must not be surprised by
+
+| v2.11 fact | Where | Why KAME cares |
+|---|---|---|
+| **`@extensible` on `LiteLLMChatWrapper.unified_call`, `unified_turn` and `models.get_api_key`**, and an `end` extension may **clear `data["exception"]`** and **set `data["result"]`** | `models.py:275/529/643`, `helpers/extension.py:57` | This is an *official* door for the rotation loop. `models.py:29` carries the upstream comment *"extensible: allows plugins to intercept get_api_key()"*. KAME's monkey-patch remains the shipped path; the extension point is tracked here so the choice stays deliberate. |
+| `api_key = kwargs.pop("api_key", None) or get_api_key(provider_name)` | `models.py:908`, `:944` | **The one load-bearing assumption.** An injected `api_key=` still wins over the resolver. Unchanged from every prior audited version. |
+| **Default LiteLLM transport is now Chat Completions** (breaking, upstream) | v2.11 release notes | KAME delegates the request entirely, so the request shape is A0's problem. What KAME reads is the *result*, and `_kame_result_is_empty` duck-types both the `(response, reasoning)` tuple and the object with `.response` / `.reasoning`. Neither type is imported. |
+| A0 ships its own **empty-response retry** at `message_loop_result/_20_empty_response.py` | new in v2.11 | KAME rotates on an empty answer *inside* the call, before A0 ever sees a result. A0's extension therefore only fires when the whole pool returned empty — the right order, and now written down. |
+| A0 ships **`_error_retry`**, a core plugin at `Agent.handle_exception/end` | `plugins/_error_retry/` | A layer *above* KAME: it retries a whole monologue after an exception escapes. With KAME installed it should almost never fire, and when it does it means the carousel gave up. **Not a conflict** — but do not debug one while looking at the other. |
+| `helpers/rate_limiter.RateLimiter` keeps `timeframe`, `values`, `_lock`, `cleanup`, `get_total` | `helpers/rate_limiter.py` | `_patch_rate_limiters()` still applies cleanly. |
+| **WebUI plugin slots**: `extensions/webui/model-context-strip-end/`, `interface-controls-end/`, `apply_snapshot_before/` | v2.11 release notes, `helpers/extension.py:258` | The surface KAME 1.6.0.1 uses to put rotation state on screen. Discovered generically from any enabled plugin's `extensions/webui/` tree. |
+| Plugin-contributed slash commands, discovered by `_discover_plugin_commands()` from `<plugin>/commands/*.command.yaml` | `plugins/_commands/helpers/commands.py:845` | How `/kame` ships. |
+| A0 masks secrets in error messages (`extensions/python/error_format/_10_mask_errors.py`, `helpers/secrets.py`) | v2.11 | Part of why `key_log_style: full` was removed in 1.6.0.1: the host now redacts on its own path, and KAME's option was the only thing left that deliberately wrote a key to a log. |
+| `SnapshotV1` is **schema-strict** — `validate_snapshot_schema_v1` raises on any unexpected key | `helpers/state_snapshot.py:87` | A plugin **cannot** add a field to the WebSocket state snapshot. KAME's live UI therefore reads its own API endpoint from an `apply_snapshot_before` hook rather than riding the snapshot. |
 
 KAME is deliberately **defensive**: every patch target is looked up with
 `getattr(..., None)` and skipped if absent, so a missing symbol degrades one feature

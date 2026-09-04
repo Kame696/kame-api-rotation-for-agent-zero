@@ -1,7 +1,7 @@
 {
-  "kame_version": "1.2.0",
-  "verified_against": "v2.10",
-  "verified_on": "2026-08-23",
+  "kame_version": "1.6.0.1",
+  "verified_against": "v2.11",
+  "verified_on": "2026-09-03",
   "a0_repo": "https://github.com/agent0ai/agent-zero",
   "supported_range": "Agent Zero v1.14+ and the whole V2 line",
   "verified_versions": [
@@ -10,7 +10,8 @@
     "v2.1",
     "v2.4",
     "v2.7",
-    "v2.8"
+    "v2.8",
+    "v2.11"
   ],
   "note": "Baseline for tools/a0_upgrade_check.py. `fingerprints` are whitespace- and comment-insensitive hashes of each watched symbol's source in the verified Agent Zero tag. Re-pin ONLY through `--update-baseline`, and only after a clean audit. v1.0.9 shrank this list: KAME now delegates the model call to Agent Zero instead of re-implementing it, so the stream parser, the chunk accumulator, the transport parser, the result builder and litellm itself left KAME's compatibility surface entirely. Agent Zero's OAuth / subscription providers (Codex, Copilot, ...) are deliberately NOT in this list: KAME reads keys from the .env directly and never goes through models.get_api_key, which is where the OAuth plugin hooks in, so there is no shared symbol to fingerprint. That independence is guarded behaviorally instead, by the LIVE 3 block in tests/test_a0_compat.py.",
   "severity_legend": {
@@ -110,7 +111,7 @@
     "models.LiteLLMChatWrapper.unified_call": "48fd6a946bc195cc",
     "models.LiteLLMChatWrapper.unified_turn": "581aba9d8ba8468f",
     "helpers.dotenv.get_dotenv_value": "8f4d212eafa43d98",
-    "agent.Agent.monologue": "bcebd84ab33c1e8c",
+    "agent.Agent.monologue": "4bccdfc7230d47df",
     "agent.Agent.handle_intervention": "0b0c89d6d4d8cf0e",
     "agent.Agent.validate_tool_request": "eec26b2b8e65967a",
     "tools.response.ResponseTool.execute": "fd79aba7eb42abec",
@@ -118,6 +119,6 @@
     "helpers.history.Bulk.summarize": "f09b763d8a201915",
     "helpers.rate_limiter.RateLimiter": "debd59b4e743b93b",
     "helpers.errors.RepairableException": "8a331b4c4b1d03ba",
-    "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute": "d228502f1a1c77d4"
+    "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute": "b58846f02fe94aae"
   }
 }

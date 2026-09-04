@@ -11,6 +11,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.6.0.1** | A refusal is not a clock, and the rotation is on the screen | A live indicator beside the composer says how many keys can answer right now; a bare 401 rests twenty seconds instead of an hour and leaves rotation after three; a key the provider names dead leaves at once; and a 403 refusing **one model** never costs you the key |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
 | **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
 | **1.0.8** | Stop when asked, quarantine when denied | Honors A0's early-stop contract; a permanently denied key is benched instead of retried |
@@ -50,7 +51,314 @@ graph LR
 
 ---
 
-## v1.2.0 — current
+## v1.6.0.1 — current
+
+**A refusal is not a clock, and the rotation is finally on the screen.**
+
+Agent Zero **v2.11** shipped a week before this release and opened three doors
+this plugin has wanted since it was born: `@extensible` on the model entry
+points *and* on `models.get_api_key`, WebUI plugin slots beside the composer,
+and plugin-contributed slash commands. Two of the three are used here.
+
+*(There is no Agent Zero 1.3, 1.4 or 1.5, and no 1.6.0.0. The version line is
+shared with the Hermes port at MAJOR.MINOR and the PATCH digit is free —
+`PARITY.md` forbids padding releases to make digits meet, which is also why
+there was no 1.1.x. All four digits are carried here so the two products read
+as one release; Agent Zero never shipped a 1.6.0.0.)*
+
+**In short**
+
+- **The rotation is visible.** A ring beside the composer reads `12/14`, and a
+  click opens every pool: what is ready, what is resting, what left rotation.
+- **A refusal costs twenty seconds, not an hour** — and a refused key is offered
+  last, never first.
+- **A key the provider names dead leaves rotation.** A bare 401 does not, until
+  three in a row.
+- **A 403 refusing one model never costs the key**, which is the expensive one
+  to get wrong.
+- **`/kame` and `/kame doctor`** answer from inside the running process.
+- The pool stops counting keys your config no longer declares.
+- `key_log_style: full` is gone.
+- Verified against Agent Zero **v2.11**.
+
+<details>
+<summary><b>Everything in this release, in detail</b></summary>
+
+### Why you never saw the rotation
+
+The only thing this plugin ever put on screen was the wait notice, and it is
+gated three ways: the **whole pool** cold for **ninety seconds**, reached only
+from the exhaustion sleep, and silently disabled for the rest of a call if
+`context.log` ever throws. With fourteen keys that state is rare and short — so
+in practice nothing appeared, and the reasonable conclusion was that nothing was
+working.
+
+Three surfaces now, each answering a different question:
+
+| Surface | Answers | When |
+|---|---|---|
+| **The ring beside the composer** | *can it answer me right now* | always |
+| **A live notification** | *what is it waiting for* | from ~15s into a wait |
+| **The welcome banner** | *is there something I have to do* | only for retired credentials |
+
+The ring reads **ready over total**, not healthy over total. A key resting
+twenty seconds off a throttle is perfectly healthy and cannot take this turn,
+and conflating the two is how a panel ends up reassuring somebody whose agent is
+stuck. Click it and every `provider:model` pool is there — keys ready, resting,
+left rotation, and when the next one comes back.
+
+The composer **placeholder** was considered for this, because that is where the
+owner pointed. It was rejected: the placeholder disappears the moment somebody
+types, which is exactly when they are waiting and reaching for the keyboard. The
+ring is in the same place and survives typing.
+
+Counts and fingerprints only, on every path. The endpoint behind the ring calls
+`_key_short_id` directly rather than the configurable `_key_display`, because a
+rendering setting meant for a developer's console must not be able to put a
+secret on a web page. That is structural, not a default.
+
+### A refusal is not a clock
+
+KAME's cooldowns divide in two, and until now both got the same hour:
+
+* **Clocks** — a per-minute throttle, a daily cap, an account allowance. The
+  provider is metering time, and only time helps.
+* **Refusals** — a 401, a revoked key, a 403 saying this key may not have this
+  model. The provider is describing the credential. Waiting fixes nothing.
+
+The reasoning for giving a refusal the daily hour was that since waiting cannot
+repair a refused key, the length hardly matters. It matters, because the two
+ways of being wrong are not the same size:
+
+| Wrong in this direction | Costs |
+|---|---|
+| Too long — the provider had an incident, or the 401 was transient | a **healthy key, for an hour** |
+| Too short — the key really is dead | **one request**, refused in milliseconds, never metered |
+
+Twenty seconds, and it is not an invented number: it is the base the escalation
+ladder already applies to this kind. The hour is not lost — a refusal climbs the
+same doubling ladder, so a permission that really is permanent reaches an hour
+by itself while a plan somebody upgrades comes back in the seconds it took.
+
+**Without the demotion the shorter bench would have been worse than the hour it
+replaced.** A key that answered 401 comes back with an empty request window and
+the oldest `last_used` in the pool — precisely the profile the least-loaded /
+least-recently-used rule reaches for. The one key known not to work would be the
+first one tried, every twenty seconds. A refused key is now offered **last**
+among the ready ones, and there is a test that fails when that term is removed.
+
+### Three refusals, three prices
+
+| Evidence | What it means | What happens |
+|---|---|---|
+| `revoked` — the provider used the words | This is not a key | **Out of rotation on the first one** |
+| `auth` — a bare 401, no explanation | Could be a token mid-refresh, a proxy, an incident | 20s, offered last, out after **3 in a row** |
+| `denied` — "this key may not use *this model*" | The **pairing** is refused, not the key | 20s on the ladder, per-model, **never** retired |
+
+That last row is the expensive one. A key refused for one model may be the
+healthiest credential in the account on every other, and retiring it would throw
+away a working key over a permission that was never about the key. The Hermes
+port shipped exactly that bug for one release, and the test that would have
+caught it is in this one from the start.
+
+**`"unauthorized"` was removed from the invalid-key vocabulary.** It is the HTTP
+reason phrase for 401, so it arrives on every bare 401 a proxy, a gateway or an
+expiring OAuth token produces. The Hermes port measured the cost before removing
+it there: **twenty-one healthy keys**, quarantined an hour each, every one
+working on the next call.
+
+**Retiring is not deleting.** KAME does not write credentials and that has not
+changed. A retired key keeps its row, keeps its place in your config, and comes
+back the instant a call on it succeeds. Three consecutive refusals with *no
+successful call in between* — any success, or any failure of another kind,
+resets the count to zero.
+
+**Retiring outranks being ready, and that is what makes it worth having.** The
+demotion handles the easy case, where a working key is sitting there unused. The
+case it gets wrong is the one that happens: the working key is resting twenty
+seconds off a throttle, the refused key's rest has lapsed, so the refused key is
+the only thing "ready" — and the call goes to a credential we have already been
+told is dead.
+
+**The escape hatch is the whole safety argument.** The rule applies only while
+some key is *not* retired. If every key in a pool has been refused, every key is
+offered again and the provider's own error comes back, exactly as it would with
+no plugin installed. Retiring can never take a pool to zero.
+
+### The pool now tells the truth about what it holds
+
+`_get_identity_state` only ever added. Nothing anywhere removed from the health
+pool — the only `pop` in the file is the storm collapser. So a key edited out of
+your `.env` kept its `sick_until`, kept its escalation ladder, and went on being
+counted in every "N of M keys resting" you were shown. It was invisible only
+because nothing put that count on a screen, which this release does.
+
+A row nothing has offered for five minutes is now dropped. Five minutes, not
+instantly: two callers can hold different key lists for one identity, and
+dropping on first absence erases a cooldown the other one earned. An empty
+candidate list mirrors **nothing** — a loader that failed once is not evidence
+that every key was deleted.
+
+### `/kame` and `/kame doctor`
+
+The tool that reads a real run and says whether it looks right used to be a
+script in this repository — the one place a diagnostic is guaranteed not to be
+when it is wanted: a fresh install, another machine, an assistant that has never
+seen this code. Agent Zero v2.11 discovers plugin-contributed slash commands, so
+it is a command now, answering from inside the process it describes.
+
+It reports which build is running, what each pool holds and what is ready, the
+whole kind-to-rest table beside how often each kind actually happened, and a
+list of the things a person has to act on.
+
+The rest table in it is **written by hand on purpose**. Derived from the code it
+would agree with the code by construction and prove nothing; written down it is
+a second statement of intent, and a test holds the two together.
+
+### Read, or guessed
+
+Counting failures answers *is anything going wrong*. It cannot answer the
+question that matters after an upstream change: **is KAME still reading these,
+or is it guessing?** A provider that renames a field raises nothing — it quietly
+moves every refusal into the generic bucket and the plugin goes on rotating with
+a number it invented.
+
+Every failure is now filed under where its deadline came from: the provider's
+own number, KAME's own rule, or nothing recognised at all. `/kame doctor` shows
+the split per pool and says so out loud when the unrecognised share passes a
+quarter.
+
+### The evidence that was already on the exception
+
+Everything before this read `str(exc)` and the response headers. That is most of
+the evidence and not all of it, and the part it missed is the part providers are
+moving towards: a parsed error object filed on the exception, whose body the
+adapter has already consumed. When that happens the sentence is for humans and
+every machine-readable field — the quota id, the reason, the RetryInfo — is one
+attribute away, unread.
+
+`details`, `body`, `code`, `reason`, `status` and the response body are now read
+alongside the sentence, and the HTTP status is recovered from a wrapper's
+`__cause__` chain when the wrapper does not carry it. Bounded to 4 KB and
+wrapped whole: a provider returning a megabyte of HTML must not turn every
+substring check into a scan of it, and an SDK whose `.response` raises once the
+body is spent must not crash the code whose entire job is keeping the run alive.
+That last one was a real bug, found by a test in this release rather than by a
+provider.
+
+Only **named** fields are read. A classifier that reads whatever it finds will
+eventually match a marker inside something that is not an error description.
+
+### The dictionary grew, and lost a word
+
+New quota vocabulary, each a spent counter that used to fall into the generic
+20-second bucket with no escalation and no daily/per-minute distinction — a
+whole provider's throttling read as an unrecognised error:
+
+| Added | Who needs it |
+|---|---|
+| `throttl` (bare stem) | Alibaba's entire 429 family — it arrives in the error **code**, never as "rate limit" |
+| `usage limit reached`, `limit exhausted` | Z.AI 1308 / 1310 |
+| `concurrent limit`, `concurrency limit` | Kimi, MiniMax — a concurrency ceiling is a per-credential counter like any other |
+| `tokens per day/hour/week/month` | a counter named by its unit and window and by nothing else |
+
+New auth vocabulary for the two providers that say it with the words the other
+way round — Anthropic's *"API key is invalid."* and DeepSeek's *"Your api key:
+****0000 is invalid"*. Every existing pattern read *invalid key*; neither of
+those says that, so a genuinely dead key on either was rotated forever. The new
+pattern is bounded to one clause, so a sentence that merely mentions a key
+somewhere and *invalid* somewhere else does not qualify.
+
+New denial vocabulary: `model not authorized`, `model not available`, and Z.AI
+1311's *"does not yet include access to"*.
+
+And three exclusions are now **written down** rather than merely absent, because
+an omission nobody records gets "fixed" by the next reader: `model not found`
+(about the model NAME, not the credential — with several keys that verdict walks
+the whole pool over a typo), and the exception classes `AuthenticationError` and
+`PermissionDeniedError` (the classes of *every* 401 and *every* 403, which would
+recreate the `"unauthorized"` defect by a different road).
+
+A transport failure — no status, no body, ever — now rests **3 seconds** instead
+of the 20 of the unrecognised, read off the exception's class name. Class names
+that state a provider's *verdict* are deliberately not mapped.
+
+### `key_log_style: full` was removed
+
+It wrote the entire secret into the log. Agent Zero v2.11 masks credentials in
+its own error output, so KAME's switch had become the only thing in the stack
+that deliberately un-redacted one — and a log ends up in bug reports and
+screenshots taken by people who are not thinking about what is in it.
+
+A config that still says `full` is not an error and does not fail: it is read as
+`prefix8`. A refused key is still shown with a head and a tail so you can find it
+in your provider console, and `kame_log_full_errors` still prints the provider's
+untruncated message beside KAME's classification — which is the setting people
+reached for `full` to get.
+
+### A build fingerprint, not just a version
+
+A version string survives a copy that dropped half the package; a fingerprint
+computed from the files cannot describe files that are not there. The Hermes
+port spent nine days deploying fixes into a directory its host never read —
+every version check agreed, and none of it was running. Agent Zero has never had
+that failure and nothing about it makes it impossible, so this ships before it
+is needed rather than after. It is on the banner, in `/kame`, and in the panel.
+
+### Verified against Agent Zero v2.11
+
+`tools/a0_upgrade_check.py` gained a fourth stage. A fingerprint says a symbol
+changed; it cannot say that an assumption stopped being true, because most of
+those assumptions are not symbols — they are sentences in comments, and a
+comment cannot fail. **Twelve host facts** are now asserted against the
+installed checkout, so a door that opens fails by name instead of rotting.
+
+Against v2.11: 10/12 fingerprints unchanged, both changes `degraded` and read,
+12/12 host facts hold, live harness green. The two changes were `Agent.monologue`
+(absorbed by the three-door activation from 1.0.9) and A0's unusable-response
+guard, which grew a third trigger — so KAME's floor now lifts an empty-response
+abort too. Nobody decided that; it arrived with the upstream edit. It is kept,
+deliberately, and the reasoning is in
+`decisions/0003-empty-response-abort-and-the-floor.md`.
+
+### Not done, and why
+
+* **The official `@extensible` rotation door.** v2.11's `end` hook may clear
+  `data["exception"]` and set `data["result"]`, which is a complete rotation
+  loop with no monkey-patch — and `models.py` carries the upstream comment
+  saying `get_api_key` was made extensible for exactly this. It is not in this
+  release on purpose: `apply_kame_patch` is verified across seven Agent Zero
+  releases, and replacing a proven mechanism in the same release that changes
+  the refusal taxonomy would make any regression un-locatable. It lands as
+  *layer 0* of the existing ladder, on a tree where everything above already
+  has a passing test.
+* **A machine-readable error catalogue and a prediction journal.** Both are
+  ported from the Hermes side and both are releases of their own. The catalogue
+  is worth having for the structure — matching on `error.type` / `code` /
+  `status` makes a future collision impossible rather than merely absent — not
+  for a bug Agent Zero has (`PARITY.md` corrects an earlier claim that it did).
+* **Splitting `kame_engine.py`.** 2,490 lines in one file against the Hermes
+  port's 22 framework-free modules, so every port is a hand transcription.
+  Considered and deferred: do this release by hand, measure the pain, then
+  decide.
+
+### Verification
+
+* Ten test files, all green, including a new `tests/test_v1_6_0_1.py` with over
+  a hundred checks across fifteen groups.
+* **Three of them are mutation-proven**: the demotion, the retirement filter and
+  the `denied`-never-retires rule were each removed from the engine and the
+  suite was confirmed to go red. A guard test that passes with its rule deleted
+  is not a guard.
+* `tools/a0_upgrade_check.py` against a real v2.11 checkout: fingerprints, the
+  twelve host facts, and the live harness that applies and reverts KAME's real
+  patches on Agent Zero's real classes.
+
+</details>
+
+---
+
+## v1.2.0
 
 **The wait is said where the user is looking, and the settings screen admits
 that its settings are not equally interesting.**

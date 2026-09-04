@@ -540,8 +540,11 @@ check("E3 a None callback stays None (A0 must still see a NON-streaming call)",
 # number. Pinning the current version inside an old release's suite means every
 # release has to edit tests that are not about the release — and a test edited
 # on every release stops being read.
+# v1.6.0.1 widened the shape, not the intent. The Hermes port numbers releases
+# with four digits and this one now matches it so the two products read as one
+# release; three digits stay legal because every version before this had them.
 check("F1 KAME_VERSION is a version string, at or past the 1.0.9 floor",
-      re.fullmatch(r"\d+\.\d+\.\d+", K.KAME_VERSION) is not None
+      re.fullmatch(r"\d+\.\d+\.\d+(\.\d+)?", K.KAME_VERSION) is not None
       and tuple(int(p) for p in K.KAME_VERSION.split(".")) >= (1, 0, 9),
       K.KAME_VERSION)
 _engine_src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"),

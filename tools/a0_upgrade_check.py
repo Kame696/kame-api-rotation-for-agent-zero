@@ -3,7 +3,7 @@
 Answers ONE question in one command: *did the new Agent Zero break KAME, and
 where exactly?* Run it every time A0 ships a release.
 
-It does three things, in order, and each one is independently useful:
+It does four things, in order, and each one is independently useful:
 
   1. VERSION      - asks GitHub for A0's newest tag and compares it to the
                     version KAME is pinned as verified against (a0_compat.json).
@@ -12,6 +12,12 @@ It does three things, in order, and each one is independently useful:
                     against the recorded baseline. A changed hash names the
                     exact function to re-read - no guessing which of A0's
                     thousands of files matter.
+  2b. HOST FACTS  - (v1.6.0.1) asserts every assumption KAME reasons about that
+                    is NOT a symbol: "the injected api_key wins", "A0 handles
+                    its own empty responses", "the snapshot is strict so the
+                    panel reads its own endpoint". Those used to live in
+                    comments, and a comment cannot fail. Now a door that opens
+                    fails by name instead of rotting.
   3. LIVE TESTS   - runs tests/test_a0_compat.py against the checkout, which
                     applies and reverts KAME's real patches on the real classes.
 
@@ -142,6 +148,167 @@ def fingerprints(a0_path, watch):
     return out, missing
 
 
+# --- stage 2b: host-fact tripwires (v1.6.0.1) --------------------------------
+#
+# A fingerprint says a symbol CHANGED. It cannot say that an assumption KAME
+# reasons about stopped being true, because most of those assumptions are not
+# symbols — they are sentences in comments: "we did not port this because Agent
+# Zero already does it", "the injected api_key wins", "the snapshot is strict so
+# the panel reads its own endpoint".
+#
+# A comment cannot fail. Every one of these used to be a sentence somebody would
+# have to remember to re-check, and the failure mode of forgetting is silent: the
+# door opens, the workaround stays, and nothing anywhere says so.
+#
+# So each is asserted against the installed checkout, and a door that opens now
+# fails BY NAME.
+#
+#   critical — if this stopped being true, KAME does not rotate
+#   degraded — one shield or one screen stops; rotation is untouched
+#   note     — a deliberate non-port became portable. Nothing is broken; there
+#              is something worth doing.
+HOST_FACTS = (
+    {
+        "id": "api_key injection wins over the resolver",
+        "file": "models.py",
+        "needle": 'kwargs.pop("api_key", None) or get_api_key(',
+        "severity": "critical",
+        "why": "THE load-bearing assumption since 1.0.9. KAME chooses a key and "
+               "passes it as api_key=; Agent Zero's own resolver must yield to it. "
+               "If this line changes shape, KAME picks keys that are then ignored "
+               "and every call goes out on whichever key A0 round-robins to.",
+    },
+    {
+        "id": "agent_init is still a named extension point",
+        "file": "agent.py",
+        "needle": '"agent_init"',
+        "severity": "critical",
+        "why": "Activation door 1 of 3. All three doors closing means KAME never "
+               "installs — silently, because there is nothing to raise.",
+    },
+    {
+        "id": "monologue_start is still a named extension point",
+        "file": "agent.py",
+        "needle": '"monologue_start"',
+        "severity": "critical",
+        "why": "Activation door 2 of 3.",
+    },
+    {
+        "id": "the rate limiter still has the shape KAME patches",
+        "file": "helpers/rate_limiter.py",
+        "needle": ["self._lock", "self.values", "self.timeframe",
+                   "async def cleanup", "async def get_total"],
+        "severity": "degraded",
+        "why": "_patch_rate_limiters() swaps an asyncio.Lock for a threading.Lock "
+               "to stop a deadlock. If the shape moved, the patch no-ops and the "
+               "deadlock it fixes comes back.",
+    },
+    {
+        "id": "the unusable-response guard still stores its count where KAME reads it",
+        "file": "extensions/python/_functions/agent/Agent/hist_add_warning/end/"
+                "_90_stop_unusable_response_loop.py",
+        "needle": '"_unusable_response_failures"',
+        "severity": "degraded",
+        "why": "KAME's floor reads A0's own counter out of "
+               "loop_data.params_persistent under this key. A rename makes the "
+               "floor silently stop lifting and A0's own limit applies again.",
+    },
+    {
+        "id": "the notification manager can still push a live toast",
+        "file": "helpers/notification.py",
+        "needle": ["def send_notification", "PROGRESS", "mark_dirty_all"],
+        "severity": "degraded",
+        "why": "v1.6.0.1 narrates a wait through a PROGRESS notification with a "
+               "stable id, which updates in place and is pushed over the "
+               "WebSocket. Without it the wait is only said at ninety seconds, "
+               "in the chat — which is where it was said before, and why nobody "
+               "ever saw it.",
+    },
+    {
+        "id": "the WebUI plugin slot the rotation chip lives in still exists",
+        "file": "helpers/extension.py",
+        "needle": "extensions/webui",
+        "severity": "degraded",
+        "why": "Added in Agent Zero v2.11. It is what puts the rotation on screen "
+               "beside the composer. If it goes, the chip silently never renders.",
+    },
+    {
+        "id": "plugin-contributed slash commands are still discovered",
+        "file": "plugins/_commands/helpers/commands.py",
+        "needle": "_discover_plugin_commands",
+        "severity": "degraded",
+        "why": "How /kame and /kame doctor ship. Without it the diagnostic is "
+               "back to being a script in a repository, which is the one place "
+               "it is guaranteed not to be when it is wanted.",
+    },
+    {
+        "id": "plugin API handlers are still routed at plugins/<name>/<handler>",
+        "file": "helpers/api.py",
+        "needle": 'path.startswith("plugins/")',
+        "severity": "degraded",
+        "why": "The route the rotation chip reads. A change here leaves the chip "
+               "rendering its last good view for ever.",
+    },
+    {
+        "id": "the state snapshot is still schema-strict",
+        "file": "helpers/state_snapshot.py",
+        "needle": "unexpected=",
+        "severity": "note",
+        "why": "A plugin CANNOT add a field to Agent Zero's WebSocket snapshot, "
+               "which is why the chip reads its own endpoint on the snapshot's "
+               "cadence instead of riding it. If this strictness ever goes, "
+               "riding the snapshot becomes possible and is strictly cheaper.",
+    },
+    {
+        "id": "Agent Zero still handles its own empty responses",
+        "file": "extensions/python/message_loop_result/_20_empty_response.py",
+        "needle": "fw.msg_empty_response.md",
+        "severity": "note",
+        "why": "KAME rotates on an empty answer INSIDE the call, so A0's own "
+               "guard only ever sees the pool's verdict. Recorded so the "
+               "ordering is a checked fact rather than a remembered one. See "
+               "decisions/0003.",
+    },
+    {
+        "id": "the _error_retry plugin still sits ABOVE KAME",
+        "file": "plugins/_error_retry/extensions/python/_functions/agent/Agent/"
+                "handle_exception/end/_80_retry_critical_exception.py",
+        "needle": "class ",
+        "severity": "note",
+        "why": "It retries a whole monologue after an exception escapes. With "
+               "KAME installed it should almost never fire, and when it does it "
+               "means the carousel gave up. Not a conflict — but do not debug "
+               "one while looking at the other.",
+    },
+)
+
+
+def check_host_facts(a0_path):
+    """Assert every 'we did not port this because A0 does X' against the host.
+
+    Returns (ok, broken) where broken carries the fact dicts that no longer
+    hold, each with the severity that says how much it costs.
+    """
+    ok, broken = [], []
+    for fact in HOST_FACTS:
+        path = os.path.join(a0_path, *fact["file"].split("/"))
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            broken.append(dict(fact, detail="file not found"))
+            continue
+        needles = fact["needle"]
+        if isinstance(needles, str):
+            needles = [needles]
+        missing = [n for n in needles if n not in text]
+        if missing:
+            broken.append(dict(fact, detail=f"not found: {', '.join(missing)}"))
+        else:
+            ok.append(fact["id"])
+    return ok, broken
+
+
 # --- stage 3: the live harness ----------------------------------------------
 
 def run_live_tests(a0_path):
@@ -246,6 +413,22 @@ def main():
         print(f"{WARN} {len(_serious)} changed symbol(s) need a human read: "
               f"{', '.join(sorted(_serious))}")
 
+    # --- stage 2b: the assumptions that are sentences, not symbols ----------
+    print(f"\nChecking {len(HOST_FACTS)} host facts KAME reasons about")
+    facts_ok, facts_broken = check_host_facts(args.a0_path)
+    facts_failed = False
+    for fact in facts_broken:
+        marker = BAD if fact["severity"] == "critical" else WARN
+        print(f"{marker} [{fact['severity']}] {fact['id']}")
+        print(f"         {fact['file']} — {fact['detail']}")
+        print(f"         why KAME cares: {fact['why']}")
+        if fact["severity"] == "critical":
+            facts_failed = True
+    if not facts_broken:
+        print(f"{OK}  all {len(facts_ok)} still hold")
+    else:
+        print(f"{OK}  {len(facts_ok)}/{len(HOST_FACTS)} still hold")
+
     tests_failed = False
     if not args.skip_tests:
         print("\nRunning tests/test_a0_compat.py against the checkout")
@@ -262,13 +445,13 @@ def main():
             else:
                 print(f"{OK} live harness green")
 
-    dirty = bool(gone or changed or tests_failed)
+    dirty = bool(gone or changed or tests_failed or facts_failed)
 
     if args.update_baseline:
         # Changed hashes are EXPECTED here - re-pinning is what you do after
         # auditing them. Only a symbol KAME can no longer find, or a red live
         # harness, means the new A0 is genuinely unsupported.
-        if gone or tests_failed:
+        if gone or tests_failed or facts_failed:
             print(f"\n{BAD} refusing to re-pin the baseline while something is "
                   f"broken. Fix it, get a clean run, then re-pin.")
             return 1
