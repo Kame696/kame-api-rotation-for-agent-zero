@@ -11,6 +11,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.6.0.4** | A thinking token is not an answer | The flag meaning *"the model has streamed something"* gates two things here, and both are about the **answer**: whether an empty result may be retried on another key, and whether the log may say a drop happened *after partial output*. `reasoning_callback` was setting it. A model that thinks and then returns nothing is exactly the empty answer this carousel exists to rotate around — Gemini spending its whole budget on thoughts is the textbook case — so the retry was switched off on precisely the models that need it, and the warning told you your answer had been cut when nothing had been shown. Thoughts are now recorded apart from output. Found in the Hermes port, where the same confusion had a worse consequence: it stopped the rotation outright and ended two turns with thirteen healthy keys idle in the pool |
 | **1.6.0.3** | The provider names the window, and the provider names the wait | Google reports its per-minute and per-day free-tier quotas under the **identical** metric name and separates them only in `quotaId` — a field this engine already extracted, for a log tag, while the actual daily-or-not decision was made by searching the whole message for the word "day". A host that appends *"a few hundred requests/day"* to the sentence was enough to turn a 40-second throttle into an hour on the bench. The quota id now decides, in both directions. Alongside it, two numbers that were being invented over numbers the provider had stated: the per-minute branch raised a floor of 20s, 40s, 80s … from the second refusal, over whatever Google had asked for — repeating a throttle is not evidence the provider lied, it is what a rolling window does — and `_extract_retry_delay` read only `str(exc)`, so on a Gemini 429 it returned its 20-second default while `"retryDelay": "41.3s"` sat in the response body, three lines from the `quotaId` this same file reads from exactly there. Every rest is now a number somebody measured: what the provider said for this refusal, what it said for an earlier one on the same model, or a flat re-probe — never a curve |
 | **1.6.0.1** | A refusal is not a clock, and the rotation is on the screen | A live indicator beside the composer says how many keys can answer right now; a bare 401 rests twenty seconds instead of an hour and leaves rotation after three; a key the provider names dead leaves at once; and a 403 refusing **one model** never costs you the key |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
@@ -52,7 +53,57 @@ graph LR
 
 ---
 
-## v1.6.0.3 — current
+## v1.6.0.4 — current
+
+**A thinking token is not an answer.**
+
+`ctx["progress"]["any"]` means *the model streamed something*, and the carousel
+spends it on two questions that are both about the **answer**:
+
+* `_empty_budget > 0 and not ctx["progress"]["any"]` — may an empty result be
+  retried on another key, or did a healthy key deliberately answer with nothing?
+* the `mid-stream drop after partial output` warning — was any of the answer
+  already on screen when the stream died?
+
+`reasoning_callback` was setting that flag. On a thinking model it fires every
+turn, before the answer exists, so both questions were answered wrongly on
+every turn:
+
+| Case | Before | After |
+|---|---|---|
+| model thinks, then returns nothing | returned to A0 as a deliberate blank answer | retried on the next key |
+| model thinks, then the stream drops | "mid-stream drop after partial output" | rotates quietly, nothing was output |
+| model streams text, then drops | correct | unchanged |
+
+The first row is the one that matters. A model that reasons and then returns
+nothing *is* the empty answer this loop exists to rotate around — Gemini
+consuming its whole budget on thoughts is the textbook case — so the rotation
+was switched off on exactly the models that need it.
+
+Thoughts now record `ctx["progress"]["reasoning"]`, which nothing gates on. It
+is kept because a reader of the ctx should still be able to tell a silent model
+from a thinking one, and because deleting the signal entirely would have made
+the next person re-derive why it was ever there.
+
+### Where it came from
+
+The Hermes port, measured on the owner's machine on 2026-09-04. There the same
+confusion had a worse consequence: the flag also decides whether a drop may be
+retried at all (retrying after visible text would print the answer twice), so
+two turns out of a twelve-minute run ended with a 503 while thirteen healthy
+keys sat idle. Hermes' own log for both says *"Streaming failed **before**
+delivery"*. Agent Zero never had that consequence — its carousel rotates every
+non-terminal failure regardless of the flag — which is why this is the smaller
+half of one release. See PARITY.md.
+
+### Verification
+
+- 13 test scripts green, including `tests/test_v1_6_0_4.py` (17 checks).
+- Mutation: the reasoning shim restored to `progress["any"] = True`, red.
+
+---
+
+## v1.6.0.3
 
 **The provider names the window, and the provider names the wait.**
 

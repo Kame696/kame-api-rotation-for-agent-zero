@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.6.0.3"
+KAME_VERSION = "1.6.0.4"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -2928,7 +2928,12 @@ async def _kame_carousel(self, ctx):
         # the callback shims the moment A0 streams anything to the UI, which is how
         # KAME still knows a failure happened MID-stream (it no longer owns the
         # stream, so it cannot see chunks directly).
+        #
+        # v1.6.0.4: "anything" means the ANSWER. Reasoning is reset alongside it
+        # and recorded apart, because a model that thinks and then says nothing is
+        # the empty answer this loop is here to rotate around.
         ctx["progress"]["any"] = False
+        ctx["progress"]["reasoning"] = False
 
         try:
             result = await ctx["attempt"](self, key, ctx)
@@ -3028,6 +3033,10 @@ async def _kame_carousel(self, ctx):
             if _is_terminal_error(e):
                 _kame_wait_notice_finish(st, "stopped")
                 raise e
+            # v1.6.0.4: "partial output" has to mean output. Until now this line
+            # was printed for any turn where the model had merely thought, which
+            # on a reasoning model is every turn, and it told the reader their
+            # answer had been cut when nothing had been shown at all.
             if ctx["progress"]["any"] and _lvl_normal():
                 PrintStyle.warning(
                     f"[KAME] {call_type}|{model_short} {_key_display(key)} "
@@ -3099,6 +3108,18 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     callbacks instead. The shims are transparent: the RETURN VALUE of
     ``response_callback`` is passed straight back, which is what carries A0's
     early-stop signal ("a complete tool request has streamed, stop now").
+
+    v1.6.0.4 stopped counting REASONING as output. ``progress["any"]`` gates
+    two things and both are about the answer: whether an empty result may be
+    retried on another key, and whether the log may say "after partial output".
+    A thinking model reasons on every turn and then, sometimes, returns nothing
+    at all -- Gemini spending its whole budget on thoughts is exactly the
+    empty-answer case this plugin exists to rotate around, and reasoning was
+    switching that rotation off on precisely the models that need it. Thoughts
+    now record ``progress["reasoning"]``, which nothing gates on and which is
+    there so a reader of the ctx can still tell a silent model from a thinking
+    one. The Hermes port carried the same confusion with a worse consequence
+    and fixed it in the same release.
     """
     progress = ctx["progress"]
 
@@ -3113,7 +3134,7 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
         wrapped_reasoning = None
     else:
         async def wrapped_reasoning(delta, full):
-            progress["any"] = True
+            progress["reasoning"] = True
             return await reasoning_callback(delta, full)
 
     if tokens_callback is None:
@@ -3204,7 +3225,7 @@ def _kame_make_entry_wrapper(entry_name, original):
             "kwargs": forwarded,
             "rate_limiter_callback": rate_limiter_callback,
             "retry_knobs": _kame_retry_knobs(original),
-            "progress": {"any": False},
+            "progress": {"any": False, "reasoning": False},
         }
         (ctx["response_callback"],
          ctx["reasoning_callback"],

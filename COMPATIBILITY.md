@@ -1,6 +1,6 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.6.0.3 — verified against Agent Zero v2.11 (2026-09-04).**
+**KAME 1.6.0.4 — verified against Agent Zero v2.11 (2026-09-04).**
 Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10, v2.11**.
 Supported range: Agent Zero **v1.14+** and the **whole V2 line**.
 
@@ -108,7 +108,7 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.8 | 1.0.9 | **live-verified** | 12/12 fingerprints unchanged. See §2.1. |
 | V2.9 | 1.2.0 | supported | not separately audited; v2.10 was verified over it |
 | V2.10 | 1.2.0 | **live-verified** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
-| **V2.11** | **1.6.0.3** | **verified — current baseline** | 10/12 unchanged; the 2 changed are both `degraded` and were read (§2.3). Live harness green. |
+| **V2.11** | **1.6.0.4** | **verified — current baseline** | 10/12 unchanged; the 2 changed are both `degraded` and were read (§2.3). Live harness green. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real
