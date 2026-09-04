@@ -4,7 +4,7 @@
 
 ### KAME API Rotation Engine — the learning carousel that keeps your AI agent alive
 
-[![Version](https://img.shields.io/badge/version-1.6.0.1-blue.svg)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0.4-blue.svg)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_and_V2-purple.svg)](https://github.com/agent0ai/agent-zero)
 [![Verified against](https://img.shields.io/badge/verified_against-A0_v1.14_%E2%86%92_v2.11-purple.svg)](COMPATIBILITY.md)
@@ -129,7 +129,7 @@ Look for this banner on startup:
 
 ```
 =======================================================
-  🐢⚡ KAME v1.6.0.1 — ACTIVE
+  🐢⚡ KAME v1.6.0.4 — ACTIVE
   ✓ Identity-Aware Health
   ✓ Eternal Carousel Rotation
   ✓ RPM-Aware Predictive Selection
@@ -487,6 +487,8 @@ opens with a short **In short** list and folds the detail underneath.
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.6.0.4** | A thinking token is not an answer | The flag meaning *"the model streamed something"* decides whether an empty answer may be retried on another key — and `reasoning_callback` was setting it. A model that thinks and then returns nothing **is** the empty answer this carousel exists to rotate around, so the rotation was switched off on exactly the models that need it. Thoughts are now recorded apart from output. |
+| **v1.6.0.3** | The provider names the window, and the provider names the wait | Google reports its per-minute and per-day free-tier quotas under the **identical** metric name and separates them only in `quotaId` — which this engine extracted for a log tag while the actual decision was made by searching the whole message for the word "day". A host footer reading *"requests/day"* was enough to turn a 40-second throttle into an hour on the bench. Alongside it, two numbers invented over numbers the provider had stated: a floor of 20s, 40s, 80s… raised over whatever Google asked for, and a retry delay read only from `str(exc)` while `"retryDelay": "41.3s"` sat in the response body. Every rest is now a number somebody measured. |
 | **v1.6.0.1** | A refusal is not a clock, and the rotation is on the screen | A ring beside the composer says how many keys can answer **right now**; a bare 401 rests 20s instead of an hour and is offered last; a key the provider names dead leaves rotation; a 403 refusing **one model** never costs you the key. `/kame doctor`, a build fingerprint, and `key_log_style: full` removed. Verified on A0 **v2.11**. |
 | **v1.2.0** | The wait, said out loud | An all-keys-cooling wait now appears **in the chat**, not only on the console — and the settings screen was rebuilt so an on-by-default toggle stops rendering as off and saving that lie back. Verified on A0 **v2.10**. |
 | **v1.0.9** | KAME stops re-implementing Agent Zero | KAME only **chooses the key**; A0 owns the request, the stream, the parsing and the result. Five upstream symbols and `litellm` left the dependency surface. Live-verified on six A0 tags, one code path. |
