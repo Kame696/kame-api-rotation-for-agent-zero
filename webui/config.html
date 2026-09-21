@@ -149,7 +149,7 @@
 
       <div class="section-title">Tuning</div>
       <div class="section-description">
-        Two numbers, already set to what this plugin was built and tested
+        Numbers already set to what this plugin was built and tested
         against. Change them only if you know your provider disagrees.
       </div>
 
@@ -170,6 +170,99 @@
             type="number" min="1" max="86400" step="1"
             x-model.number="config.daily_quota_cooldown_seconds"
             x-init="if (config.daily_quota_cooldown_seconds === undefined || config.daily_quota_cooldown_seconds === null) config.daily_quota_cooldown_seconds = 3600"
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Ceiling on any hold (seconds)</div>
+          <div class="field-description">
+            No key sits out longer than this, whatever caused the hold — the
+            provider's own stated wait, the daily cooldown above, or KAME's own
+            escalation. Past it the key is simply tried again; if it is still
+            refused it rests again, so a long outage costs one refused request
+            per interval instead of a healthy key sitting idle for however long a
+            provider claimed. Default <code>3600</code> (1h); range 60–86400.
+            Environment: <code>KAME_MAX_HOLD</code>.
+          </div>
+        </div>
+        <div class="field-control">
+          <input
+            type="number" min="60" max="86400" step="1"
+            x-model.number="config.max_hold_seconds"
+            x-init="if (config.max_hold_seconds === undefined || config.max_hold_seconds === null) config.max_hold_seconds = 3600"
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Rest after a rate limit with no number (seconds)</div>
+          <div class="field-description">
+            How long a key rests after a rate limit that names no wait at all —
+            no retry hint, no window. Measured on real traffic: a refused key
+            retried within 30 seconds answered <b>0 of 73</b> times. Set it to
+            <code>0</code> to offer the key again at once. Not used for Gemini's
+            bare <code>RESOURCE_EXHAUSTED</code> while the ladder below is on.
+            Default <code>30</code>; range 0–300. Environment:
+            <code>KAME_UNSIZED_REST</code>.
+          </div>
+        </div>
+        <div class="field-control">
+          <input
+            type="number" min="0" max="300" step="1"
+            x-model.number="config.unsized_throttle_rest_seconds"
+            x-init="if (config.unsized_throttle_rest_seconds === undefined || config.unsized_throttle_rest_seconds === null) config.unsized_throttle_rest_seconds = 30"
+          />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Short ladder for Gemini's bare RESOURCE_EXHAUSTED</div>
+          <div class="field-description">
+            Applies to <b>one error only</b>: a <code>429</code> whose status is
+            <code>RESOURCE_EXHAUSTED</code> and that carries no
+            <code>retryDelay</code> and no <code>quotaId</code>. That key rests
+            <b>1s, then 2, 4, 8, 16, 32, 64s</b> on each repeat, back to 1s the
+            moment it answers, instead of the flat rest above. A number the
+            provider states is always obeyed and never multiplied. In real use it
+            made fewer calls per minute than the flat rest (24 against 29) without
+            answering less. Off restores the flat rest exactly. Environment:
+            <code>KAME_UNSIZED_BACKOFF</code>.
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.unsized_throttle_backoff"
+              x-init="if (config.unsized_throttle_backoff === undefined || config.unsized_throttle_backoff === null) config.unsized_throttle_backoff = true"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Where the ladder stops (seconds)</div>
+          <div class="field-description">
+            The longest rest the ladder above will reach. The default,
+            <code>64</code>, runs 1, 2, 4, 8, 16, 32, 64 and then holds at 64: the
+            fastest measured recovery for this error is 23–34 seconds, so going
+            far past 64 only keeps a key out longer than it needed. Set
+            <code>3600</code> for the uncapped doubling. The ceiling on any hold
+            still bounds it. Range 1–3600. Environment:
+            <code>KAME_UNSIZED_BACKOFF_MAX</code>.
+          </div>
+        </div>
+        <div class="field-control">
+          <input
+            type="number" min="1" max="3600" step="1"
+            x-model.number="config.unsized_backoff_max_seconds"
+            x-init="if (config.unsized_backoff_max_seconds === undefined || config.unsized_backoff_max_seconds === null) config.unsized_backoff_max_seconds = 64"
           />
         </div>
       </div>

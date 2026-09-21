@@ -116,9 +116,15 @@ IDENT = "gemini:gemini-3.5-flash"
 # ==========================================================================
 K._KAME_KEY_HEALTH = {}
 K._get_identity_state(IDENT, ["K1"])
+# 1.7.0.4: the number being checked moved from the full cooldown to the
+# re-probe, because a daily label on a pool that is still answering no longer
+# buys the hour. What this test is FOR is unchanged and is the reason it stays:
+# whatever the rest is, it must be exact — the same value every time, with no
+# jitter or spread added on top.
 _daily = [K._mark_key_health(IDENT, "K1", False, K._KAME_DAILY_COOLDOWN_S, "daily") for _ in range(10)]
-check("daily cooldown is exactly the configured interval (no spread)",
-      all(s == K._KAME_DAILY_COOLDOWN_S for s in _daily))
+check("the daily rest is exactly one value, ten times over (no spread)",
+      len(set(_daily)) == 1)
+check("and that value is the re-probe", _daily[0] == K._KAME_DAILY_REPROBE_S)
 check("no _KAME_DAILY_REPROBE_SPREAD_S constant remains",
       not hasattr(K, "_KAME_DAILY_REPROBE_SPREAD_S"))
 

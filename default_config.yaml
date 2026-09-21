@@ -19,6 +19,29 @@ kame_log_level: normal
 # Per-minute limits are unaffected. Default 3600 (1h). Range 1–86400 (24h).
 daily_quota_cooldown_seconds: 3600
 
+# v1.8.0.0. No key sits out longer than this, whatever caused the hold: the
+# provider's own stated wait, the daily cooldown above, or KAME's escalation.
+# Past it the key is simply tried again. Default 3600 (1h). Range 60-86400.
+# Environment override: KAME_MAX_HOLD.
+max_hold_seconds: 3600
+
+# v1.8.0.2. How long a key rests after a rate limit that names no wait at all.
+# Measured: retried within 30s, a refused key answered 0 of 73 times.
+# Default 30. Range 0-300 (0 = offer the key again at once).
+# Environment override: KAME_UNSIZED_REST.
+unsized_throttle_rest_seconds: 30
+
+# v1.8.1.0. Gemini's bare 429 RESOURCE_EXHAUSTED (no retryDelay, no quotaId):
+# rest the refused key 1s, then 2, 4, 8, 16, 32, 64s on each repeat, back to 1s
+# the moment it answers, instead of the flat rest above. A number the provider
+# states is always obeyed. Only that exact error. Default on.
+# Environment override: KAME_UNSIZED_BACKOFF (0 = off).
+unsized_throttle_backoff: true
+
+# Where that ladder stops growing. Default 64. Range 1-3600.
+# Environment override: KAME_UNSIZED_BACKOFF_MAX.
+unsized_backoff_max_seconds: 64
+
 # How API keys appear in logs:
 #   fingerprint — anonymized stable id like "k3f9a1" (default; never leaks)
 #   prefix8     — first 8 chars of the key (mild partial leak)

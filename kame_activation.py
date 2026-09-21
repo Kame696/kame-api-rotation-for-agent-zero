@@ -89,8 +89,28 @@ def activate(agent=None):
             # (on by default — the console said it, the person did not see it).
             if set_wait_notice is not None:
                 set_wait_notice(cfg.get("kame_wait_notice", True))
+            # v1.8.1.0: the Hermes 1.8.x rules. Looked up by name for the same
+            # half-copied-directory reason as set_wait_notice above.
+            for _setting, _setter, _default in (
+                ("max_hold_seconds", "set_max_hold", 3600),
+                ("unsized_throttle_rest_seconds", "set_unsized_throttle_rest", 30),
+                ("unsized_throttle_backoff", "set_unsized_backoff", True),
+                ("unsized_backoff_max_seconds", "set_unsized_backoff_max", 64),
+            ):
+                _fn = getattr(_kame_engine, _setter, None)
+                if _fn is not None:
+                    _fn(cfg.get(_setting, _default))
         except Exception:
             # Older A0 versions may lack get_plugin_config; fall back to defaults.
+            pass
+
+        # v1.8.1.0: the environment wins over the settings page, as on Hermes -
+        # one .env line means the same thing on both hosts.
+        try:
+            _env = getattr(_kame_engine, "_kame_apply_env_overrides", None)
+            if _env is not None:
+                _env()
+        except Exception:
             pass
 
         # v1.0.2: stash the live agent so the engine's all-keys-cooling sleep can

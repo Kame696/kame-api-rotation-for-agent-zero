@@ -8,7 +8,7 @@ health-tracking functions in isolation.
 Run:  python tests/test_v1_0_2_fixes.py
 Exit code 0 = all pass, 1 = at least one failure.
 """
-import sys, types, os, asyncio
+import sys, types, os, asyncio, time
 
 
 # --------------------------------------------------------------------------
@@ -89,8 +89,8 @@ GEMINI_503_BODY = (
 )
 for code in (500, 502, 503, 504, 529):
     d, kind, sc = K._classify_error(FakeErr(GEMINI_503_BODY, status_code=code))
-    check(f"{code} + quota/daily text -> 'server' (5s), not 'daily'",
-          kind == "server" and d == 5 and sc == code)
+    check(f"{code} + quota/daily text -> 'server' base, not 'daily'",
+          kind == "server" and d == K._KAME_SERVER_BASE_S and sc == code)
 
 # 503 with no status_code but unambiguous server text -> still server.
 d, kind, sc = K._classify_error(FakeErr("Service Unavailable - please try again later"))
@@ -178,19 +178,44 @@ flat = [K._mark_key_health(IDENT3, "KEYE", False, 20, "per_minute", sized_by="ka
         for _ in range(12)]
 check("an unsized throttle rests flat and never climbs", flat == [20] * 12)
 
-# Daily escalation still allowed up to the 1h ceiling (delay passed already floored).
+# 1.7.0.4: a daily label on a pool that is still answering costs a re-probe,
+# not the hour. This asserted `aD == _KAME_DAILY_COOLDOWN_S` and was right for
+# every release before this one: `_classify_error` floors a daily refusal at
+# the full cooldown, so the number arriving here was already an hour and the
+# branch just kept it. What changed is that the hour is now bought by the
+# POOL going quiet rather than by the label being present — measured on the
+# owner's own keys, a key wearing that label answered again 6 to 36 minutes
+# later, 21 times out of 21.
 K._get_identity_state(IDENT, ["KEYB"])
 aD = K._mark_key_health(IDENT, "KEYB", False, K._KAME_DAILY_COOLDOWN_S, "daily")
-check("daily strike stays at the 1h daily cooldown", aD == K._KAME_DAILY_COOLDOWN_S)
+check("a first daily label costs a re-probe, not the hour",
+      aD == K._KAME_DAILY_REPROBE_S)
+check("...and that is well short of the hour", aD < K._KAME_DAILY_COOLDOWN_S)
+# The hour is still there, and this is what buys it: nobody answering for the
+# whole silence window.
+K._KAME_NO_ANSWER_SINCE[IDENT] = time.time() - K._KAME_POOL_SILENCE_BEFORE_THE_DAY_S - 1
+aQ = K._mark_key_health(IDENT, "KEYB", False, K._KAME_DAILY_COOLDOWN_S, "daily")
+check("a silent pool does buy the hour", aQ == K._KAME_DAILY_COOLDOWN_S)
+K._KAME_NO_ANSWER_SINCE.pop(IDENT, None)
+# And money is not a window: insufficient_quota keeps the hour outright.
+aI = K._mark_key_health(IDENT, "KEYB", False, K._KAME_DAILY_COOLDOWN_S, "insufficient_quota")
+check("insufficient_quota still keeps the hour on sight",
+      aI == K._KAME_DAILY_COOLDOWN_S)
 
-# Server escalation: first ~5s, capped at 90s, reset on success.
+# Server rest: ~5s, and it stays ~5s. This block used to assert the v1.0.1
+# escalation ("server escalation capped at 90s", sN == 90.0); the ladder was
+# removed on 07/09/2026 because a 503 is not metered and because it was
+# measured climbing while the rest of the pool answered normally. The cap
+# constant is kept — a 5xx that states its own long wait must still not bench
+# a key the way a quota can — but nothing invented reaches it any more.
 K._get_identity_state(IDENT, ["KEYC"])
-s1 = K._mark_key_health(IDENT, "KEYC", False, 5, "server")
-check("server 1st strike ~5s", s1 == 5)
+s1 = K._mark_key_health(IDENT, "KEYC", False, 0, "server")
+check("server 1st strike is the base", s1 == K._KAME_SERVER_BASE_S)
 sN = s1
 for _ in range(20):
-    sN = K._mark_key_health(IDENT, "KEYC", False, 5, "server")
-check("server escalation capped at 90s", sN == K._KAME_SERVER_BACKOFF_CAP_S == 90.0)
+    sN = K._mark_key_health(IDENT, "KEYC", False, 0, "server")
+check("server 21st strike is still the base", sN == K._KAME_SERVER_BASE_S == 1.0)
+check("the cap constant survives for a stated wait", K._KAME_SERVER_BACKOFF_CAP_S == 90.0)
 
 
 # ==========================================================================

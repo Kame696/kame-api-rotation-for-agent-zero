@@ -215,7 +215,8 @@ _TABLE = (
     ("denied", K._KAME_REFUSAL_REST_S),
     ("auth", K._KAME_REFUSAL_REST_S),
     ("revoked", K._KAME_REFUSAL_REST_S),
-    ("daily", K._KAME_DAILY_COOLDOWN_S),
+    # 1.7.0.4: a daily label buys a re-probe; the hour needs a silent pool.
+    ("daily", K._KAME_DAILY_REPROBE_S),
     ("insufficient_quota", K._KAME_DAILY_COOLDOWN_S),
 )
 _pool = _fresh("t:table", ["A", "B"])

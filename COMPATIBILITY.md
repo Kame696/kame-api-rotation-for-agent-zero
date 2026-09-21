@@ -1,7 +1,9 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.6.0.4 — verified against Agent Zero v2.11 (2026-09-04).**
-Live-verified end-to-end on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10, v2.11**.
+**KAME 1.8.1.0 — verified against Agent Zero v2.12 (2026-09-21).**
+Live harness (KAME's real patches on a real Agent Zero checkout) green on **v2.11 and v2.12**, and
+on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10** in earlier releases. Two **real sessions** on v2.12 —
+real LiteLLM, real Gemini keys, `tools/live_a0_session.py` — answered 26 of 26.
 Supported range: Agent Zero **v1.14+** and the **whole V2 line**.
 
 This file is the single source of truth for *"Agent Zero shipped a new version — is

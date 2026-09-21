@@ -219,8 +219,12 @@ K._KAME_KEY_HEALTH = {}
 K._KAME_STATED_RL = {}
 K._get_identity_state(IDENT, ["KEY3", "KEY4"])
 K._mark_key_health(IDENT, "KEY3", False, 53.8, "per_minute", sized_by="provider")
-terse = K._mark_key_health(IDENT, "KEY4", False, 20, "per_minute", sized_by="kame")
-check("a terse refusal uses what this provider said about this model", terse == 53.8)
+terse = K._mark_key_health(IDENT, "KEY3", False, 20, "per_minute", sized_by="kame")
+check("a terse refusal uses what this provider said to this key on this model", terse == 53.8)
+# 1.8.1.0: learned per key, as the Hermes port keeps it - one key's stated
+# number does not size another key's terse refusal.
+other_key = K._mark_key_health(IDENT, "KEY4", False, 20, "per_minute", sized_by="kame")
+check("another key keeps its own evidence", other_key == 20)
 
 # C2. Learned per provider:model, because that is what the window belongs to.
 OTHER = "google:gemini-3.5-flash"
@@ -247,12 +251,27 @@ flat = [K._mark_key_health(FLAT, "KEY8", False, 20, "per_minute", sized_by="kame
         for _ in range(12)]
 check("an unsized throttle rests flat and never climbs", flat == [20] * 12)
 
-# C5. The sibling ladders are untouched. They always had the right shape —
-# a floor for the unsized case, never a multiplier over a stated number.
+# C5. The 5xx ladder is gone too, since 07/09/2026 — this line used to read
+# `check("the 5xx ladder still escalates", climb == [5.0, 10.0, 20.0])`.
+#
+# A 503 is not metered. It costs no quota, so resting a key longer buys
+# nothing and only holds back a credential that was never at fault. And the
+# ladder was measured climbing on a HEALTHY pool: the strike counter is per
+# key and only that key's own success clears it, so a key unlucky twice while
+# thirteen others answered still climbed. In the Hermes port, on the owner's
+# real keys, 7 of 16 escalations above the base happened with another key
+# answering inside the previous two minutes — one holding a healthy key for
+# 40 seconds.
 SRV = "provider:server"
 K._get_identity_state(SRV, ["KEY9"])
-climb = [K._mark_key_health(SRV, "KEY9", False, 0, "server") for _ in range(3)]
-check("the 5xx ladder still escalates", climb == [5.0, 10.0, 20.0])
+climb = [K._mark_key_health(SRV, "KEY9", False, 0, "server") for _ in range(12)]
+check("a 5xx never escalates", climb == [K._KAME_SERVER_BASE_S] * 12)
+
+# And a longer number the classifier already sized is not thrown away by the
+# flattening — `max(applied, base)`, not `base`.
+K._get_identity_state(SRV, ["KEY10"])
+check("a longer stated 5xx wait still stands",
+      K._mark_key_health(SRV, "KEY10", False, 12, "server") == 12)
 
 
 print("=" * 60)

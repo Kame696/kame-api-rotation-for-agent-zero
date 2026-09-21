@@ -167,7 +167,7 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, contextvars, hashlib, json, os, threading, time, re
+import asyncio, contextvars, hashlib, json, math, os, threading, time, re
 from typing import Any, List
 # v1.0.9: KAME no longer imports litellm, openai or logging. It used to call
 # `acompletion()` itself and silence litellm's loggers; now Agent Zero makes the
@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.6.0.4"
+KAME_VERSION = "1.8.1.0"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -228,7 +228,7 @@ _KAME_LOCK = threading.Lock()
 #: Gemini also classifies as a rate limit and arrives sized at an hour, and
 #: one exhausted day must not teach every terse throttle afterwards to rest
 #: for an hour.
-_KAME_STATED_RL = {}  # { "provider:model": float seconds }
+_KAME_STATED_RL = {}  # { ("provider:model", key): float seconds } - learned per key (v1.8.1.0)
 _KAME_PATCHED = False
 _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
 # v1.0.2: the live A0 agent for the current async task, stashed by the activation
@@ -280,22 +280,130 @@ _KAME_DAILY_COOLDOWN_S = 3600.0
 # 99999999 while still respecting honest long values (e.g. OpenAI 24h).
 _KAME_HARD_DELAY_CAP_S = 86400.0  # 24h
 
-# --- v1.0.1 fix: ceiling for the gentle 503/500 server-error escalation ---
+# --- what a 503/500 costs a key: one second, flat, forever ---
+#
+# The number is one second because a 503 is not metered and because, measured,
+# five never did anything: on the owner's pool of fourteen the gap between a
+# key's 503 and that same key being offered again was NEVER below 7.2 seconds
+# across 59 real episodes. The carousel has thirteen others to try first and a
+# lap costs more than the rest did. The constant only binds when the lap is
+# shorter than the rest — a pool of one or two keys — and there the old five
+# was four dead seconds per blip on the only credential available.
+#
+# One second rather than zero because a rest below a second is a spin, not a
+# cooldown. It is the same floor the per-minute branch uses.
 # A 503 ("server busy") is the provider being momentarily overloaded, NOT the
-# key being spent, so the first failure stays short (~5s). But on a LARGE pool
-# the fast lap (e.g. 15 keys ~2.5s each) means a flat 5s cooldown recovers every
-# key before it is re-tried, so the pool never goes cold and KAME would rotate
-# 503->5s forever during a sustained outage. A gentle per-key escalation
-# (5 -> 10 -> 20 -> 40 -> 80, capped here) lets a SUSTAINED outage take the pool
-# cold so the ETA-driven sleep takes over; any success resets it, so transient
-# blips never escalate.
+# key being spent — so it rests briefly and the carousel moves on.
+#
+# 07/09/2026: this is now FLAT. v1.0.1 had a per-key ladder behind it
+# (5 -> 10 -> 20 -> 40 -> 80, capped at 90) whose purpose is worth keeping on
+# the record, because removing it costs exactly what that comment predicted:
+# on a LARGE pool the fast lap (15 keys at ~2.5s each) means a flat 5s cooldown
+# recovers every key before it is re-tried, so the pool never goes cold, the
+# ETA-driven sleep never takes over, and KAME rotates 503 -> 5s for as long as
+# the outage lasts. An 83-minute Gemini outage is on record.
+#
+# The owner ended the ladder anyway, and the arithmetic is his: **a 503 is not
+# metered.** It costs no quota, so a longer rest buys nothing and only holds
+# back a credential that was never at fault. What made it more than a
+# preference was the ladder climbing on a HEALTHY pool: the strike counter is
+# per key and only that key's own success clears it, so a key that caught two
+# blips while thirteen others answered normally still climbed. Measured in the
+# Hermes port on the owner's real keys, 7 of 16 escalations above the base
+# happened with another key answering inside the previous two minutes — one
+# sidelining a healthy key for 40 seconds while its neighbour was serving.
+#
+# So the trade is: never punish a key for the model's bad minute, and accept
+# that a long outage turns the carousel instead of sleeping through it. That is
+# `decisions/0002-eternal-carousel-no-timeout` behaving as specified, it spends
+# no quota, and `kame_collapse_storm_logs` keeps the log readable.
+_KAME_SERVER_BASE_S = 1.0
+
+# Kept only because `tests/test_v1_0_2_fixes.py` pins it and because a 5xx that
+# states its own wait should still not be able to bench a key for an hour.
+# Nothing invented reaches it any more.
 _KAME_SERVER_BACKOFF_CAP_S = 90.0
+
+# --- 1.7.0.4: um rotulo diario e evidencia, nao prova -----------------------
+# Ported from the Hermes side, where it was measured on the owner's own
+# fourteen keys rather than reasoned about. A key Google refuses with
+# `GenerateRequestsPerDayPerProjectPerModel-FreeTier` answered again 6 to 36
+# minutes later, twenty-one times out of twenty-one, and not one of those
+# intervals reached the hour it was being given. Nothing in the payload tells
+# the real exhaustions apart from the rest: same quotaId, same quotaValue,
+# same prose, same retry hint.
+#
+# So the decision moves off the label and onto the pool. While ANY key on that
+# provider:model is still answering, a daily label costs a re-probe. The hour
+# is bought only once the whole pool has gone quiet, because a pool that has
+# been silent this long is not being throttled, it is out.
+#
+# The silence threshold is measured too: probing fourteen keys every two
+# minutes across four models, the longest the entire pool ever went without a
+# single answer WHILE the model still had capacity was fifteen minutes
+# (3.8-flash), fourteen (3.7) and twelve (3.6). Twenty minutes is that with
+# margin.
+#
+# Erring long here is the cheap direction, unusually: being slow to believe
+# the label costs refused requests, which are free of quota and take about a
+# second, while believing it early costs every key in the pool for an hour.
+_KAME_DAILY_REPROBE_S = 300.0
+_KAME_POOL_SILENCE_BEFORE_THE_DAY_S = 1200.0
+
+#: identity -> when this pool last went quiet. Cleared by any success on that
+#: identity. Module level rather than per key on purpose: the question is
+#: about the POOL, and a key on the bench is never asked, so counting its
+#: refusals would measure what did not happen.
+_KAME_NO_ANSWER_SINCE = {}
 
 # --- v1.0.2: per-minute adaptive-backoff ceiling (separate from the daily one) ---
 # Per-minute (RPM) limits recover in ~60s. The blind-daily safety net may still
 # escalate a key that keeps failing, but a genuinely per-minute key must NOT climb
 # toward the 1h daily ceiling. Cap per-minute escalation here instead.
 _KAME_RL_BACKOFF_CAP_S = 300.0  # 5 min
+
+# v1.8.0.0 (Hermes parity). No credential sits out longer than this, whatever
+# set the hold: a provider's own stated wait, the daily cooldown, or this
+# engine's escalation. Five real Codex refusals were measured holding a key for
+# 3h+ on the provider's word alone. Past the ceiling the key is simply offered
+# again; if the refusal repeats it is held again, so a genuinely long outage
+# costs one refused request per interval instead of a healthy key sitting out
+# for however long a provider claimed. Setting: ``max_hold_seconds``
+# (KAME_MAX_HOLD), clamped to 60-86400.
+_KAME_MAX_HOLD_S = 3600.0
+
+# v1.8.0.2 (Hermes parity). A throttle that names no wait at all. Measured on
+# the owner's own traffic: retried within 30s, a refused key answered 0 of 73
+# times; over the whole recorded corpus 30s avoids 388 of 413 avoidable refused
+# calls while delaying 6 answers. Setting: ``unsized_throttle_rest_seconds``
+# (KAME_UNSIZED_REST), clamped to 0-300. Was a flat 20s.
+_KAME_UNSIZED_THROTTLE_REST_S = 30.0
+
+# v1.8.1.0 (Hermes parity). Gemini's bare ``429 RESOURCE_EXHAUSTED`` - no
+# retryDelay, no Retry-After, no quotaId - rests the refused key 1s, then 2, 4,
+# 8, 16, 32, 64 and holds at 64, instead of the flat rest above. It arrives on
+# many keys at once and clears on all of them together, which points at a busy
+# model rather than a spent quota; in real use the ladder made fewer calls per
+# minute than the flat rest (24 against 29) without answering less. Only that
+# shape (``_is_bare_resource_exhausted``), reset by an answer, and a number the
+# provider states is always obeyed and never multiplied. Settings:
+# ``unsized_throttle_backoff`` (KAME_UNSIZED_BACKOFF) and
+# ``unsized_backoff_max_seconds`` (KAME_UNSIZED_BACKOFF_MAX, 1-3600).
+_KAME_UNSIZED_BACKOFF = True
+
+# v1.8.1.0. A timeout earns the zero rest above only if the attempt actually
+# waited. Found by the first real session on Agent Zero v2.12: an
+# APIConnectionError whose text mentioned "Timeout" failed in half a second,
+# read as a timeout, rested 0s, and the pool spun through fourteen keys about
+# twice a second. A failure faster than this is not a provider going quiet; it
+# keeps the three seconds a connection error always had.
+_KAME_REAL_TIMEOUT_MIN_S = 5.0
+
+# v1.8.1.0 (Hermes RL_BASE_S). A per-minute rest the provider stated below a
+# second is a spin, not a cooldown - floored here, and so is what it teaches.
+_KAME_RL_FLOOR_S = 1.0
+_KAME_FAST_FAILURE_REST_S = 3.0
+_KAME_UNSIZED_BACKOFF_MAX_S = 64.0
 
 # --- v1.6.0.1: the wait, said before ninety seconds have passed --------------
 #
@@ -569,6 +677,81 @@ def set_daily_cooldown(seconds) -> None:
             _KAME_DAILY_COOLDOWN_S = v
     except (ValueError, TypeError):
         pass
+
+
+def _kame_clamped(value, low, high):
+    """``value`` as a float inside [low, high], or None when it is not a number."""
+    if isinstance(value, bool):
+        return None
+    try:
+        v = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if v != v:  # NaN
+        return None
+    return max(low, min(high, v))
+
+
+def set_max_hold(seconds) -> None:
+    """v1.8.0.0: the ceiling on any hold. Clamped to 60-86400; junk is ignored."""
+    global _KAME_MAX_HOLD_S
+    v = _kame_clamped(seconds, 60.0, 86400.0)
+    if v is not None:
+        _KAME_MAX_HOLD_S = v
+
+
+def set_unsized_throttle_rest(seconds) -> None:
+    """v1.8.0.2: the rest after a throttle that names no wait. Clamped to 0-300."""
+    global _KAME_UNSIZED_THROTTLE_REST_S
+    v = _kame_clamped(seconds, 0.0, 300.0)
+    if v is not None:
+        _KAME_UNSIZED_THROTTLE_REST_S = v
+
+
+def set_unsized_backoff(enabled) -> None:
+    """v1.8.1.0: the RESOURCE_EXHAUSTED ladder on or off."""
+    global _KAME_UNSIZED_BACKOFF
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_UNSIZED_BACKOFF = flag
+
+
+def set_unsized_backoff_max(seconds) -> None:
+    """v1.8.1.0: where the RESOURCE_EXHAUSTED ladder stops growing. Clamped to 1-3600."""
+    global _KAME_UNSIZED_BACKOFF_MAX_S
+    v = _kame_clamped(seconds, 1.0, 3600.0)
+    if v is not None:
+        _KAME_UNSIZED_BACKOFF_MAX_S = v
+
+
+def _kame_flag(value):
+    """True / False from a bool or the usual spellings, None when unreadable."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "on", "yes"):
+        return True
+    if text in ("0", "false", "off", "no"):
+        return False
+    return None
+
+
+def _kame_apply_env_overrides() -> None:
+    """v1.8.1.0: the environment wins over the settings page, as on Hermes.
+
+    Same variable names as the Hermes port, so one ``.env`` line means the same
+    thing on both hosts. Called by the activation after the plugin config.
+    """
+    readers = (
+        ("KAME_MAX_HOLD", set_max_hold),
+        ("KAME_UNSIZED_REST", set_unsized_throttle_rest),
+        ("KAME_UNSIZED_BACKOFF", set_unsized_backoff),
+        ("KAME_UNSIZED_BACKOFF_MAX", set_unsized_backoff_max),
+    )
+    for name, setter in readers:
+        raw = os.environ.get(name)
+        if raw is not None and str(raw).strip() != "":
+            setter(raw)
 
 
 def set_key_log_style(style) -> None:
@@ -1139,24 +1322,43 @@ def _parse_duration_to_seconds(text):
     """Parse a duration EXPRESSION into seconds.
 
     Handles compound provider formats: "6m 11.52s" (Groq), "2h 30m", "1h",
-    "45s", "2970.938289688s", and a bare number ("90" -> 90s). Returns float
-    or None. IMPORTANT: only call this on a substring already isolated as a
-    duration (e.g. captured right after a "retry"/"try again in" keyword) -
-    never on a whole error message, or stray digits (model names, ids) would
-    be misread as seconds.
+    "45s", "683.050353ms" (Gemini, whenever the wait is under a second),
+    "2970.938289688s", and a bare number ("90" -> 90s). Returns float or None.
+    IMPORTANT: only call this on a substring already isolated as a duration
+    (e.g. captured right after a "retry"/"try again in" keyword) - never on a
+    whole error message, or stray digits (model names, ids) would be misread
+    as seconds.
+
+    07/09/2026: the millisecond spellings lead the alternation, and the order
+    is the fix. Python takes the leftmost branch that matches, so with `m` ahead
+    of `ms` the text "683.050353ms" surrendered its `m`, the trailing `s` was
+    left for a pass that needed a digit first, and the hint was read as 683
+    MINUTES. Found in the Hermes port on the owner's own pool, 07/09/2026:
+    five keys benched between 4 and 12 hours off sub-second hints, and only a
+    manual pool reset let them back in. This file had the identical defect and
+    the identical exposure - `_extract_retry_delay` feeds `_apply_cooldown`
+    directly - so it is corrected here in the same breath rather than left as
+    a known bug in the other port.
     """
     if not text:
         return None
     total = 0.0
     found = False
     for val, unit in re.findall(
-        r'(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)?',
+        r'(\d+(?:\.\d+)?)\s*'
+        r'(milliseconds?|millis|msecs?|ms'
+        r'|h|hr|hrs|hour|hours'
+        r'|m|min|mins|minute|minutes'
+        r'|s|sec|secs|second|seconds)?',
         text.lower(),
     ):
         if val == "":
             continue
         v = float(val)
-        if unit in ("h", "hr", "hrs", "hour", "hours"):
+        if unit in ("ms", "msec", "msecs", "milli", "millis",
+                    "millisecond", "milliseconds"):
+            total += v / 1000.0
+        elif unit in ("h", "hr", "hrs", "hour", "hours"):
             total += v * 3600.0
         elif unit in ("m", "min", "mins", "minute", "minutes"):
             total += v * 60.0
@@ -1251,7 +1453,7 @@ def _get_identity_state(identity, all_keys):
 
 
 def _mark_key_health(identity, key, success=True, delay=20, kind="other",
-                     sized_by: str = ""):
+                     sized_by: str = "", bare: bool = False):
     """Update health state for a key after a completed (or failed) attempt.
 
     Returns the ACTUAL delay applied (after any adaptive-backoff escalation)
@@ -1269,15 +1471,18 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
       - daily / insufficient_quota: escalate 20s -> 40s -> ... capped at
         _KAME_DAILY_COOLDOWN_S (the classifier already floors these at the daily
         cooldown; the escalation is just a belt-and-suspenders net).
-      - per_minute: the FIRST strike trusts the provider's honest retryDelay (no
-        floor); repeats escalate only up to the much lower _KAME_RL_BACKOFF_CAP_S,
-        so a healthy-but-busy RPM key is never cooled toward the 1h daily ceiling
-        (the v1.0.1 bug). The "blind daily" case — a daily-dead key with no
-        marker, classified per_minute — still escalates, just bounded here.
-      - server (5xx): a separate `consecutive_server` counter escalates
-        5s -> 10s -> ... capped at _KAME_SERVER_BACKOFF_CAP_S, so a sustained
-        outage on a big pool stops spinning and lets the ETA-driven sleep take
-        over. A transient blip still recovers in ~5s.
+      - per_minute: **does not escalate** since v1.6.0.3. Every strike trusts
+        the provider's own retryDelay, and when it named none the classifier's
+        flat 20s stands. Repeating a throttle is not evidence the provider
+        lied — on a rolling window it is the ordinary case. The streak is still
+        counted, for the reports, but it no longer sizes anything.
+      - server (5xx): **does not escalate** since 07/09/2026. Flat
+        _KAME_SERVER_BASE_S, or a longer wait the provider itself stated. A 503
+        is not metered, so a longer rest buys nothing; and the old per-key
+        ladder was measured climbing while the rest of the pool answered fine.
+        See the constant for the full reasoning and for what this costs during
+        a sustained outage. `consecutive_server` is still counted because
+        `_thaw_server_cooled_keys` reads it.
     """
     global _KAME_KEY_HEALTH, _KAME_CALL_COUNT
     now = time.time()
@@ -1300,7 +1505,17 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             # retired key straight back — retiring was never a deletion.
             kd["consecutive_refusals"] = 0
             kd["consecutive_denials"] = 0
+            kd["consecutive_unsized"] = 0  # v1.8.1.0: the ladder starts again at 1s
+            kd["rest_label"] = ""
+            kd["hold_kind"] = ""
+            # v1.8.1.0: what this key was told is forgotten the moment it
+            # answers, so the memory cannot outlive its evidence by one call.
+            _KAME_STATED_RL.pop((identity, key), None)
             kd["retired_at"] = 0
+            # 1.7.0.4. The pool is demonstrably serving, so any run of daily
+            # labels that was accumulating doubt starts over. One answer on
+            # ANY key of this identity is the whole of the evidence.
+            _KAME_NO_ANSWER_SINCE.pop(identity, None)
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
         else:
@@ -1334,72 +1549,122 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 )
                 applied = max(applied, escalated)
                 # No retirement, ever. See _KAME_RETIRING_KINDS.
-            elif kind in ("daily", "insufficient_quota"):
-                # Real daily / account limit: the classifier already floored this
-                # at the daily cooldown; the escalation is a belt-and-suspenders
-                # safety net, capped at the SAME daily ceiling.
+            elif kind == "insufficient_quota":
+                # Money, not a window. No amount of pool liveness makes a key
+                # with no credit work, so this one keeps the full cooldown
+                # unconditionally — which is why 1.7.0.4 splits it out of the
+                # branch below rather than leaving the two sharing a verdict
+                # they no longer share a reason for.
                 cnt = int(kd.get("consecutive_rl", 0)) + 1
                 kd["consecutive_rl"] = cnt
-                escalated = min(20.0 * (2 ** (cnt - 1)), _KAME_DAILY_COOLDOWN_S)
-                applied = max(applied, escalated)
-            elif kind == "per_minute":
-                # v1.6.0.3. This used to raise a floor of 20s, 40s, 80s ... over
-                # the deadline from the second strike on, whatever the provider
-                # had said. `applied` starts as the classifier's number, so a
-                # provider asking for 41s and refusing four times in a row was
-                # held for 80 — a number nobody stated, over one that was.
+                applied = max(applied, _KAME_DAILY_COOLDOWN_S)
+            elif kind == "daily":
+                # 1.7.0.4. **A daily label is evidence, not proof.** Ported
+                # from the Hermes side with the measurements that produced it;
+                # see `_KAME_DAILY_REPROBE_S` for the numbers.
                 #
-                # Repeating a throttle is not evidence that the provider lied.
-                # On a rolling window it is the ordinary case: the key is asked
-                # again while its window is still full, and the provider
-                # recomputes and answers correctly again. Escalating on that
-                # reads a restatement as a refutation.
+                # Until now this branch read `max(applied, escalated)` with
+                # `applied` already forced to the full cooldown by
+                # `_classify_error`, so the ladder behind it could never fire
+                # and the first daily label cost the hour outright. That is the
+                # behaviour being replaced, not a ladder being removed.
                 #
-                # So the streak is still counted — the reports read it, and a
-                # key failing five times in a row is worth seeing — but it no
-                # longer sizes anything the provider already sized. When the
-                # provider named nothing, `_extract_retry_delay` has already
-                # supplied its flat 20s default and that stands: a rate limit
-                # is a rolling window (seconds, and the provider says so) or a
-                # daily cap (hours, a different counter, handled above), and
-                # nothing lives between them for a ladder to climb through.
-                #
-                # The same rule, in the same words, governs
-                # `core/carousel.py::_escalate` in the Hermes port. See
-                # PARITY.md.
+                # `_delay_source` reports `"kame"` for every daily refusal, and
+                # it is right: this file deliberately discards Google's daily
+                # retryDelay (v1.0.5, and the Hermes port later measured why —
+                # 107 of 114 of those hints were exactly the seconds left in
+                # the current clock minute). So the number arriving here is
+                # always ours, and ours is the one to reconsider.
                 cnt = int(kd.get("consecutive_rl", 0)) + 1
                 kd["consecutive_rl"] = cnt
-                if sized_by == "provider":
-                    # Stated for this very refusal. Learn the shape of this
-                    # provider's short window, and change nothing else.
-                    if 0 < applied <= _KAME_RL_BACKOFF_CAP_S:
-                        _KAME_STATED_RL[identity] = max(
-                            _KAME_STATED_RL.get(identity, 0.0), float(applied)
-                        )
+                since = _KAME_NO_ANSWER_SINCE.setdefault(identity, now)
+                pool_alive = (now - since) < _KAME_POOL_SILENCE_BEFORE_THE_DAY_S
+                if pool_alive:
+                    # The label says the day is over and the pool says
+                    # otherwise, by answering. Re-probe.
+                    applied = min(_KAME_DAILY_REPROBE_S, _KAME_DAILY_COOLDOWN_S)
                 else:
-                    # Nothing was stated. Before inventing anything, ask what
-                    # this provider has said about this model before — that is
-                    # a measurement, and a ladder is not.
-                    learned = _KAME_STATED_RL.get(identity, 0.0)
-                    if learned > 0:
-                        applied = min(learned, _KAME_RL_BACKOFF_CAP_S)
-                    # And when it has never said anything at all, the flat 20s
-                    # `_extract_retry_delay` already supplied stands. No climb:
-                    # a rate limit is a rolling window (seconds) or a daily cap
-                    # (hours, handled above), and a ladder from 20s to 300s
-                    # spends its whole range between two regimes that do not
-                    # meet. Erring short costs one request that fails in
-                    # milliseconds; erring long costs a healthy key, silently.
+                    # Nobody has answered on this identity for the whole
+                    # silence window. The label is no longer contradicted.
+                    applied = max(applied, _KAME_DAILY_COOLDOWN_S)
+            elif kind == "per_minute":
+                # v1.6.0.3: repeating a throttle is not evidence the provider
+                # lied, so a number the provider named is never multiplied; the
+                # streak is counted for the reports and sizes nothing it named.
+                #
+                # v1.8.1.0, in the order the Hermes port decides it
+                # (``core/carousel.py::_escalate``):
+                #   1. stated for THIS refusal      -> that number, floored at 1s
+                #   2. stated earlier for THIS key  -> that number, floored at 1s
+                #      on this model (learned per key, forgotten on an answer)
+                #   3. never stated, Gemini's bare  -> the ladder 1, 2, 4 ... 64
+                #      RESOURCE_EXHAUSTED shape
+                #   4. never stated, anything else  -> the flat unsized rest (30s)
+                # A sub-second rest is a spin rather than a cooldown, hence the
+                # floor; and only a number the provider named resets the ladder.
+                kd["consecutive_rl"] = int(kd.get("consecutive_rl", 0)) + 1
+                learned_at = (identity, key)
+                learned = float(_KAME_STATED_RL.get(learned_at, 0.0) or 0.0)
+                if sized_by == "provider":
+                    if 0 < applied <= _KAME_RL_BACKOFF_CAP_S:
+                        _KAME_STATED_RL[learned_at] = max(learned, float(applied))
+                    applied = max(float(applied), _KAME_RL_FLOOR_S)
+                    kd["consecutive_unsized"] = 0
+                    kd["rest_label"] = ""
+                elif learned > 0:
+                    applied = max(min(learned, _KAME_RL_BACKOFF_CAP_S), _KAME_RL_FLOOR_S)
+                    kd["consecutive_unsized"] = 0
+                    kd["rest_label"] = ""
+                elif bare and _KAME_UNSIZED_BACKOFF:
+                    # Saturated before exponentiation so a long streak cannot
+                    # overflow ``2.0 ** n`` before ``min`` ever runs.
+                    rung = int(kd.get("consecutive_unsized", 0)) + 1
+                    kd["consecutive_unsized"] = rung
+                    cap = max(1.0, min(_KAME_MAX_HOLD_S, _KAME_UNSIZED_BACKOFF_MAX_S))
+                    exponent = rung - 1
+                    applied = cap if exponent >= math.log2(cap) else min(2.0 ** exponent, cap)
+                    kd["rest_label"] = "backoff.%d" % rung
+                else:
+                    # The flat rest `_extract_retry_delay` already supplied.
+                    kd["consecutive_unsized"] = 0
+                    kd["rest_label"] = ""
             elif kind == "server":
-                # v1.0.1 fix: gentle escalation for a SUSTAINED 5xx outage.
-                # First failure stays ~5s; a key that keeps failing climbs
-                # 5 -> 10 -> 20 -> 40 -> 80 (capped) so the pool eventually goes
-                # cold and the EXHAUSTED_RETRY ETA-sleep takes over instead of
-                # spinning forever. Any success resets the counter.
-                cnt = int(kd.get("consecutive_server", 0)) + 1
-                kd["consecutive_server"] = cnt
-                escalated = min(5.0 * (2 ** (cnt - 1)), _KAME_SERVER_BACKOFF_CAP_S)
-                applied = max(applied, escalated)
+                # 07/09/2026: **a 5xx never escalates.** The owner's rule, and
+                # the arithmetic is his: a 503 is not metered. It costs no
+                # quota, so resting a key longer buys nothing at all and only
+                # holds back a credential that was never at fault.
+                #
+                # v1.0.1 had put a ladder here — 5 -> 10 -> 20 -> 40 -> 80,
+                # capped — so that a SUSTAINED outage would eventually take the
+                # pool cold and hand over to the EXHAUSTED_RETRY ETA-sleep
+                # instead of spinning. It was written after a real 83-minute
+                # Gemini outage and it did work for that case.
+                #
+                # What ended it is the case it was never asked about. The
+                # counter is per key and only that key's own success clears
+                # it, so a key that caught two blips while the rest of the pool
+                # answered normally still climbed. Measured in the Hermes port
+                # on the owner's own keys: 7 of 16 escalations above the base
+                # happened with another key answering inside the previous two
+                # minutes, one of them sidelining a healthy key for 40 seconds
+                # while its neighbour was serving. A 5xx is the MODEL's
+                # condition, not the credential's — this file has said so since
+                # v1.0.2 — and a counter asking "how often has this key seen
+                # one" is asking about the credential.
+                #
+                # The trade, named rather than left to be discovered: during a
+                # genuinely sustained outage the pool no longer goes cold, so
+                # the ETA-sleep does not engage and the carousel keeps turning.
+                # That is `decisions/0002-eternal-carousel-no-timeout`, it
+                # spends no quota, and the storm-collapse keeps the log
+                # readable. The owner made this trade knowingly.
+                #
+                # The counter itself is still kept: `_thaw_server_cooled_keys`
+                # uses it to tell a key benched by an outage from a key benched
+                # by its own quota, and thawing the second kind would wipe a
+                # real cooldown.
+                kd["consecutive_server"] = int(kd.get("consecutive_server", 0)) + 1
+                applied = max(applied, _KAME_SERVER_BASE_S)
             # v1.0.5: never SHORTEN an existing cooldown. A long daily-quota protection
             # (e.g. set by a previous daily hit) must never be overwritten by a shorter
             # server-busy (10s) or per-minute hit on the same key. Without this, a 503
@@ -1413,8 +1678,32 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 kd["consecutive_refusals"] = 0
             if kind != "denied":
                 kd["consecutive_denials"] = 0
+            if kind != "per_minute":
+                # Not a throttle at all (a 503, a timeout, a refusal): the
+                # ladder's count is left where it is - a busy model mixes 503s
+                # into its bare 429s - but this rest is not a rung.
+                kd["rest_label"] = ""
+            # v1.8.0.0: the ceiling, on what is STORED and not only on what is
+            # reported. Every branch above ends here.
+            applied = min(float(applied), _KAME_MAX_HOLD_S, _KAME_HARD_DELAY_CAP_S)
+            if now + applied >= float(kd.get("sick_until", 0) or 0):
+                # v1.8.1.0: whose hold is binding. Only a hold a 5xx set may be
+                # thawed when an outage ends; a quota's hour must not be.
+                kd["hold_kind"] = kind
             kd["sick_until"] = max(kd.get("sick_until", 0), now + applied)
             kd["last_sick_at"] = now
+            if kind == "insufficient_quota":
+                # v1.8.0.0: out of credit belongs to the account, not to the
+                # model. The same key is benched on every model of this
+                # provider it has been seen on; other keys are untouched.
+                provider = str(identity).split(":", 1)[0]
+                for other_id, other_state in _KAME_KEY_HEALTH.items():
+                    if other_id == identity or str(other_id).split(":", 1)[0] != provider:
+                        continue
+                    okd = other_state.get("keys", {}).get(key)
+                    if okd is not None:
+                        okd["sick_until"] = max(okd.get("sick_until", 0), now + applied)
+                        okd["last_sick_at"] = now
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
     return applied
 
@@ -1450,7 +1739,9 @@ def _thaw_server_cooled_keys(identity, exclude_key, new_cooldown=3.0):
         for i, (k, kd) in enumerate(state["keys"].items()):
             if k == exclude_key:
                 continue
-            if int(kd.get("consecutive_server", 0)) > 0 and float(kd.get("sick_until", 0) or 0) > now:
+            if (int(kd.get("consecutive_server", 0)) > 0
+                    and kd.get("hold_kind", "server") == "server"
+                    and float(kd.get("sick_until", 0) or 0) > now):
                 # small per-key stagger so they don't all re-probe in lockstep
                 target = now + new_cooldown + (i % 5) * 0.4
                 if target < float(kd["sick_until"]):
@@ -1512,7 +1803,9 @@ def _evidence_text(exc) -> str:
                 parts.append(repr(headers))
     except Exception:
         pass  # evidence gathering must never be the thing that raises
-    return " ".join(parts)[:_EVIDENCE_MAX_CHARS].lower()
+    # " | " rather than " ": a retry hint at the end of one part must not
+    # read the next part's digits as more of its duration.
+    return " | ".join(parts)[:_EVIDENCE_MAX_CHARS].lower()
 
 
 def _evidence_status(exc):
@@ -1608,7 +1901,9 @@ def _extract_retry_delay(exc, with_source: bool = False):
             return (secs, "retry_delay") if with_source else secs
 
     # 2. HTTP response headers
-    headers = getattr(exc, "headers", None) or getattr(exc, "response_headers", None)
+    headers = (getattr(exc, "headers", None) or getattr(exc, "response_headers", None)
+               or getattr(exc, "litellm_response_headers", None)
+               or getattr(getattr(exc, "response", None), "headers", None))
     if headers:
         ra = None
         if isinstance(headers, dict):
@@ -1644,7 +1939,10 @@ def _extract_retry_delay(exc, with_source: bool = False):
     #    id into a duration.
     err_msg = _evidence_text(exc) or str(exc)
     match = re.search(
-        r'(?:retry[_\s-]*(?:after|delay|in)|try\s+again\s+in)[:\s"\']*([0-9][0-9hms\.\s]*)',
+        # v1.8.1.0: a number, its unit, and further number+unit pairs ("6m
+        # 11.52s") - never a sentence's full stop followed by the next digits.
+        r'(?:retry[_\s-]*(?:after|delay|in)|try\s+again\s+in)[:\s"\']*'
+        r'([0-9]+(?:\.[0-9]+)?\s*(?:ms|[hms])?(?:[ \t]*[0-9]+(?:\.[0-9]+)?\s*(?:ms|[hms]))*)',
         err_msg,
         re.IGNORECASE,
     )
@@ -1653,7 +1951,9 @@ def _extract_retry_delay(exc, with_source: bool = False):
         if dur is not None and 0 < dur <= cap:
             return (dur, "text") if with_source else dur
 
-    return (20, "default") if with_source else 20  # Safe default
+    # v1.8.0.2: the owner's measured unsized-throttle rest, not a flat 20.
+    rest = _KAME_UNSIZED_THROTTLE_REST_S
+    return (rest, "default") if with_source else rest
 
 
 # --- v1.0.8: permanently DENIED key/project (403) ---
@@ -1754,6 +2054,39 @@ def _is_permanent_denial(exc: Exception) -> bool:
     return any(ind in err_msg for ind in _PERMANENT_DENIAL_INDICATORS)
 
 
+def _is_bare_resource_exhausted(exc) -> bool:
+    """v1.8.1.0: exactly Gemini's bare refusal, judged by its payload.
+
+    HTTP 429, a status of RESOURCE_EXHAUSTED, and nothing the provider stated
+    about when to come back: no retryDelay, no Retry-After, no quotaId, no
+    "retry in N" sentence. Evidence, never the provider's name - any provider
+    refusing in exactly this shape is treated the same, and a Gemini refusal
+    that carries a number or a quotaId is not.
+    """
+    try:
+        status = _evidence_status(exc)
+        text = (_evidence_text(exc) or str(exc)).lower()
+    except Exception:
+        return False
+    if status is not None and status != 429:
+        return False
+    if status is None and "429" not in text:
+        return False
+    # The STRUCTURED status - the provider's JSON field or the host's own
+    # "429 (RESOURCE_EXHAUSTED)" rendering - not the word anywhere in prose,
+    # where a relay can quote it about somebody else's refusal.
+    if not re.search(r'"status"\s*:\s*"resource_exhausted"|\(resource_exhausted\)|429\s+resource_exhausted', text):
+        return False
+    if "quotaid" in text or "quota_id" in text or "retrydelay" in text or "retry_delay" in text:
+        return False
+    try:
+        if _extract_retry_delay(exc, with_source=True)[1] != "default":
+            return False
+    except Exception:
+        return False
+    return True
+
+
 def _classify_error(exc):
     """Classify an error into (delay_seconds, kind, status_code).
 
@@ -1770,11 +2103,14 @@ def _classify_error(exc):
       the fallback when no marker is present.)
     """
     # Timeouts: the key isn't broken, just slow/busy
+    # v1.8.0.0 (Hermes parity): a timeout rotates and does not bench. The
+    # provider went quiet; the key is fine and is selectable again at once. The
+    # attempt itself already cost the wait, so a zero rest cannot spin.
     if isinstance(exc, (asyncio.TimeoutError, asyncio.CancelledError)):
-        return 3, "timeout", None
+        return 0, "timeout", None
     err_msg = _evidence_text(exc)
     if "timeout" in err_msg or "timed out" in err_msg:
-        return 3, "timeout", None
+        return 0, "timeout", None
 
     # v1.6.0.1: the class name, for the one failure that carries nothing else.
     # A transport error has no status code and no body, ever — the socket never
@@ -1790,6 +2126,12 @@ def _classify_error(exc):
     # `_DENIAL_EXCLUDED_ON_PURPOSE`. Reading a verdict off a class name would
     # shadow the status code and the body, which say the same thing better.
     if type(exc).__name__ in _TRANSPORT_EXCEPTION_CLASSES:
+        # v1.8.0.0: a class that names a timeout has already spent its wait and
+        # rotates at once. A connection that never opened fails instantly, so
+        # it keeps three seconds: with the network down, a zero rest would turn
+        # the pool into a tight loop of refused sockets.
+        if "timeout" in type(exc).__name__.lower():
+            return 0, "timeout", None
         return 3, "timeout", None
 
     # v1.6.0.1: the status may be on a wrapper's cause rather than on the
@@ -1809,7 +2151,7 @@ def _classify_error(exc):
             or "service unavailable" in err_msg or "serviceunavailable" in err_msg \
             or "internal server error" in err_msg or "bad gateway" in err_msg \
             or "gateway timeout" in err_msg:
-        return 5, "server", (status_code or 503)
+        return _KAME_SERVER_BASE_S, "server", (status_code or 503)
 
     # Rate limits / quota (only when it is NOT an explicit server 5xx above)
     if status_code == 429 or any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
@@ -1853,6 +2195,31 @@ def _classify_error(exc):
 
     # Everything else
     return 20, "other", status_code
+
+
+def _kame_rest_for_failure(identity, key, exc, elapsed=None):
+    """v1.8.1.0: classify one failure and rest its key - the one path the loop uses.
+
+    Returns ``(applied, kind, status_code, label, sized_by)``. ``label`` names
+    the ladder rung (``backoff.3``) when the RESOURCE_EXHAUSTED ladder sized the
+    rest, else "". Tests call this exact function, so what is tested is what runs.
+    """
+    delay, kind, sc = _classify_error(exc)
+    if kind == "timeout" and not delay and elapsed is not None and elapsed < _KAME_REAL_TIMEOUT_MIN_S:
+        # A "timeout" that took no time did not wait for anything: never a
+        # zero rest, or a fast-failing pool turns into a tight loop.
+        delay = _KAME_FAST_FAILURE_REST_S
+    sized_by = _delay_source(exc, kind)
+    bare = kind == "per_minute" and sized_by != "provider" and _is_bare_resource_exhausted(exc)
+    applied = _mark_key_health(identity, key, False, delay, kind, sized_by=sized_by, bare=bare)
+    label = ""
+    try:
+        with _KAME_LOCK:
+            kd = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {}).get(key) or {}
+            label = kd.get("rest_label", "") or ""
+    except Exception:
+        label = ""
+    return applied, kind, sc, label, sized_by
 
 
 def _classify_error_delay(exc):
@@ -2056,7 +2423,7 @@ def _storm_end(identity):
     return None
 
 
-def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, all_keys):
+def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, all_keys, label=""):
     """Single funnel for a per-rotation failure line (v1.0.3 storm-collapse).
 
     Always runs the raw-error dump (its own toggle). Then, for the human line:
@@ -2080,6 +2447,7 @@ def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, 
         f"[KAME] {call_type}|{model_short} "
         f"{(_key_display_auth if kind == 'denied' else _key_display)(key)} "
         f"{_friendly_error_msg(kind, applied, sc, exc)}"
+        f"{(' [' + label + ']') if label else ''}"
     )
     if (_lvl_verbose() or not _KAME_COLLAPSE_STORM_LOGS
             or _KAME_LOG_FULL_ERRORS or kind in ("auth", "denied")):
@@ -2935,6 +3303,7 @@ async def _kame_carousel(self, ctx):
         ctx["progress"]["any"] = False
         ctx["progress"]["reasoning"] = False
 
+        _attempt_t0 = time.perf_counter()
         try:
             result = await ctx["attempt"](self, key, ctx)
 
@@ -3077,18 +3446,12 @@ async def _kame_carousel(self, ctx):
                 # tells you when a rejected key will start working.
                 _tally_failure(identity, _auth_kind, _auth_sc, "kame")
             else:
-                delay, kind, sc = _classify_error(e)
-                # v1.6.0.3: computed once and used twice. The tally has always
-                # wanted to know whether the provider named this number; so
-                # does `_mark_key_health`, which must not raise a floor over a
-                # deadline the provider stated.
-                _sized_by = _delay_source(e, kind)
-                applied = _mark_key_health(
-                    identity, key, False, delay, kind, sized_by=_sized_by
-                )
+                # v1.8.1.0: one function classifies, rests and names the rung,
+                # and it is the same one the tests drive.
+                applied, kind, sc, _rung, _sized_by = _kame_rest_for_failure(identity, key, e, elapsed=time.perf_counter() - _attempt_t0)
                 _tally_failure(identity, kind, sc, _sized_by)
                 _log_failure(call_type, model_short, key, e,
-                             kind, applied, sc, identity, all_keys)
+                             kind, applied, sc, identity, all_keys, label=_rung)
 
             # v1.0.6: rotate to the next key IMMEDIATELY. asyncio.sleep(0) yields to
             # the event loop (so we never spin the CPU or starve other tasks) without

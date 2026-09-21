@@ -35,14 +35,14 @@ from typing import Any
 # (kind, first rest in seconds, what it means, does waiting help)
 # ---------------------------------------------------------------------------
 EXPECTED_RESTS = (
-    ("timeout", 3.0, "the connection did not happen", "yes — briefly"),
-    ("server", 5.0, "the provider is busy; the key is fine", "yes"),
-    ("per_minute", 20.0, "a throttle on this credential", "yes — the provider says how long"),
+    ("timeout", 0.0, "the provider went quiet; the key is fine and is tried again at once (a refused connection waits 3s)", "yes"),
+    ("server", 1.0, "the provider is busy; the key is fine", "yes"),
+    ("per_minute", 30.0, "a throttle on this credential; Gemini's bare RESOURCE_EXHAUSTED climbs 1, 2, 4 ... 64s instead", "yes — the provider says how long"),
     ("auth", 20.0, "a bare 401, no explanation", "no — but it may not be the key"),
     ("revoked", 20.0, "the provider says this is not a key", "no — it leaves rotation"),
     ("denied", 20.0, "this key may not use THIS model", "no — but only for this model"),
-    ("daily", 3600.0, "a daily cap is spent", "yes — this is the one waiting fixes"),
-    ("insufficient_quota", 3600.0, "the account allowance is gone", "yes, eventually"),
+    ("daily", 300.0, "the label alone: a re-probe. The hour needs a silent pool", "yes"),
+    ("insufficient_quota", 3600.0, "the account allowance is gone — the key rests on every model of that provider", "yes, eventually"),
     ("other", 20.0, "unrecognised", "unknown"),
 )
 

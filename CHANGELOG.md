@@ -11,6 +11,8 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.0** | Every refusal sized from its own evidence | Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on Agent Zero v2.12 |
+| **1.7.0.5** | Three numbers, measured on real keys | A daily quota label stops buying an hour by itself: measured on fourteen real keys, a key Google had refused *for the day* answered again **6 to 36 minutes later, 21 times out of 21**, so the label now costs a five-minute re-probe and the hour is bought only after the whole pool has gone twenty minutes without a single answer. A retry hint written in **milliseconds** stopped being read as minutes — `683.050353ms` was becoming 40,983 seconds, and on the sister port that cost five keys between four and twelve hours each in one session. And a **5xx no longer escalates at all**: a 503 is not metered, so a longer rest buys nothing, and the old ladder was measured climbing on a *healthy* pool 7 times out of 16 — once holding a working key for forty seconds while its neighbour was serving. |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
 | **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
 | **1.0.8** | Stop when asked, quarantine when denied | Honors A0's early-stop contract; a permanently denied key is benched instead of retried |
@@ -50,20 +52,178 @@ graph LR
 
 ---
 
-## Withdrawn
+## v1.8.1.0 — current
 
-Work exists after v1.2.0 and is **not** published here. Its releases and tags
-were removed on 2026-09-04 because none of it had ever been installed into a
-real Agent Zero or answered a single turn, and shipping versions nobody had
-run was doing more harm than good.
+**In short:** the Hermes port's 1.8.x rules, brought across and checked the way
+the rule from 2026-09-04 demands — in a real session, not only in a test suite.
 
-It is not lost — the same reasoning, measured against real provider payloads,
-is in the Hermes port's changelog, and the Agent Zero side will be published
-when it has survived a real session rather than a test suite.
+- **Gemini's bare `429 RESOURCE_EXHAUSTED`** (no `retryDelay`, no `quotaId`, no
+  `Retry-After`) rests the refused key **1s, then 2, 4, 8, 16, 32, 64s** on each
+  repeat, reset the moment it answers — instead of a flat rest. A number the
+  provider states is always obeyed and never multiplied; every other error
+  keeps its own rest. In real use on the Hermes side it made fewer calls per
+  minute than the flat rest (24 against 29) without answering less.
+  Settings: `unsized_throttle_backoff`, `unsized_backoff_max_seconds`.
+- **No key is ever held longer than an hour** (`max_hold_seconds`), whatever set
+  the hold — a provider's stated wait, the daily cooldown or the engine's own
+  escalation. Five real refusals had been measured holding a key 3h+.
+- **A throttle that names no wait rests 30s** (was 20s). Measured: retried
+  within 30s, a refused key answered 0 of 73 times. Setting:
+  `unsized_throttle_rest_seconds`.
+- **A timeout rotates without benching the key** — when the attempt really
+  waited. A failure that took no time keeps its three seconds: the first real
+  session caught an instant connection error whose text said "Timeout" spinning
+  the pool twice a second, and that is now a test.
+- **Out of credit belongs to the account:** the key rests on every model of
+  that provider, not only the one that asked.
+- The environment variables `KAME_MAX_HOLD`, `KAME_UNSIZED_REST`,
+  `KAME_UNSIZED_BACKOFF` and `KAME_UNSIZED_BACKOFF_MAX` override the settings
+  page, with the same names as on Hermes.
+- `/kame doctor`'s rest table is now checked against the classifier itself, not
+  against its own numbers.
+- **An adversarial review** (a second model told to break the port) found eight
+  defects; all fixed, each now a test. The ones that mattered: a number the
+  provider stated earlier for a key now outranks the ladder, learned per key
+  and forgotten on an answer, as Hermes keeps it; a 503 between two bare
+  refusals no longer resets the ladder; an outage thaw can no longer cut an
+  out-of-credit hour; a stated sub-second wait is floored at 1s; only the
+  structured `RESOURCE_EXHAUSTED` status (not the word in prose) is the
+  ladder's shape; `Retry-After` is read from every place LiteLLM puts it; a
+  retry hint no longer swallows the next digits after its full stop.
+
+**Verified:**
+
+| Check | Result |
+|---|---|
+| Two real sessions — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | 26 / 26 answered, 16 of them concurrent; 13 real `503`s absorbed at 1s each; all 14 keys carried traffic |
+| Live harness on a real Agent Zero checkout | all green on v2.11 and v2.12 |
+| `tools/a0_upgrade_check.py` against v2.12 | 12 / 12 symbols and 12 / 12 host facts; baseline re-pinned to v2.12 after reading the three changed symbols |
+| Offline suites | 14 / 14 |
+
+Versions 1.6.0.x and 1.7.0.x were built but never published on their own;
+everything they did is part of this release.
 
 ---
 
-## v1.2.0 — current
+## v1.7.0.5 — folded into 1.8.1.0
+
+Built on 2026-09-07 and never published on its own: the rule from 2026-09-04
+was that nothing ships until it has answered a real turn, and 1.8.1.0 is the
+release that did. Everything below is part of it.
+
+### Why the number jumps from v1.2.0 — and why it is .5
+
+Two things are happening in this heading and they are worth separating.
+
+**The jump** is that everything between v1.2.0 and here was withdrawn on
+2026-09-04, for the reason recorded below: none of it had ever been installed
+into a real Agent Zero or answered a single turn. That rule has not been
+relaxed. What changed is that the work in **this** release was measured against
+real provider payloads — thousands of them, recorded off the wire — rather than
+against a test suite that agrees with its author.
+
+**The .5** is that the two ports now share a number on purpose. They had drifted
+to 1.6.0.4 here and 1.7.0.5 there, and a version that means a different thing on
+each side is exactly how a question like *"which one has the daily fix?"* stops
+having an answer. From here the number is the same on both, and a release on one
+side bumps the other even when its own code did not change. This release is the
+first of those: the Agent Zero code is what 1.7.0.4 was, renumbered, because
+1.7.0.5 on the Hermes side fixed a panel that does not exist here.
+
+
+The measurements were taken on the Hermes port, which is the one running in
+production. This release brings the three findings across after running both
+engines over the same recorded refusals and diffing the verdicts.
+
+### 1. A daily quota label is evidence, not proof
+
+Fourteen real keys, probed every two minutes across four models. A key that
+Google had refused with `GenerateRequestsPerDayPerProjectPerModel-FreeTier`
+answered again:
+
+```
+samples                    21
+min / median / max         6 / 16 / 36 minutes
+that reached a full hour    0
+```
+
+Nothing in the payload separates those from a genuine exhaustion: same
+`quotaId`, same `quotaValue: 20`, same prose, same retry hint. So the decision
+moves off the label and onto the pool. **While any key on that
+`provider:model` is still answering, a daily label costs a five-minute
+re-probe.** The hour is bought only once the whole pool has gone twenty minutes
+without a single answer — the longest silence ever measured on a model that
+still had capacity was fifteen.
+
+Until now `_classify_error` floored every daily refusal at the full cooldown
+and `_mark_key_health` kept it, so the first label cost the hour outright and
+the doubling ladder behind it could never fire. That ladder is gone; it was
+measuring the wrong thing.
+
+`insufficient_quota` is split out and keeps the hour unconditionally. No amount
+of pool liveness makes a key with no credit work.
+
+### 2. A millisecond is not a minute
+
+Google writes `Please retry in 683.050353ms` whenever the wait is under a
+second. `_parse_duration_to_seconds` listed its units with `m` ahead of any
+`ms` branch, and Python takes the leftmost alternative that matches — so the
+`m` matched, the trailing `s` was left behind, and the hint was read as 683
+**minutes**.
+
+```
+683.050353ms  ->  40,983 s  (11.4 hours)
+900ms         ->  54,000 s  (15 hours)
+```
+
+On the sister port, which reaches this reader on the daily path, that cost five
+keys between four and twelve hours each inside a single ninety-minute session,
+and only a manual pool reset brought them back. The millisecond spellings now
+lead the alternation.
+
+### 3. A 5xx never escalates
+
+A 503 is not metered. It costs no quota, so a longer rest buys nothing at all
+and only holds back a credential that was never at fault.
+
+The ladder added in v1.0.1 — 5s, 10s, 20s, 40s, 80s, capped at 90 — was written
+for a real 83-minute Gemini outage, and for that case it worked. What ended it
+is the case it was never asked about: `consecutive_server` is per key and only
+that key's own success clears it, so a key that caught two blips while the rest
+of the pool answered normally still climbed. Measured, every 503 that cost more
+than the base:
+
+```
+escalated while another key had answered in the last 120s    7
+escalated with nothing answering (the case the ladder is for) 9
+```
+
+The worst of the seven held a healthy key for forty seconds while its
+neighbour was serving.
+
+The base fell with it, from 5s to **1s**. Measured across 59 real episodes, the
+gap before that same key was offered again was never below 7.2 seconds — on a
+pool of fourteen the five had never bound at all. It only binds on a pool of
+one or two keys, and there it was four dead seconds on the only credential
+available.
+
+**The trade, stated rather than discovered later:** during a genuinely
+sustained outage the pool no longer goes fully cold, so the ETA sleep does not
+engage and the carousel keeps turning. That is
+`decisions/0002-eternal-carousel-no-timeout` working as specified, it spends no
+quota, and the storm-collapse keeps the log readable.
+
+### Verified
+
+| | |
+|---|---|
+| suite | every script under `tests/` passes |
+| both engines over the same real refusals | the remaining differences are vocabulary, not verdict |
+| what did not move | `insufficient_quota`, a stated wait on a 5xx, dead-key retirement, the 403 per-model scope |
+
+---
+
+## v1.2.0
 
 **The wait is said where the user is looking, and the settings screen admits
 that its settings are not equally interesting.**

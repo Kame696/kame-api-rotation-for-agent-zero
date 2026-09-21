@@ -181,18 +181,16 @@ check("the reasoning shim sets the reasoning flag",
 
 # --- C. the release ---------------------------------------------------------
 
-check("the engine says 1.6.0.4", K.KAME_VERSION == "1.6.0.4")
-
-here = os.path.dirname(__file__)
-manifest = open(os.path.join(here, "..", "plugin.yaml"), encoding="utf-8").read()
-check("plugin.yaml agrees with the engine, to the digit",
-      "version: 1.6.0.4" in manifest)
-
-changelog = open(os.path.join(here, "..", "CHANGELOG.md"), encoding="utf-8").read()
-check("the changelog has a 1.6.0.4 entry", "## v1.6.0.4" in changelog)
-check("the changelog marks exactly one release current",
-      changelog.count("— current") == 1)
-
+# --- the release block used to live here ---------------------------------
+#
+# It read `check("the engine says 1.6.0.4", K.KAME_VERSION == "1.6.0.4")` plus
+# the matching manifest and changelog pins, and it was guaranteed to fail on
+# the *next* release — which is the opposite of what a tripwire is for. A
+# version assertion belongs with the release that wrote it, so it moved to
+# `tests/test_v1_7_0_4.py` and moves again with the release after that.
+#
+# What stays here is what this file is actually about: a thinking token is not
+# an answer. Those checks are above and they are version-independent.
 
 print("=" * 60)
 if _failures:
