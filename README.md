@@ -184,6 +184,16 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 
 In development since early 2026, and every release came from a real log, not from theory. One line per version here; the full story of each is in [CHANGELOG.md](CHANGELOG.md).
 
+> **v1.8.1.0's error reader, by the numbers:** built from **13,561 real
+> refusals** (311 distinct messages) and graded against an independent answer
+> key of **68 error shapes, sorted into 11 kinds of error, across 12 providers
+> and gateways** — Google Gemini, OpenAI, OpenAI Codex, Anthropic, NVIDIA,
+> OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux and GLM. Every
+> verdict comes from the payload itself — status, structured error code,
+> headers, then prose — never from a list of known provider names, so a
+> provider outside these 12, including one that does not exist yet, is read
+> by the same rules on its first refusal.
+
 <details>
 <summary><b>Every version, one line each (click to open)</b></summary>
 

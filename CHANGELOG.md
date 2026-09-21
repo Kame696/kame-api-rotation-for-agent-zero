@@ -9,6 +9,15 @@ rather than as a wall of prose.
 
 ## 📌 At a glance
 
+> **v1.8.1.0's error reader, by the numbers:** built from **13,561 real
+> refusals** (311 distinct messages) and graded against an independent answer
+> key of **68 error shapes, sorted into 11 kinds of error, across 12 providers
+> and gateways** — Google Gemini, OpenAI, OpenAI Codex, Anthropic, NVIDIA,
+> OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux and GLM. Every
+> verdict comes from the payload itself, never from a list of known provider
+> names, so a provider outside these 12 is read the same way on its first
+> refusal. Detail: [the section below](#v1810--current).
+
 | Version | Headline | What changed for you |
 |---|---|---|
 | **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0: the provider's own number obeyed and never inflated, per-minute told from per-day, a daily label costing a 5-minute re-probe instead of an hour, 5xx never escalating, a refused model no longer benching the key. And Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on Agent Zero v2.12 |
