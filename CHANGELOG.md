@@ -11,7 +11,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
-| **1.8.1.0** | Every refusal sized from its own evidence | Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on Agent Zero v2.12 |
+| **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0: the provider's own number obeyed and never inflated, per-minute told from per-day, a daily label costing a 5-minute re-probe instead of an hour, 5xx never escalating, a refused model no longer benching the key. And Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on Agent Zero v2.12 |
 | **1.7.0.5** | Three numbers, measured on real keys | A daily quota label stops buying an hour by itself: measured on fourteen real keys, a key Google had refused *for the day* answered again **6 to 36 minutes later, 21 times out of 21**, so the label now costs a five-minute re-probe and the hour is bought only after the whole pool has gone twenty minutes without a single answer. A retry hint written in **milliseconds** stopped being read as minutes — `683.050353ms` was becoming 40,983 seconds, and on the sister port that cost five keys between four and twelve hours each in one session. And a **5xx no longer escalates at all**: a 503 is not metered, so a longer rest buys nothing, and the old ladder was measured climbing on a *healthy* pool 7 times out of 16 — once holding a working key for forty seconds while its neighbour was serving. |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
 | **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
@@ -56,6 +56,31 @@ graph LR
 
 **In short:** the Hermes port's 1.8.x rules, brought across and checked the way
 the rule from 2026-09-04 demands — in a real session, not only in a test suite.
+
+**Coming from v1.2.0 — a new error reader.** v1.2.0 was the last public
+release. Everything since changes how each refusal is judged, and every rule
+was measured on real refusals first:
+
+- **The provider's own number is obeyed, never inflated.** A stated
+  `retryDelay`, `Retry-After` or "retry in N s" is used to the second — never
+  multiplied, no floor raised over it beyond a 1-second minimum — and
+  `Retry-After` is read from every place LiteLLM puts it.
+- **Per-minute and per-day limits are told apart** by Gemini's `quotaId`, the
+  one field that separates them.
+- **A daily label buys a 5-minute re-probe, not an hour.** Keys Google refused
+  "for the day" answered again 6 to 36 minutes later, 21 times out of 21; the
+  hour applies once the whole pool has gone 20 minutes without an answer.
+- **A millisecond is no longer read as a minute** (`683ms` had become 683
+  minutes).
+- **A 5xx never escalates:** 1s, because an outage is not the key's fault.
+- **A refused model is not a refused key:** a 403 for one model skips only that
+  model; a bare 401 rests 20s and leaves the rotation after 3 in a row; a key
+  reported invalid is retired at once and never picked again while it looks
+  "ready".
+- **A model that only thought and answered nothing** is retried on another key
+  instead of ending the turn.
+
+**New in 1.8.1.0 itself:**
 
 - **Gemini's bare `429 RESOURCE_EXHAUSTED`** (no `retryDelay`, no `quotaId`, no
   `Retry-After`) rests the refused key **1s, then 2, 4, 8, 16, 32, 64s** on each
