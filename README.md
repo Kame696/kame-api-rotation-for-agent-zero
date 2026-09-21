@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="webui/kame-banner.png" alt="KAME — API key rotation for Agent Zero" width="100%" />
+<img src="webui/kame_banner.jpg" alt="KAME — Key-Aware Management Engine for Agent Zero" width="600" />
 
 # 🐢⚡ KAME — API Key Rotation for Agent Zero
 
