@@ -34,6 +34,14 @@ INCLUDE_FILES = (
     "plugin.yaml",
     "kame_engine.py",
     "kame_activation.py",
+    # v1.8.1.0. kame_evidence.py is REQUIRED by integrity.py; the other three
+    # are optional modules. The first build of the republished 1.8.1.0 left
+    # all four out, which is why `collect()` is now checked against
+    # integrity.py's own lists (tests/test_v1_8_1_0_parity.py).
+    "kame_evidence.py",
+    "kame_journal.py",
+    "kame_settings.py",
+    "kame_keys.py",
     "hooks.py",
     "integrity.py",
     "default_config.yaml",
@@ -87,6 +95,17 @@ def collect() -> list[Path]:
     return found
 
 
+def not_packaged(files) -> list:
+    """Files integrity.py lists (REQUIRED and OPTIONAL) that `files` lacks."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("kame_integrity_for_package", ROOT / "integrity.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    shipped = {p.relative_to(ROOT).as_posix() for p in files}
+    return [n for n in tuple(module.REQUIRED) + tuple(module.OPTIONAL) if n not in shipped]
+
+
 def main() -> int:
     manifest, engine = manifest_version(), engine_version()
     if not manifest:
@@ -101,6 +120,9 @@ def main() -> int:
 
     files = collect()
     missing = [n for n in INCLUDE_FILES if not (ROOT / n).is_file()]
+    # Every file integrity.py names must be in the zip, or the build an
+    # install fingerprints is not the build that was tested.
+    missing += [n for n in not_packaged(files)]
     if missing:
         print("required file(s) not found: " + ", ".join(missing))
         return 1

@@ -373,6 +373,14 @@ check("the report carries the events, the settings and where the files are",
       and rep["data_dir"] == DATA)
 check("no key anywhere in the report", all(k not in json.dumps(rep, default=str) for k in KEYS))
 
+# The first zip of the republished 1.8.1.0 left out kame_evidence.py — a file
+# integrity.py REQUIRES — and the three optional modules. The release zip must
+# carry every file integrity.py names.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import package as _package  # noqa: E402
+check("the release zip carries every file integrity.py names",
+      _package.not_packaged(_package.collect()) == [], _package.not_packaged(_package.collect()))
+
 print("=" * 60)
 if _failures:
     print("FAILURES:", _failures)
