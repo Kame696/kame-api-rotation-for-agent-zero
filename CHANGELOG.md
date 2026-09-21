@@ -61,6 +61,15 @@ the rule from 2026-09-04 demands — in a real session, not only in a test suite
 release. Everything since changes how each refusal is judged, and every rule
 was measured on real refusals first:
 
+> **What it was measured on:** **13,561 real refusals** (311 distinct messages)
+> recorded from Gemini, NVIDIA, OpenRouter, Anthropic and OpenAI-compatible
+> endpoints, and an independent answer key of **68 error shapes from 12
+> providers and gateways** — Google Gemini, OpenAI, OpenAI Codex, Anthropic,
+> NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux and GLM —
+> sorted into **11 kinds of error**. The answer key graded the Hermes port,
+> where these rules were built; this port runs the same rules and is held to
+> them by its parity suite.
+
 - **The provider's own number is obeyed, never inflated.** A stated
   `retryDelay`, `Retry-After` or "retry in N s" is used to the second — never
   multiplied, no floor raised over it beyond a 1-second minimum — and
