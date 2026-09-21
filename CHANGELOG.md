@@ -122,13 +122,13 @@ relaxed. What changed is that the work in **this** release was measured against
 real provider payloads — thousands of them, recorded off the wire — rather than
 against a test suite that agrees with its author.
 
-**The .5** is that the two ports now share a number on purpose. They had drifted
-to 1.6.0.4 here and 1.7.0.5 there, and a version that means a different thing on
-each side is exactly how a question like *"which one has the daily fix?"* stops
-having an answer. From here the number is the same on both, and a release on one
-side bumps the other even when its own code did not change. This release is the
-first of those: the Agent Zero code is what 1.7.0.4 was, renumbered, because
-1.7.0.5 on the Hermes side fixed a panel that does not exist here.
+**The .5** is that the two ports now share a number on purpose. Their numbers
+had drifted apart, and a version that means a different thing on each side is
+exactly how a question like *"which one has the daily fix?"* stops having an
+answer. From here the number is the same on both, and a release on one side
+bumps the other even when its own code did not change. This release is the
+first of those: its last step on the other port fixed a panel that does not
+exist here.
 
 
 The measurements were taken on the Hermes port, which is the one running in
