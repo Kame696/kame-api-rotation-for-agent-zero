@@ -33,6 +33,10 @@ import os
 #: would make `complete` mean nothing.
 REQUIRED = (
     "kame_engine.py",
+    # v1.8.1.0: the evidence reader. Without it the engine still rotates, on
+    # its pre-1.8.1.0 rules — which is exactly the silent downgrade this list
+    # exists to make loud.
+    "kame_evidence.py",
     "kame_activation.py",
     "hooks.py",
     "plugin.yaml",
@@ -47,6 +51,15 @@ REQUIRED = (
 #: rotation. Reported separately so a reader can tell a broken install from a
 #: partial one.
 OPTIONAL = (
+    # v1.8.1.0: events, refusal recorder, call timings, key health on disk.
+    # Optional: without it rotation is unchanged and those four go quiet.
+    "kame_journal.py",
+    "kame_settings.py",
+    "kame_keys.py",
+    "commands/kame_quota.command.yaml",
+    "commands/kame_quota_command.py",
+    "commands/kame_keys.command.yaml",
+    "commands/kame_keys_command.py",
     "api/kame_status.py",
     "webui/kame-rotation-store.js",
     "webui/config.html",

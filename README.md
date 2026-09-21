@@ -78,10 +78,16 @@ key1,key2,key3,key4
 Or in `/a0/usr/.env`:
 
 ```
-API_KEY_GEMINI=AIzaSy...aaa,AIzaSy...bbb,AIzaSy...ccc
+API_KEY_GOOGLE=AIzaSy...aaa,AIzaSy...bbb,AIzaSy...ccc
 ```
 
 One key works too; there is just nothing to rotate to.
+
+Or from any chat: `/kame-keys add AIza...,AIza...` (the provider is read from the
+prefix; name it when it cannot be: `/kame-keys add deepseek sk-...,sk-...`), or
+`/kame-keys import google keys.txt` to keep the keys out of the chat history.
+Keys already there are skipped, and the previous `.env` is saved beside it as
+`.env.kame-<timestamp>.bak` (plaintext like the `.env`, last 5 kept).
 
 <a id="errors"></a>
 ## 🧠 How KAME reads every error
@@ -109,6 +115,9 @@ Every refusal is sized from what the provider actually sent. Decisions are made 
 - **A rotation chip beside the composer** — how many keys are ready right now; a click shows every pool.
 - **A notice in the chat** when every key is resting for more than ~90 seconds: how many are resting, when the earliest is back, and that **stop still works**. Counts only — never a key — and it never enters the model's history.
 - **`/kame`** — build, pools, what is ready. **`/kame doctor`** — every kind of refusal beside the rest it got, how often it happened, and anything only a person can fix.
+- **`/kame events`** — the last decisions, newest first: which key was refused and why, which took over, which answered, when the pool waited, when a setting changed.
+- **`/kame get` · `/kame set <name> <value>` · `/kame reset <name|all>`** — every setting from the chat, in force on the next call. **`/kame clear-pool`** — every key starts again from zero.
+- **`/kame-quota`** — per key and model: resting or ready, back in how long, and why. **`/kame-keys`** — add, import and inspect keys in bulk, masked.
 - **One line per decision in the log**, with the key as an anonymous fingerprint (`k3f9a1`):
 
 ```
@@ -134,6 +143,12 @@ Every refusal is sized from what the provider actually sent. Decisions are made 
 | 🔒 **Rate-limiter lock fix** | Replaces an `asyncio.Lock` that could deadlock under a specific concurrency pattern |
 | 🧯 **Unusable-response floor** | Raises A0's "stop after N unparseable replies" to a floor (default 5), never a ceiling |
 | 💬 **The wait, said out loud** | The chat notice above |
+| 🗂️ **Events timeline** | The last 150 decisions in memory — refused, took over, answered, waited, handed back, setting changed |
+| 📝 **Refusal recorder** | Every refusal to `refusals.jsonl`, keys removed first, 8 MB cap — evidence for the next rule, decides nothing |
+| ⏱️ **Call timings** | One line per attempt to `calls.jsonl`: time to first sign, to first text, total, time already waited — no key, prompt or answer |
+| 💾 **Key health across restarts** | Holds kept on disk as hashes; a restart does not re-spend calls on keys known to be out, and never holds past the ceiling |
+| 🔌 **Off switches** | Turn KAME off, give back key selection, or stop rotating per call — without uninstalling |
+| 🐢 **Same as the Hermes port** | Same error reader, same settings, same environment variables, same commands |
 | 🧹 **Clean uninstall** | Every patch reverted by `hooks.py` |
 
 </details>
@@ -141,7 +156,7 @@ Every refusal is sized from what the provider actually sent. Decisions are made 
 <a id="settings"></a>
 ## ⚙️ Settings
 
-Nothing needs changing. Every setting is on the plugin's settings page; the newest ones also read an environment variable (the environment wins).
+Nothing needs changing. Every setting is on the plugin's settings page and in `/kame get` / `/kame set`; most also read an environment variable with the **same name as on the Hermes port** (the environment wins).
 
 <details>
 <summary><b>The ones worth knowing</b></summary>
@@ -157,6 +172,12 @@ Nothing needs changing. Every setting is on the plugin's settings page; the newe
 | `kame_unusable_response_limit` | `5` | The floor under A0's unparseable-reply stop (`0` = leave A0 alone) |
 | `kame_log_level` | `normal` | `silent` · `normal` · `verbose` · `verbose+errors` |
 | `key_log_style` | `fingerprint` | How keys appear in logs; never the full key |
+| `share_pool_health` | on | Keep key holds on disk so a restart does not forget them (`KAME_SHARE_POOL_HEALTH`) |
+| `refusal_recorder_disabled` | off | Stop writing `refusals.jsonl` (`KAME_RECORDER_DISABLED`) |
+| `call_timings_disabled` | off | Stop writing `calls.jsonl` (`KAME_CALL_TIMINGS_DISABLED`) |
+| `rotation_disabled` | off | Turn KAME off without uninstalling it (`KAME_ROTATION_DISABLED`) |
+| `spread_disabled` | off | First ready key in the order written, not the least loaded (`KAME_SPREAD_DISABLED`) |
+| `carousel_disabled` | off | One attempt per call; the error goes back to Agent Zero (`KAME_CAROUSEL_DISABLED`) |
 
 </details>
 
@@ -165,6 +186,8 @@ Nothing needs changing. Every setting is on the plugin's settings page; the newe
 
 - **KAME never prints, logs or sends a key.** Logs, the chip, the chat notice and `/kame` carry fingerprints and counts only.
 - **No telemetry, no network call of its own, no third-party package.** Agent Zero makes every model call.
+- **What stays on disk** lives in `usr/plugin-data/api_rotation_by_kame/`: `refusals.jsonl` (keys removed before writing), `calls.jsonl` (durations and fingerprints only) and `pool-health.json` (a hash of each key, never the key). Each has an off switch.
+- **`/kame-keys add|import`** write `usr/.env`, after saving the previous file as `.env.kame-<timestamp>.bak` beside it — plaintext, like the `.env` itself; the last 5 are kept.
 
 <a id="verified"></a>
 ## ✅ Verified
@@ -172,9 +195,11 @@ Nothing needs changing. Every setting is on the plugin's settings page; the newe
 | Check | Result |
 |---|---|
 | Two real sessions — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | **26 / 26 answered**, 16 of them concurrent; 13 real `503`s absorbed at 1s each; all 14 keys carried traffic |
+| A third real session, after the parity work — Agent Zero v2.12, real LiteLLM, NVIDIA NIM, 2 real keys | **12 / 12 answered**, 6 of them concurrent, the two keys sharing the load evenly; every refusal, hold and timing written to disk with **no key fragment** in any file. The same day's Gemini pool (14 keys) was out of its daily quota: every key got a `PerDay` refusal, a 5-minute re-probe, and the holds survived a restart of the process; a retired model (`410 Gone`) was handed back to Agent Zero instead of rotated |
 | Live harness — KAME's real patches applied to a real Agent Zero checkout | **all green** on v2.11 and v2.12 |
-| Upgrade check — every Agent Zero symbol KAME touches | **12 / 12** fingerprints and **12 / 12** host facts hold on v2.12 |
-| Offline tests | **14 / 14** suites green, including the 1.8.1.0 parity suite with the Hermes port |
+| Upgrade check — every Agent Zero symbol KAME touches | **15 / 15** fingerprints (three new in 1.8.1.0: the plugin config writer, the `.env` writer, the script-command runner) and **12 / 12** host facts hold on v2.12 |
+| Offline tests | **17 / 17** suites green, including the 1.8.1.0 parity, commands and error-reader suites |
+| Answer-key gate — 1,897 real recorded refusals, judged by each port's own engine | A0 and Hermes agree on **every field** (family 100, window 99.69, scope 99.88, action 98.89) |
 | Adversarial review | a second model tried to break the port; its 8 findings are fixed and each is now a test |
 
 The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op, because it breaks HTTP timeouts on the Python 3.14 used for the test; Agent Zero's own Docker image runs an older Python where the shim works. The tool is `tools/live_a0_session.py`.
@@ -199,7 +224,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
-| **v1.8.1.0** | Every refusal sized from its own evidence | A new error reader since v1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates. Gemini's bare `429 RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder, reset the moment a key answers; no key is held longer than an hour; a throttle with no number rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on A0 **v2.12**. |
+| **v1.8.1.0** | Every refusal sized from its own evidence | A new error reader since v1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates. Gemini's bare `429 RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder, reset the moment a key answers; no key is held longer than an hour; a throttle with no number rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, `/kame events`, refusal recorder and call timings, key health across restarts, off switches, `/kame get·set·reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on A0 **v2.12**. |
 | **v1.7.0.5** | Three numbers, measured on real keys | A daily-quota label alone buys a 5-minute re-probe, not an hour (refused keys came back in 6–36 minutes, 21 of 21); a retry hint in **milliseconds** is no longer read as minutes; a **5xx never escalates**. Shipped inside 1.8.1.0. |
 | **v1.2.0** | The wait, said out loud | An all-keys-cooling wait now appears **in the chat**, not only on the console, and the settings screen was rebuilt so an on-by-default toggle stops rendering as off. Verified on A0 **v2.10**. |
 | **v1.0.9** | KAME stops re-implementing Agent Zero | KAME only **chooses the key**; A0 owns the request, the stream, the parsing and the result. Live-verified on six A0 tags, one code path. |

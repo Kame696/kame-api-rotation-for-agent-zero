@@ -147,6 +147,85 @@
         </div>
       </div>
 
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Full raw errors</div>
+          <div class="field-description">
+            Every failure also writes the provider's complete, untruncated message beside KAME's one-line verdict, even at <b>silent</b>. For checking a classification; rotation is unchanged. <b>verbose+errors</b> above turns this on by itself.
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.kame_log_full_errors"
+              x-init="if (config.kame_log_full_errors === undefined || config.kame_log_full_errors === null) config.kame_log_full_errors = false"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+      <div class="section-title">Records and memory</div>
+      <div class="section-description">
+        What KAME keeps beyond the current call, all of it in
+        <code>usr/plugin-data/api_rotation_by_kame/</code> — outside the plugin
+        folder, so an update never touches it. Never a key: only a hash or a
+        fingerprint of one. None of it changes a decision.
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Keep key health across restarts</div>
+          <div class="field-description">
+            Holds are written to <code>pool-health.json</code>, so restarting Agent Zero does not spend calls on keys already known to be out. A hold read back is never longer than the ceiling below; a file that is missing or damaged is simply ignored. Same switch as the Hermes port (<code>KAME_SHARE_POOL_HEALTH</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.share_pool_health"
+              x-init="if (config.share_pool_health === undefined || config.share_pool_health === null) config.share_pool_health = true"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Stop recording refusals</div>
+          <div class="field-description">
+            KAME writes each refusal a provider sends to <code>refusals.jsonl</code> — status, message and body, keys removed first, 8 MB at most — so a rule can later be checked against what really arrived. It decides nothing from it. Turn this on to stop the writing (<code>KAME_RECORDER_DISABLED</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.refusal_recorder_disabled"
+              x-init="if (config.refusal_recorder_disabled === undefined || config.refusal_recorder_disabled === null) config.refusal_recorder_disabled = false"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Stop timing calls</div>
+          <div class="field-description">
+            One line per attempt to <code>calls.jsonl</code>: how long until anything came back, until the answer started, the whole attempt, and how long the call had already waited. No key, no prompt, no answer text; 4 MB at most. Turn this on to stop the writing (<code>KAME_CALL_TIMINGS_DISABLED</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.call_timings_disabled"
+              x-init="if (config.call_timings_disabled === undefined || config.call_timings_disabled === null) config.call_timings_disabled = false"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
       <div class="section-title">Tuning</div>
       <div class="section-description">
         Numbers already set to what this plugin was built and tested
@@ -290,6 +369,67 @@
             x-model.number="config.kame_unusable_response_limit"
             x-init="if (config.kame_unusable_response_limit === undefined || config.kame_unusable_response_limit === null) config.kame_unusable_response_limit = 5"
           />
+        </div>
+      </div>
+      <div class="section-title">Turn parts of KAME off</div>
+      <div class="section-description">
+        For ruling KAME out when something looks wrong, without uninstalling
+        it. Each one hands a job back to Agent Zero. Same names and
+        environment variables as the Hermes port; an environment variable
+        wins over this page.
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Turn KAME off</div>
+          <div class="field-description">
+            Every call goes to Agent Zero exactly as if KAME were not installed. The plugin stays installed and does nothing (<code>KAME_ROTATION_DISABLED</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.rotation_disabled"
+              x-init="if (config.rotation_disabled === undefined || config.rotation_disabled === null) config.rotation_disabled = false"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Give back key selection</div>
+          <div class="field-description">
+            Cooldowns stay, but the first ready key in the order you wrote them is used instead of the least-loaded one (<code>KAME_SPREAD_DISABLED</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.spread_disabled"
+              x-init="if (config.spread_disabled === undefined || config.spread_disabled === null) config.spread_disabled = false"
+            />
+            <span class="toggler"></span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Stop rotating per call</div>
+          <div class="field-description">
+            A refused key is still rested for as long as the evidence says, but the error goes back to Agent Zero instead of KAME trying the next key (<code>KAME_CAROUSEL_DISABLED</code>).
+          </div>
+        </div>
+        <div class="field-control">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              x-model="config.carousel_disabled"
+              x-init="if (config.carousel_disabled === undefined || config.carousel_disabled === null) config.carousel_disabled = false"
+            />
+            <span class="toggler"></span>
+          </label>
         </div>
       </div>
     </div>

@@ -93,6 +93,12 @@ def main() -> int:
 
     import models  # noqa: E402
 
+    # v1.8.1.0: the plugin directory on the path, last, so the engine's
+    # optional modules (kame_evidence, kame_journal) load here exactly as they
+    # do in an install. Without it they were silently absent from this run:
+    # the error reader fell back to the legacy rules and no event, refusal or
+    # timing was recorded.
+    sys.path.append(HERE)
     spec = importlib.util.spec_from_file_location("kame_engine", os.path.join(HERE, "kame_engine.py"))
     kame = importlib.util.module_from_spec(spec)
     sys.modules["kame_engine"] = kame
@@ -170,6 +176,12 @@ def main() -> int:
     for ln in lines[:12]:
         print("   ", ln.strip()[:170])
     print(f"report keys: {sorted(report)[:8]}")
+    # v1.8.1.0: say which optional parts actually ran, and what they recorded.
+    print(f"error reader loaded: {getattr(kame, '_KE', None) is not None} · "
+          f"journal loaded: {getattr(kame, '_KJ', None) is not None}")
+    events = report.get("events") or []
+    print(f"events: {dict(collections.Counter(e.get('kind') for e in events))} · "
+          f"files: {report.get('data_dir') or 'none (set KAME_DATA_DIR to write them)'}")
 
     answered = sum(1 for r in results if r[1])
     total = args.calls + args.burst

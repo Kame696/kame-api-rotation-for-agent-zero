@@ -106,6 +106,29 @@
       "severity": "degraded",
       "optional": true,
       "why": "Added in A0 v2.4: aborts a turn after N consecutive UNPARSEABLE model outputs. KAME's _95_kame_unusable_floor raises that limit to a floor, and to do so it reads A0's own counter out of loop_data.params_persistent['_unusable_response_failures'] and only ever clears a HandledException. If A0 renames that state key or stops staging the abort in data['exception'], the floor silently stops lifting and A0's own limit applies again - rotation is untouched. Absent on A0 < v2.4, where the shield is inert by design (marked optional: a MISSING here is expected, not a break)."
+    },
+    {
+      "id": "helpers.plugins.save_plugin_config",
+      "module": "helpers.plugins",
+      "symbol": "save_plugin_config",
+      "severity": "degraded",
+      "optional": true,
+      "why": "v1.8.1.0: `/kame set` and `/kame reset` save a setting through Agent Zero's own plugin config (plugin_name, project_name, agent_profile, settings). If it moves, those two commands stop saving; the settings page, the environment and rotation are untouched."
+    },
+    {
+      "id": "helpers.dotenv.save_dotenv_value",
+      "module": "helpers.dotenv",
+      "symbol": "save_dotenv_value",
+      "severity": "degraded",
+      "why": "v1.8.1.0: `/kame-keys add|import` merge keys into the provider's usr/.env line through Agent Zero's own writer, which also reloads the environment. If it changes, adding keys from the chat stops; keys pasted in Settings still rotate."
+    },
+    {
+      "id": "plugins._commands.helpers.commands._run_script_command",
+      "module": "plugins._commands.helpers.commands",
+      "symbol": "_run_script_command",
+      "severity": "degraded",
+      "optional": true,
+      "why": "v1.8.1.0: /kame, /kame-quota and /kame-keys are script commands; their run(payload) reads invocation.raw_arguments and context.agent and answers with show_markdown / toast effects. Added in A0 v2.11 (MISSING before is expected). If the payload shape changes the commands stop answering; rotation is untouched."
     }
   ],
   "fingerprints": {
@@ -120,6 +143,9 @@
     "helpers.history.Bulk.summarize": "f09b763d8a201915",
     "helpers.rate_limiter.RateLimiter": "debd59b4e743b93b",
     "helpers.errors.RepairableException": "8a331b4c4b1d03ba",
-    "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute": "f108bbe2ffccc8e3"
+    "extensions.python._functions.agent.Agent.hist_add_warning.end._90_stop_unusable_response_loop.StopUnusableResponseLoop.execute": "f108bbe2ffccc8e3",
+    "helpers.plugins.save_plugin_config": "8949b67e772db923",
+    "helpers.dotenv.save_dotenv_value": "0ad79b14f80f1967",
+    "plugins._commands.helpers.commands._run_script_command": "0dd47eca07f679b5"
   }
 }

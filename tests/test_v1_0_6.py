@@ -209,10 +209,13 @@ check("a short key (<=16 chars) is shown in full (nothing to usefully hide)",
 # Zero owns the stream now, so a connect-time auth error simply raises out of
 # the delegated call and lands in the ONE outer handler. One call site, one check.
 _src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"), encoding="utf-8").read()
+# v1.8.1.0: the carousel's credential branch moved into `_kame_decide_failure`
+# (one function the loop, the tests and the answer-key gate share); the loop
+# only prints what it decided. Same promise, checked where it now lives.
 check("there is exactly ONE carousel auth-error call site left (stream handler is gone)",
-      _src.count("_is_auth_error(") == 3)  # def + _classify_error + the carousel
+      _src.count("_is_auth_error(") == 3)  # def + _is_terminal_error + _kame_decide_failure
 check("no 'if _lvl_normal():' gate right after the outer auth check",
-      "if _lvl_normal():" not in _src.split("_is_auth_error(e):")[1][:400])
+      "if _lvl_normal():" not in _src.split('if kind in ("auth", "revoked"):')[1][:400])
 
 
 print("=" * 60)

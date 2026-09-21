@@ -96,6 +96,13 @@ def activate(agent=None):
                 ("unsized_throttle_rest_seconds", "set_unsized_throttle_rest", 30),
                 ("unsized_throttle_backoff", "set_unsized_backoff", True),
                 ("unsized_backoff_max_seconds", "set_unsized_backoff_max", 64),
+                # v1.8.1.0: the rest of the Hermes switches, same names.
+                ("rotation_disabled", "set_rotation_disabled", False),
+                ("spread_disabled", "set_spread_disabled", False),
+                ("carousel_disabled", "set_carousel_disabled", False),
+                ("refusal_recorder_disabled", "set_recorder_disabled", False),
+                ("call_timings_disabled", "set_call_timings_disabled", False),
+                ("share_pool_health", "set_share_pool_health", True),
             ):
                 _fn = getattr(_kame_engine, _setter, None)
                 if _fn is not None:
@@ -110,6 +117,15 @@ def activate(agent=None):
             _env = getattr(_kame_engine, "_kame_apply_env_overrides", None)
             if _env is not None:
                 _env()
+        except Exception:
+            pass
+
+        # v1.8.1.0: a setting that changed since the last activation goes on
+        # the events timeline, beside the decisions it may have changed.
+        try:
+            _note = getattr(_kame_engine, "note_setting_changes", None)
+            if _note is not None:
+                _note()
         except Exception:
             pass
 

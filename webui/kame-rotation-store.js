@@ -121,7 +121,25 @@ function buildView(data) {
     })),
   }));
 
+  // v1.8.1.0: the last few decisions, newest first — the same timeline
+  // `/kame events` prints. KAME's own phrases and fingerprints only.
+  const GOOD = new Set(["switch", "recovery", "wait", "setting"]);
+  const events = (Array.isArray(d.events) ? d.events : []).slice(0, 6).map((row) => {
+    const when = new Date((Number(row?.at) || 0) * 1000);
+    return {
+      id: String(row?.seq ?? ""),
+      time: Number(row?.at) ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "",
+      kind: String(row?.kind || ""),
+      key: String(row?.key || ""),
+      reason: String(row?.reason || ""),
+      rest: formatSeconds(row?.seconds),
+      good: GOOD.has(String(row?.kind || "")),
+    };
+  });
+
   return {
+    events,
+    hasEvents: events.length > 0,
     available: !!d.available,
     active: !!d.active,
     version: String(d.version || ""),

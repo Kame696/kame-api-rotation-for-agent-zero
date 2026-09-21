@@ -405,6 +405,24 @@ _KAME_RL_FLOOR_S = 1.0
 _KAME_FAST_FAILURE_REST_S = 3.0
 _KAME_UNSIZED_BACKOFF_MAX_S = 64.0
 
+# v1.8.1.0 — measured refutation (the Hermes port's `escalate.stretch`, decision
+# 0004 D3). Every other number this engine uses is READ off a refusal; this is
+# the only one it learns, and only from the one sequence that proves a deadline
+# was too short: the key was held until its deadline, handed back, and refused
+# the same way within three minutes — twice in a row. Then the next hold is
+# doubled (x2, x4, capped x8), bounded per window and by the one-hour ceiling,
+# and one answer from the key forgets it all.
+#
+# Narrower than the Hermes port on purpose: it widens only a wait that was
+# MEASURED — a number the provider stated (or stated earlier for this key), or
+# one named window's default. Gemini's bare-RESOURCE_EXHAUSTED ladder and the
+# daily-label re-probe already have their own measured schedules, owner's rules
+# both, and compounding a second doubling on top of them would change numbers
+# that were validated in real sessions.
+_KAME_SHORT_GRACE_S = 180.0
+_KAME_STRETCH_MAX_FACTOR = 8.0
+_KAME_STRETCH_CAPS = {"per_minute": 300.0, "tokens_per_minute": 300.0, "per_hour": 3600.0}
+
 # --- v1.6.0.1: the wait, said before ninety seconds have passed --------------
 #
 # The chat item in `_kame_wait_notice_tick` waits ninety seconds because it
@@ -598,6 +616,13 @@ def _delay_source(exc, kind: str) -> str:
     """provider / kame / default — see `_KAME_TALLY`."""
     if kind == "other":
         return "default"
+    # v1.8.1.0: a throttle the evidence reader sized says where its number
+    # came from — the provider's field, header or sentence, or one window's
+    # default (KAME's number). A long daily reset the provider stated is the
+    # provider's, and it is served rather than re-probed.
+    judgment = _kame_judgment(exc)
+    if judgment is not None and judgment.family == "throttle" and judgment.seconds is not None:
+        return "provider" if judgment.provider_sized else "kame"
     if kind == "per_minute":
         try:
             return "provider" if _extract_retry_delay(exc, with_source=True)[1] != "default" else "kame"
@@ -724,6 +749,200 @@ def set_unsized_backoff_max(seconds) -> None:
         _KAME_UNSIZED_BACKOFF_MAX_S = v
 
 
+# --- v1.8.1.0: the Hermes switches ------------------------------------------
+# Same names, same meaning, same environment variables as the Hermes port, so
+# one `.env` line reads the same on both hosts. Every one defaults to what
+# KAME did before it existed.
+_KAME_ROTATION_DISABLED = False   # KAME off: every call goes straight to A0
+_KAME_SPREAD_DISABLED = False     # first ready key in list order, not the least loaded
+_KAME_CAROUSEL_DISABLED = False   # one attempt per call: mark the key, hand A0 the error
+
+# `kame_journal.py` holds the events ring, the refusal recorder, the call
+# timings and the key-health file. Optional like every other KAME module: a
+# half-copied directory costs those four and nothing else.
+try:
+    from usr.plugins.api_rotation_by_kame import kame_journal as _KJ
+except Exception:
+    try:
+        import kame_journal as _KJ  # running from the plugin directory, e.g. in tests
+    except Exception:
+        _KJ = None
+
+
+def set_rotation_disabled(enabled) -> None:
+    """v1.8.1.0: turn KAME off without uninstalling it (`KAME_ROTATION_DISABLED`)."""
+    global _KAME_ROTATION_DISABLED
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_ROTATION_DISABLED = flag
+
+
+def set_spread_disabled(enabled) -> None:
+    """v1.8.1.0: first ready key in list order instead of the least loaded."""
+    global _KAME_SPREAD_DISABLED
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_SPREAD_DISABLED = flag
+
+
+def set_carousel_disabled(enabled) -> None:
+    """v1.8.1.0: one attempt per call; the refusal is sized and handed to A0."""
+    global _KAME_CAROUSEL_DISABLED
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_CAROUSEL_DISABLED = flag
+
+
+def set_recorder_disabled(enabled) -> None:
+    """v1.8.1.0: stop writing refusals.jsonl."""
+    flag = _kame_flag(enabled)
+    if flag is not None and _KJ is not None:
+        _KJ.RECORDER_ON = not flag
+
+
+def set_call_timings_disabled(enabled) -> None:
+    """v1.8.1.0: stop writing calls.jsonl."""
+    flag = _kame_flag(enabled)
+    if flag is not None and _KJ is not None:
+        _KJ.TIMINGS_ON = not flag
+
+
+def set_share_pool_health(enabled) -> None:
+    """v1.8.1.0: keep key holds on disk so they survive a restart (default on)."""
+    flag = _kame_flag(enabled)
+    if flag is not None and _KJ is not None:
+        _KJ.SHARE_HEALTH_ON = flag
+
+
+def current_settings() -> dict:
+    """Every setting KAME understands, as it is in force right now."""
+    return {
+        "kame_log_level": _KAME_LOG_LEVEL,
+        "daily_quota_cooldown_seconds": _KAME_DAILY_COOLDOWN_S,
+        "max_hold_seconds": _KAME_MAX_HOLD_S,
+        "unsized_throttle_rest_seconds": _KAME_UNSIZED_THROTTLE_REST_S,
+        "unsized_throttle_backoff": _KAME_UNSIZED_BACKOFF,
+        "unsized_backoff_max_seconds": _KAME_UNSIZED_BACKOFF_MAX_S,
+        "key_log_style": _KAME_KEY_LOG_STYLE,
+        "kame_log_full_errors": _KAME_LOG_FULL_ERRORS,
+        "kame_collapse_storm_logs": _KAME_COLLAPSE_STORM_LOGS,
+        "kame_wait_notice": _KAME_WAIT_NOTICE,
+        "rotation_disabled": _KAME_ROTATION_DISABLED,
+        "spread_disabled": _KAME_SPREAD_DISABLED,
+        "carousel_disabled": _KAME_CAROUSEL_DISABLED,
+        "refusal_recorder_disabled": (not _KJ.RECORDER_ON) if _KJ is not None else True,
+        "call_timings_disabled": (not _KJ.TIMINGS_ON) if _KJ is not None else True,
+        "share_pool_health": bool(_KJ.SHARE_HEALTH_ON) if _KJ is not None else False,
+    }
+
+
+_KAME_LAST_SETTINGS = None
+
+
+def note_setting_changes() -> list:
+    """Put every setting that changed since the last activation on the timeline.
+
+    Called by the activation after the config and the environment are applied.
+    The first call only remembers; later calls record one `setting` event per
+    changed value, so "did that setting help?" can be read against the events
+    around it instead of guessed. Returns the changed names.
+    """
+    global _KAME_LAST_SETTINGS
+    now_settings = current_settings()
+    before, _KAME_LAST_SETTINGS = _KAME_LAST_SETTINGS, now_settings
+    if before is None:
+        return []
+    changed = [k for k in now_settings if before.get(k) != now_settings[k]]
+    for name in changed:
+        _kame_event("setting", reason=f"{name}: {before.get(name)} -> {now_settings[name]}")
+    return changed
+
+
+def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
+                detail="", sized_by=""):
+    """One row on the events timeline. Never raises; never a raw key."""
+    if _KJ is None:
+        return
+    try:
+        _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
+                       reason=reason, code=code, seconds=seconds, detail=detail,
+                       sized_by=sized_by)
+    except Exception:
+        pass
+
+
+# What each failure kind is called on the timeline. Short, and about the key.
+_KAME_EVENT_REASON = {
+    "per_minute": "throttled",
+    "daily": "daily quota",
+    "insufficient_quota": "out of credit",
+    "server": "provider busy",
+    "timeout": "no answer in time",
+    "auth": "credential refused",
+    "revoked": "not a valid key",
+    "denied": "not allowed on this model",
+    "other": "unrecognised error",
+}
+
+
+def _kame_event_kind(kind: str) -> str:
+    if kind in ("auth", "revoked"):
+        return "invalid_key"
+    if kind == "denied":
+        return "denied_model"
+    return "rotation"
+
+
+def quota_report() -> dict:
+    """What `/kame-quota` shows: the pool report, whose rows carry why and how."""
+    return pool_report()
+
+
+def reset_counts() -> None:
+    """`/kame-quota reset`: session counters and the tally start again.
+
+    As on Hermes, live rests are left alone — `reset_pool` is the one that
+    starts every key from zero.
+    """
+    with _KAME_LOCK:
+        for name in list(_KAME_STATS):
+            _KAME_STATS[name] = 0
+        _KAME_TALLY.clear()
+
+
+def reset_pool() -> int:
+    """Every key starts again as if it had never been tried. Returns how many.
+
+    What `/kame-quota reset` and the settings page's button do. Clears the
+    rests, the ladders, the refusal streaks, retirements, what each key was
+    told, the daily doubt, and the holds kept on disk — the Hermes port found
+    the hard way that clearing memory alone lets the file put every bench
+    straight back. Never touches a key or a setting.
+    """
+    count = 0
+    with _KAME_LOCK:
+        for state in _KAME_KEY_HEALTH.values():
+            for kd in (state.get("keys") or {}).values():
+                count += 1
+                for field in ("sick_until", "last_sick_at", "consecutive_rl",
+                              "consecutive_server", "consecutive_refusals",
+                              "consecutive_denials", "consecutive_unsized",
+                              "retired_at", "short_streak", "last_hold_until"):
+                    kd[field] = 0
+                for field in ("rest_label", "hold_kind", "hold_scope",
+                              "last_hold_kind", "last_hold_window"):
+                    kd[field] = ""
+        _KAME_STATED_RL.clear()
+        _KAME_NO_ANSWER_SINCE.clear()
+    if _KJ is not None:
+        try:
+            _KJ.forget_holds()
+        except Exception:
+            pass
+    _kame_event("setting", reason=f"pool cleared: {count} key(s) start again from zero")
+    return count
+
+
 def _kame_flag(value):
     """True / False from a bool or the usual spellings, None when unreadable."""
     if isinstance(value, bool):
@@ -742,11 +961,28 @@ def _kame_apply_env_overrides() -> None:
     Same variable names as the Hermes port, so one ``.env`` line means the same
     thing on both hosts. Called by the activation after the plugin config.
     """
+    def _inverse(setter):
+        def apply(raw):
+            flag = _kame_flag(raw)
+            if flag is not None:
+                setter(not flag)
+        return apply
+
     readers = (
         ("KAME_MAX_HOLD", set_max_hold),
         ("KAME_UNSIZED_REST", set_unsized_throttle_rest),
         ("KAME_UNSIZED_BACKOFF", set_unsized_backoff),
         ("KAME_UNSIZED_BACKOFF_MAX", set_unsized_backoff_max),
+        # v1.8.1.0: the rest of the Hermes names.
+        ("KAME_DAILY_COOLDOWN", set_daily_cooldown),
+        ("KAME_ROTATION_DISABLED", set_rotation_disabled),
+        ("KAME_SPREAD_DISABLED", set_spread_disabled),
+        ("KAME_CAROUSEL_DISABLED", set_carousel_disabled),
+        ("KAME_RECORDER_DISABLED", set_recorder_disabled),
+        ("KAME_CALL_TIMINGS_DISABLED", set_call_timings_disabled),
+        ("KAME_SHARE_POOL_HEALTH", set_share_pool_health),
+        ("KAME_STORM_COLLAPSE_DISABLED", _inverse(set_collapse_storm_logs)),
+        ("KAME_LIVE_STATUS_DISABLED", _inverse(set_wait_notice)),
     )
     for name, setter in readers:
         raw = os.environ.get(name)
@@ -1115,6 +1351,9 @@ def pool_report() -> dict:
                 # having to know the threshold.
                 "strikes": int(kd.get("consecutive_refusals") or 0),
                 "limit": _KAME_REFUSALS_BEFORE_RETIRING,
+                # v1.8.1.0: why it rests and which rung sized it, for /kame-quota.
+                "why": (kd.get("hold_kind") or "") if state == "resting" else "",
+                "label": (kd.get("rest_label") or "") if state == "resting" else "",
             })
         total = len(keys)
         pools.append({
@@ -1150,6 +1389,11 @@ def pool_report() -> dict:
         # Where each cooldown came from, per pool. A rising `default` share is
         # the shape of an install that has gone quiet after an upstream change.
         "tally": tally,
+        # v1.8.1.0: the last decisions, newest first, and every setting as it
+        # is in force. Fingerprints and KAME's own phrases only.
+        "events": _KJ.EVENTS.recent(50) if _KJ is not None else [],
+        "settings": current_settings(),
+        "data_dir": (str(_KJ.data_dir()) if (_KJ is not None and _KJ.data_dir() is not None) else ""),
         "generated_at": now,
     }
 
@@ -1418,6 +1662,19 @@ def _get_identity_state(identity, all_keys):
                 # Drives the pruning below.
                 "last_offered": now,
             }
+            # v1.8.1.0: a hold the previous process was serving comes back,
+            # never longer than the ceiling allows now.
+            if _KJ is not None:
+                try:
+                    held = _KJ.hold_for(identity, k)
+                except Exception:
+                    held = None
+                if held:
+                    kd_new = state["keys"][k]
+                    kd_new["sick_until"] = min(float(held["until"]), now + _KAME_MAX_HOLD_S)
+                    kd_new["hold_kind"] = held.get("kind", "")
+                    kd_new["hold_scope"] = held.get("scope", "")
+                    kd_new["last_sick_at"] = float(held.get("at", now))
         else:
             # Defensive: backfill for keys created on earlier versions.
             state["keys"][k].setdefault("last_sick_at", 0)
@@ -1453,7 +1710,8 @@ def _get_identity_state(identity, all_keys):
 
 
 def _mark_key_health(identity, key, success=True, delay=20, kind="other",
-                     sized_by: str = "", bare: bool = False):
+                     sized_by: str = "", bare: bool = False, scope: str = "",
+                     window: str = ""):
     """Update health state for a key after a completed (or failed) attempt.
 
     Returns the ACTUAL delay applied (after any adaptive-backoff escalation)
@@ -1508,6 +1766,9 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             kd["consecutive_unsized"] = 0  # v1.8.1.0: the ladder starts again at 1s
             kd["rest_label"] = ""
             kd["hold_kind"] = ""
+            # v1.8.1.0: the key answered, so no deadline of its is proven short.
+            kd["short_streak"] = 0
+            kd["last_hold_until"] = 0
             # v1.8.1.0: what this key was told is forgotten the moment it
             # answers, so the memory cannot outlive its evidence by one call.
             _KAME_STATED_RL.pop((identity, key), None)
@@ -1516,10 +1777,24 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             # labels that was accumulating doubt starts over. One answer on
             # ANY key of this identity is the whole of the evidence.
             _KAME_NO_ANSWER_SINCE.pop(identity, None)
+            # v1.8.1.0: an account-wide hold this key carries on the provider's
+            # other models is refuted by this answer — the account is serving.
+            provider = str(identity).split(":", 1)[0]
+            for other_id, other_state in _KAME_KEY_HEALTH.items():
+                if other_id == identity or str(other_id).split(":", 1)[0] != provider:
+                    continue
+                okd = other_state.get("keys", {}).get(key)
+                if okd is not None and okd.get("hold_scope") == "account":
+                    okd["sick_until"] = 0
+                    okd["hold_scope"] = ""
+                    okd["hold_kind"] = ""
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
+            if _KJ is not None:
+                _KJ.note_answer(identity, key)
         else:
             applied = float(delay)
+            measured = False  # v1.8.1.0: may measured refutation widen this?
             # v1.6.0.1: a refusal is not a clock. `auth`, `revoked` and `denied`
             # all start at the refusal bench and climb the same doubling ladder
             # toward the daily ceiling, so a permission that really is permanent
@@ -1579,7 +1854,15 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 kd["consecutive_rl"] = cnt
                 since = _KAME_NO_ANSWER_SINCE.setdefault(identity, now)
                 pool_alive = (now - since) < _KAME_POOL_SILENCE_BEFORE_THE_DAY_S
-                if pool_alive:
+                if sized_by == "provider":
+                    measured = True
+                    # v1.8.1.0 (Hermes 1.7.0.2's rule, ported): a long reset the
+                    # provider itself STATED — OpenRouter's free-models-per-day
+                    # moment, a `resets_at` — is served, not re-probed. Only a
+                    # bare daily label was ever the doubtful case. The ceiling
+                    # below still bounds it.
+                    applied = float(applied)
+                elif pool_alive:
                     # The label says the day is over and the pool says
                     # otherwise, by answering. Re-probe.
                     applied = min(_KAME_DAILY_REPROBE_S, _KAME_DAILY_COOLDOWN_S)
@@ -1611,10 +1894,12 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                     applied = max(float(applied), _KAME_RL_FLOOR_S)
                     kd["consecutive_unsized"] = 0
                     kd["rest_label"] = ""
+                    measured = True
                 elif learned > 0:
                     applied = max(min(learned, _KAME_RL_BACKOFF_CAP_S), _KAME_RL_FLOOR_S)
                     kd["consecutive_unsized"] = 0
                     kd["rest_label"] = ""
+                    measured = True
                 elif bare and _KAME_UNSIZED_BACKOFF:
                     # Saturated before exponentiation so a long streak cannot
                     # overflow ``2.0 ** n`` before ``min`` ever runs.
@@ -1625,9 +1910,12 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                     applied = cap if exponent >= math.log2(cap) else min(2.0 ** exponent, cap)
                     kd["rest_label"] = "backoff.%d" % rung
                 else:
-                    # The flat rest `_extract_retry_delay` already supplied.
+                    # The flat rest `_extract_retry_delay` already supplied —
+                    # or, v1.8.1.0, one named window's default (a PerMinute
+                    # quota id with no number rests 65s), which is measured.
                     kd["consecutive_unsized"] = 0
                     kd["rest_label"] = ""
+                    measured = window in _KAME_STRETCH_CAPS
             elif kind == "server":
                 # 07/09/2026: **a 5xx never escalates.** The owner's rule, and
                 # the arithmetic is his: a 503 is not metered. It costs no
@@ -1683,19 +1971,48 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 # ladder's count is left where it is - a busy model mixes 503s
                 # into its bare 429s - but this rest is not a rung.
                 kd["rest_label"] = ""
+            # v1.8.1.0: measured refutation. See `_KAME_SHORT_GRACE_S`.
+            if kind in ("per_minute", "daily"):
+                lane = window or ("per_day" if kind == "daily" else "per_minute")
+                prev_until = float(kd.get("last_hold_until", 0) or 0)
+                landed = (prev_until > 0 and kd.get("last_hold_kind") == kind
+                          and kd.get("last_hold_window") == lane
+                          and 0.0 <= now - prev_until <= _KAME_SHORT_GRACE_S)
+                streak = int(kd.get("short_streak", 0)) + 1 if landed else 0
+                kd["short_streak"] = streak
+                if measured and streak >= 2:
+                    factor = (_KAME_STRETCH_MAX_FACTOR if streak - 1 >= math.log2(_KAME_STRETCH_MAX_FACTOR)
+                              else 2.0 ** (streak - 1))
+                    widened = min(float(applied) * factor, _KAME_STRETCH_CAPS.get(lane, _KAME_HARD_DELAY_CAP_S))
+                    if widened > applied:
+                        applied = widened
+                        kd["rest_label"] = "stretch.x%d" % int(factor)
+            else:
+                # A different kind of failure breaks the chain: a 503 between
+                # two throttles says nothing about the throttle's deadline.
+                kd["short_streak"] = 0
+                lane = ""
             # v1.8.0.0: the ceiling, on what is STORED and not only on what is
             # reported. Every branch above ends here.
             applied = min(float(applied), _KAME_MAX_HOLD_S, _KAME_HARD_DELAY_CAP_S)
+            kd["last_hold_until"] = now + applied
+            kd["last_hold_kind"] = kind
+            kd["last_hold_window"] = lane
             if now + applied >= float(kd.get("sick_until", 0) or 0):
                 # v1.8.1.0: whose hold is binding. Only a hold a 5xx set may be
                 # thawed when an outage ends; a quota's hour must not be.
                 kd["hold_kind"] = kind
+                kd["hold_scope"] = "account" if (kind == "insufficient_quota" or scope == "account") else ""
             kd["sick_until"] = max(kd.get("sick_until", 0), now + applied)
             kd["last_sick_at"] = now
-            if kind == "insufficient_quota":
+            if kind == "insufficient_quota" or scope == "account":
                 # v1.8.0.0: out of credit belongs to the account, not to the
                 # model. The same key is benched on every model of this
                 # provider it has been seen on; other keys are untouched.
+                # v1.8.1.0: so does a throttle the evidence names account-wide
+                # (Codex `usage_limit_reached`, OpenRouter's free-models bucket,
+                # a `PerProject` quota) — bounded by the same ceiling, and
+                # cleared on every model by this key's next answer.
                 provider = str(identity).split(":", 1)[0]
                 for other_id, other_state in _KAME_KEY_HEALTH.items():
                     if other_id == identity or str(other_id).split(":", 1)[0] != provider:
@@ -1704,6 +2021,12 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                     if okd is not None:
                         okd["sick_until"] = max(okd.get("sick_until", 0), now + applied)
                         okd["last_sick_at"] = now
+                        okd["hold_scope"] = "account"
+                        if _KJ is not None:
+                            _KJ.note_hold(other_id, key, okd["sick_until"], kind, "account")
+            if _KJ is not None:
+                _KJ.note_hold(identity, key, kd["sick_until"], kd.get("hold_kind", kind),
+                              kd.get("hold_scope", ""))
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
     return applied
 
@@ -1852,6 +2175,31 @@ def _evidence_status(exc):
     return None
 
 
+# --- v1.8.1.0: the evidence reader both ports judge with ---
+# `kame_evidence.py` is the Hermes port's error reader (its catalogue of
+# provider field values, its prose tables and its sizing cascade), ported so
+# the two hosts give the same verdict on the same payload. It is consulted
+# first; when it has nothing to stake a verdict on it returns None and every
+# rule below decides exactly as it did before.
+try:
+    from usr.plugins.api_rotation_by_kame import kame_evidence as _KE
+except Exception:
+    try:
+        import kame_evidence as _KE  # running from the plugin directory, e.g. in tests
+    except Exception:
+        _KE = None
+
+
+def _kame_judgment(exc):
+    """`kame_evidence.judge()` for one exception, or None. Never raises."""
+    if _KE is None or exc is None:
+        return None
+    try:
+        return _KE.judge(exc, status=_evidence_status(exc), now=time.time())
+    except Exception:
+        return None
+
+
 def _extract_retry_delay(exc, with_source: bool = False):
     """Extract retry-after from an API error. Falls back to 20s default.
 
@@ -1937,6 +2285,26 @@ def _extract_retry_delay(exc, with_source: bool = False):
     #    The regex is unchanged and still anchors on a retry keyword before
     #    capturing, so widening the haystack cannot turn a model name or an
     #    id into a duration.
+    #
+    # 2b. v1.8.1.0: every other place a provider states a wait, read the way
+    #     the Hermes port reads it — `retry-after-ms`, a `*ratelimit*reset*`
+    #     header (an absolute epoch or a duration), Codex's `resets_at` /
+    #     `resets_in_seconds` pair, an aggregator's reset header folded into
+    #     the body, and a dated moment in the sentence ("regain access on
+    #     2026-10-01 at 00:00 UTC").
+    if _KE is not None:
+        try:
+            candidates = _KE.delay_candidates(
+                message=str(exc), body=_KE.body_of(exc), headers=_KE.headers_of(exc),
+                exc=exc, now=time.time(),
+            )
+        except Exception:
+            candidates = []
+        for secs, src in candidates:
+            if 0 < secs <= cap:
+                tag = ("header" if src.startswith("header") else "body" if src.startswith("body")
+                       else "attr" if src.startswith("exception") else "text")
+                return (secs, tag) if with_source else secs
     err_msg = _evidence_text(exc) or str(exc)
     match = re.search(
         # v1.8.1.0: a number, its unit, and further number+unit pairs ("6m
@@ -2139,6 +2507,29 @@ def _classify_error(exc):
     # does not always carry the status the inner one had.
     status_code = _evidence_status(exc)
 
+    # v1.8.1.0: the evidence reader speaks first, and only when a field or a
+    # sentence it trusts named the failure. See `kame_evidence.judge`.
+    judgment = _kame_judgment(exc)
+    if judgment is not None:
+        family = judgment.family
+        if family == "upstream":
+            # An aggregator relaying somebody else's refusal: our key is fine,
+            # so it rests like a busy server and the next key is tried.
+            return _KAME_SERVER_BASE_S, "server", (status_code or 502)
+        if family == "billing":
+            return _KAME_DAILY_COOLDOWN_S, "insufficient_quota", (status_code or 402)
+        if family == "denial":
+            return _KAME_REFUSAL_REST_S, "denied", (status_code or 403)
+        if family == "throttle":
+            if judgment.seconds is None:
+                # A throttle nothing sizes: the unsized rest, or Gemini's
+                # bare-RESOURCE_EXHAUSTED ladder in `_mark_key_health`.
+                return _extract_retry_delay(exc), "per_minute", (status_code or 429)
+            if judgment.window in ("per_day", "per_week", "per_month"):
+                return float(judgment.seconds), "daily", (status_code or 429)
+            return float(judgment.seconds), "per_minute", (status_code or 429)
+        # `auth_dead` is the loop's credential branch: see `_is_auth_error`.
+
     # Server / transient errors FIRST (v1.0.2). A 5xx is the provider being
     # momentarily overloaded, NOT the key being spent. Some providers (notably
     # Google) put quota / resource_exhausted / daily text in a 503 body; the
@@ -2147,7 +2538,9 @@ def _classify_error(exc):
     # the whole pool cold while the same keys stayed healthy on other models. A
     # real daily quota is a 429, never a 5xx, so the status code wins here. The
     # 'server' kind gets the gentle escalating cooldown, not the 1h daily floor.
-    if status_code in (500, 502, 503, 504, 529) \
+    # 498 (v1.8.1.0): Groq's "flex tier capacity exceeded" — a busy server in
+    # a status no standard set lists, which used to land in `other` at 20s.
+    if status_code in (498, 500, 502, 503, 504, 529) \
             or "service unavailable" in err_msg or "serviceunavailable" in err_msg \
             or "internal server error" in err_msg or "bad gateway" in err_msg \
             or "gateway timeout" in err_msg:
@@ -2211,7 +2604,16 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
         delay = _KAME_FAST_FAILURE_REST_S
     sized_by = _delay_source(exc, kind)
     bare = kind == "per_minute" and sized_by != "provider" and _is_bare_resource_exhausted(exc)
-    applied = _mark_key_health(identity, key, False, delay, kind, sized_by=sized_by, bare=bare)
+    judgment = _kame_judgment(exc)
+    scope = judgment.scope if judgment is not None and judgment.family in ("throttle", "billing") else ""
+    window = ""
+    if judgment is not None and judgment.family == "throttle" and judgment.source == "window":
+        window = judgment.window
+    elif judgment is not None and judgment.family == "throttle" and judgment.window in (
+            "per_minute", "tokens_per_minute", "per_hour", "per_day"):
+        window = judgment.window
+    applied = _mark_key_health(identity, key, False, delay, kind, sized_by=sized_by, bare=bare,
+                               scope=scope, window=window)
     label = ""
     try:
         with _KAME_LOCK:
@@ -2220,6 +2622,22 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
     except Exception:
         label = ""
     return applied, kind, sc, label, sized_by
+
+
+def _kame_decide_failure(identity, key, exc, elapsed=None):
+    """v1.8.1.0: the whole of what the carousel does with one non-terminal failure.
+
+    The credential branch (a key the provider refused) and every other kind,
+    in one function the loop calls and the tests and the answer-key gate call
+    too. Returns ``(applied, kind, status_code, label, sized_by)``.
+    """
+    if _is_auth_error(exc):
+        kind = "revoked" if _is_revoked_key(exc) else "auth"
+        applied = _mark_key_health(identity, key, False, _KAME_REFUSAL_REST_S, kind)
+        # A credential refusal is always KAME's own number: no provider tells
+        # you when a rejected key will start working.
+        return applied, kind, getattr(exc, "status_code", None), "", "kame"
+    return _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)
 
 
 def _classify_error_delay(exc):
@@ -2542,11 +2960,17 @@ def _get_best_key(identity, all_keys):
         #    Both counters reset on any success and on any failure of another
         #    kind, so "was refused" means "the last thing it did was refuse",
         #    not "was refused once, an hour ago".
-        best_key = min(healthy, key=lambda k: (
-            1 if (pool[k].get("consecutive_refusals") or pool[k].get("consecutive_denials")) else 0,
-            len(pool[k]["request_log"]),
-            pool[k]["last_used"],
-        ))
+        if _KAME_SPREAD_DISABLED:
+            # v1.8.1.0: the first ready key in the order the user wrote them.
+            # Health still decides WHICH keys are ready; only the choice among
+            # them is given back.
+            best_key = healthy[0]
+        else:
+            best_key = min(healthy, key=lambda k: (
+                1 if (pool[k].get("consecutive_refusals") or pool[k].get("consecutive_denials")) else 0,
+                len(pool[k]["request_log"]),
+                pool[k]["last_used"],
+            ))
 
         # 4. Anti-dogpile: mark as used NOW so concurrent calls pick different keys
         pool[best_key]["last_used"] = now
@@ -2636,7 +3060,19 @@ def _is_auth_error(exc: Exception) -> bool:
     v1.6.0.1: this answers "is this about the credential at all". It no longer
     answers "is the credential dead" — `_classify_auth_kind` does that, and the
     two questions have different answers for a bare 401.
+
+    v1.8.1.0: a field the provider filled in settles it first — a key it named
+    dead (`API_KEY_INVALID`, `authentication_error`, "Account suspended") is a
+    credential problem whatever the status, and an empty balance, a denied
+    model, a throttle or an aggregator's relayed failure is not one even on a
+    401.
     """
+    judgment = _kame_judgment(exc)
+    if judgment is not None:
+        if judgment.family == "auth_dead":
+            return True
+        if judgment.family in ("billing", "denial", "throttle", "upstream"):
+            return False
     if _evidence_status(exc) == 401:
         return True
     err_msg = _evidence_text(exc)
@@ -2657,6 +3093,9 @@ def _is_revoked_key(exc: Exception) -> bool:
     Deliberately does NOT look at the status code. A 401 with no explanation is
     exactly the case this must not fire on.
     """
+    judgment = _kame_judgment(exc)
+    if judgment is not None:
+        return judgment.family == "auth_dead"
     err_msg = _evidence_text(exc)
     if any(ind in err_msg for ind in _INVALID_KEY_INDICATORS):
         return True
@@ -2665,6 +3104,20 @@ def _is_revoked_key(exc: Exception) -> bool:
 
 def _is_terminal_error(exc: Exception) -> bool:
     """Classify errors as terminal (don't retry) or transient (rotate key)."""
+    # v1.8.1.0: a verdict about the KEY or its account is never terminal for
+    # the run, whatever status it arrived on — Google's FAILED_PRECONDITION
+    # "enable billing" and Anthropic's spend limit both come as a 400 — and a
+    # field naming the REQUEST as the problem (`context_length_exceeded`,
+    # `model_not_found`, `invalid_prompt`) is terminal whatever status it has.
+    if _KE is not None:
+        try:
+            if _KE.catalog_terminal(exc):
+                return True
+        except Exception:
+            pass
+    judgment = _kame_judgment(exc)
+    if judgment is not None and judgment.family in ("billing", "denial", "auth_dead", "throttle", "upstream"):
+        return False
     err_msg = _evidence_text(exc)
     # Rate-limit indicators always mean "try another key", never terminal
     if any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
@@ -2680,7 +3133,10 @@ def _is_terminal_error(exc: Exception) -> bool:
         # 401 = invalid/expired key - not terminal, rotate to next
         if status_code == 401:
             return False
-        if status_code in (400, 404, 422):
+        # v1.8.1.0: the Hermes port's set. 410 is a retired model ("has
+        # reached its end of life") and 413 a request too large — no key on
+        # earth answers either, so rotating only walks the pool.
+        if status_code in (400, 404, 405, 410, 413, 415, 422, 451, 501):
             return True
     if "content_policy" in err_msg or "content filter" in err_msg:
         return True
@@ -3228,6 +3684,28 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
     st.cooldown_overhead_s += (time.perf_counter() - _sleep_started)
 
 
+def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ctx,
+                 call_started_perf, st, rest, rest_source, call_id) -> None:
+    """One row of calls.jsonl for the attempt that just ended. Never raises."""
+    if _KJ is None:
+        return
+    try:
+        progress = ctx.get("progress") or {}
+        _KJ.record_call(
+            identity=identity, key=key, attempt=attempt, outcome=outcome, kind=kind,
+            status=status, started_at=started_wall, ended_at=time.time(),
+            first_sign_at=progress.get("first_sign_at"),
+            first_text_at=progress.get("first_text_at"),
+            # Time the call had already spent before this attempt began.
+            elapsed_before_s=max(0.0, (time.perf_counter() - call_started_perf)
+                                 - (time.time() - started_wall)),
+            pool_waited_before_s=getattr(st, "cooldown_overhead_s", None),
+            rest_s=rest, rest_source=rest_source, call_id=call_id,
+        )
+    except Exception:
+        pass
+
+
 async def _kame_carousel(self, ctx):
     """The eternal carousel: pick the healthiest key, let A0 make the call, learn.
 
@@ -3258,6 +3736,8 @@ async def _kame_carousel(self, ctx):
     _empty_budget = _KAME_EMPTY_RETRY_BUDGET
 
     attempt_no = 0
+    _call_id = "%x" % int(time.time() * 1000)   # v1.8.1.0: ties calls.jsonl rows together
+    _last_failed_key = None
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
 
@@ -3271,7 +3751,13 @@ async def _kame_carousel(self, ctx):
         key, status = _get_best_key(identity, all_keys)
         _select_ms = (time.perf_counter() - _select_t0) * 1000.0
 
-        if status == "EXHAUSTED_RETRY":
+        if status == "EXHAUSTED_RETRY" and not _KAME_CAROUSEL_DISABLED:
+            if st.sleep_count == 0:
+                _eta_now = _next_recovery_seconds(identity, all_keys)
+                _kame_event("wait", identity,
+                            reason="every key resting" + (
+                                f", next back in ~{_fmt_duration(_eta_now)}" if _eta_now else ""),
+                            seconds=_eta_now)
             # v0.5.8.0 ETA-driven sleep (v1.0.2: honest logging + interruptible).
             # All keys sick. Sleep until the SOONEST key recovers (capped) instead
             # of pulsing the API with sick keys. After the sleep we `continue` so we
@@ -3285,7 +3771,11 @@ async def _kame_carousel(self, ctx):
                 _kame_wait_notice_finish(st, "stopped")
                 raise
             continue
-        elif _lvl_verbose():
+        if _last_failed_key is not None and key != _last_failed_key:
+            # v1.8.1.0: the half of the story the timeline used to miss —
+            # which key took over.
+            _kame_event("switch", identity, key, reason="took over")
+        if status != "EXHAUSTED_RETRY" and _lvl_verbose():
             # Additive trace line: which key was picked + selection time.
             PrintStyle(font_color="#85C1E9").print(
                 f"[KAME] {call_type}|{model_short}{_ctx_label} ➡ "
@@ -3302,8 +3792,11 @@ async def _kame_carousel(self, ctx):
         # the empty answer this loop is here to rotate around.
         ctx["progress"]["any"] = False
         ctx["progress"]["reasoning"] = False
+        ctx["progress"]["first_sign_at"] = None
+        ctx["progress"]["first_text_at"] = None
 
         _attempt_t0 = time.perf_counter()
+        _attempt_wall = time.time()
         try:
             result = await ctx["attempt"](self, key, ctx)
 
@@ -3323,6 +3816,8 @@ async def _kame_carousel(self, ctx):
                     and _kame_result_is_empty(result)):
                 _empty_budget -= 1
                 _empty_counts[key] = _empty_counts.get(key, 0) + 1
+                _kame_timing(identity, key, attempt_no, "empty", "", None, _attempt_wall,
+                             ctx, _call_started_at, st, None, "", _call_id)
                 if _empty_counts[key] >= 2:
                     _mark_key_health(identity, key, False, 3, "other")
                     if _lvl_verbose():
@@ -3339,6 +3834,11 @@ async def _kame_carousel(self, ctx):
                 continue
 
             _mark_key_health(identity, key, True)
+            _kame_timing(identity, key, attempt_no, "ok", "", None, _attempt_wall,
+                         ctx, _call_started_at, st, None, "", _call_id)
+            if _last_failed_key is not None:
+                _kame_event("recovery", identity, key,
+                            reason=f"answered on attempt {attempt_no}")
             # v1.0.3: a success ends any error storm — close it and, in collapse
             # mode, print a one-line recap so the operator sees how big it was.
             # (_storm_end always pops the state; it returns a recap only for a
@@ -3401,6 +3901,14 @@ async def _kame_carousel(self, ctx):
             # (the v1.0.4 eternal-carousel promise).
             if _is_terminal_error(e):
                 _kame_wait_notice_finish(st, "stopped")
+                _sc_t = _evidence_status(e)
+                _kame_event("surfaced", identity, key, reason="not a key problem: handed to Agent Zero",
+                            code=_sc_t, detail=str(e))
+                _kame_timing(identity, key, attempt_no, "terminal", "", _sc_t, _attempt_wall,
+                             ctx, _call_started_at, st, None, "", _call_id)
+                if _KJ is not None:
+                    _KJ.record_refusal(identity=identity, key=key, exc=e, status=_sc_t,
+                                       kind="terminal")
                 raise e
             # v1.6.0.4: "partial output" has to mean output. Until now this line
             # was printed for any turn where the model had merely thought, which
@@ -3425,31 +3933,32 @@ async def _kame_carousel(self, ctx):
             # A 403 saying "this key may not use THIS MODEL" is neither: it is
             # classified as `denied` below, is scoped per provider:model, and is
             # never allowed to retire anything.
-            if _is_auth_error(e):
-                _auth_sc = getattr(e, "status_code", None)
-                _auth_kind = "revoked" if _is_revoked_key(e) else "auth"
-                applied = _mark_key_health(
-                    identity, key, False, _KAME_REFUSAL_REST_S, _auth_kind
-                )
+            # v1.8.1.0: one function decides, rests and names the rung — the
+            # same one the tests and the answer-key gate drive.
+            applied, kind, sc, _rung, _sized_by = _kame_decide_failure(
+                identity, key, e, elapsed=time.perf_counter() - _attempt_t0
+            )
+            _tally_failure(identity, kind, sc, _sized_by)
+            _kame_event(_kame_event_kind(kind), identity, key,
+                        reason=_KAME_EVENT_REASON.get(kind, kind), code=sc,
+                        seconds=applied, detail=str(e), sized_by=_rung or _sized_by)
+            _kame_timing(identity, key, attempt_no, "refused", kind, sc, _attempt_wall,
+                         ctx, _call_started_at, st, applied, _rung or _sized_by, _call_id)
+            if _KJ is not None:
+                _KJ.record_refusal(identity=identity, key=key, exc=e, status=sc, kind=kind,
+                                   rest=applied, sized_by=_rung or _sized_by)
+            _last_failed_key = key
+            if kind in ("auth", "revoked"):
                 # v1.0.6: a refused credential is an actionable problem — always
                 # shown, even at 'silent' (matches the documented "silent still
                 # shows hard errors" promise).
                 PrintStyle.warning(
                     f"[KAME] {call_type}|{model_short} {_key_display_auth(key)} "
-                    f"{_friendly_error_msg(_auth_kind, applied, _auth_sc, e)}"
+                    f"{_friendly_error_msg(kind, applied, sc, e)}"
                     f"{_retirement_suffix(identity, key)}"
                 )
-                _maybe_log_full_error(
-                    call_type, model_short, key, e, _auth_kind, applied, _auth_sc
-                )
-                # A credential refusal is always KAME's own number: no provider
-                # tells you when a rejected key will start working.
-                _tally_failure(identity, _auth_kind, _auth_sc, "kame")
+                _maybe_log_full_error(call_type, model_short, key, e, kind, applied, sc)
             else:
-                # v1.8.1.0: one function classifies, rests and names the rung,
-                # and it is the same one the tests drive.
-                applied, kind, sc, _rung, _sized_by = _kame_rest_for_failure(identity, key, e, elapsed=time.perf_counter() - _attempt_t0)
-                _tally_failure(identity, kind, sc, _sized_by)
                 _log_failure(call_type, model_short, key, e,
                              kind, applied, sc, identity, all_keys, label=_rung)
 
@@ -3459,6 +3968,11 @@ async def _kame_carousel(self, ctx):
             # iteration picks a DIFFERENT key, and once all keys are sick
             # _get_best_key returns EXHAUSTED_RETRY and the ETA-driven sleep takes
             # over. Net effect: near-instant failover.
+            if _KAME_CAROUSEL_DISABLED:
+                # v1.8.1.0: the key is sized and rested above; what happens
+                # next is Agent Zero's own retry, exactly as without KAME.
+                _kame_wait_notice_finish(st, "stopped")
+                raise e
             await asyncio.sleep(0)
             continue
 
@@ -3491,6 +4005,10 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     else:
         async def wrapped_response(delta, full):
             progress["any"] = True
+            if not progress.get("first_text_at"):
+                progress["first_text_at"] = time.time()
+            if not progress.get("first_sign_at"):
+                progress["first_sign_at"] = progress["first_text_at"]
             return await response_callback(delta, full)
 
     if reasoning_callback is None:
@@ -3498,6 +4016,8 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     else:
         async def wrapped_reasoning(delta, full):
             progress["reasoning"] = True
+            if not progress.get("first_sign_at"):
+                progress["first_sign_at"] = time.time()
             return await reasoning_callback(delta, full)
 
     if tokens_callback is None:
@@ -3505,6 +4025,10 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     else:
         async def wrapped_tokens(text, tokens):
             progress["any"] = True
+            if not progress.get("first_text_at"):
+                progress["first_text_at"] = time.time()
+            if not progress.get("first_sign_at"):
+                progress["first_sign_at"] = progress["first_text_at"]
             return await tokens_callback(text, tokens)
 
     return wrapped_response, wrapped_reasoning, wrapped_tokens
@@ -3537,7 +4061,9 @@ def _kame_make_entry_wrapper(entry_name, original):
 
         all_keys = _get_all_api_keys(self)
 
-        if not all_keys:
+        # v1.8.1.0: `rotation_disabled` hands every call back exactly as if
+        # KAME were not installed — the same door as a single-key config.
+        if not all_keys or _KAME_ROTATION_DISABLED:
             # No multi-key config - nothing to rotate. Hand the call straight back
             # to A0, unchanged, as if KAME were not installed.
             return await original(

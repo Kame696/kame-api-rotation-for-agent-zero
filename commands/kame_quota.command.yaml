@@ -1,0 +1,5 @@
+name: kame-quota
+description: "KAME: the quota picture per key and model — what is resting, why, and until when."
+argument_hint: "[reset]"
+type: script
+script_path: kame_quota_command.py

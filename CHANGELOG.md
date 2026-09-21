@@ -20,7 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
-| **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates, a refused model no longer benches the key. Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. Verified in real sessions on Agent Zero v2.12 |
+| **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates, a refused model no longer benches the key. Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, an events timeline (`/kame events`), a refusal recorder and call timings on disk, key health that survives a restart, off switches, `/kame get|set|reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on Agent Zero v2.12 |
 | **1.7.0.5** | Three numbers, measured on real keys | A daily quota label stops buying an hour by itself: measured on fourteen real keys, a key Google had refused *for the day* answered again **6 to 36 minutes later, 21 times out of 21**, so the label now costs a five-minute re-probe and the hour is bought only after the whole pool has gone twenty minutes without a single answer. A retry hint written in **milliseconds** stopped being read as minutes — `683.050353ms` was becoming 40,983 seconds, and on the sister port that cost five keys between four and twelve hours each in one session. And a **5xx no longer escalates at all**: a 503 is not metered, so a longer rest buys nothing, and the old ladder was measured climbing on a *healthy* pool 7 times out of 16 — once holding a working key for forty seconds while its neighbour was serving. |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
 | **1.0.9** | Agent Zero makes the call | KAME only *chooses* the key — the request, stream and parsing go back to the host, so an A0 release stops breaking rotation |
@@ -75,9 +75,9 @@ was measured on real refusals first:
 > endpoints, and an independent answer key of **68 error shapes from 12
 > providers and gateways** — Google Gemini, OpenAI, OpenAI Codex, Anthropic,
 > NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux and GLM —
-> sorted into **11 kinds of error**. The answer key graded the Hermes port,
-> where these rules were built; this port runs the same rules and is held to
-> them by its parity suite.
+> sorted into **11 kinds of error**. This port now runs the Hermes port's own
+> error reader (`kame_evidence.py`), and the same answer key grades both: on
+> 1,897 real recorded refusals the two ports agree on every field.
 
 - **The provider's own number is obeyed, never inflated.** A stated
   `retryDelay`, `Retry-After` or "retry in N s" is used to the second — never
@@ -134,14 +134,75 @@ was measured on real refusals first:
   ladder's shape; `Retry-After` is read from every place LiteLLM puts it; a
   retry hint no longer swallows the next digits after its full stop.
 
+**Same features as the Hermes 1.8.1.0.** Checked item by item against the
+Hermes port before this release was republished:
+
+- **The same error reader.** `kame_evidence.py` is the Hermes catalogue of
+  error codes, statuses and exception classes, its prose tables, its window
+  and scope detection and its delay cascade (exception, headers, body, a dated
+  moment, a duration in the text). An account-wide throttle (Codex
+  `usage_limit_reached`, OpenRouter's free-models bucket, a `PerProject` quota)
+  rests that key on every model of the provider and is cleared by its next
+  answer. A relayed content-policy block is handed back instead of rotated.
+  Gateway free-tier advice appended to an error is removed before anything
+  reads it.
+- **Measured refutation.** Two refusals in a row that land right after the
+  deadline KAME set widen the next hold ×2, ×4, ×8 — capped at 5 minutes for a
+  per-minute window, an hour for per-hour, then the ceiling. Only for waits
+  that were measured; never for the bare-`RESOURCE_EXHAUSTED` ladder or the
+  daily re-probe. Any answer resets it.
+- **An events timeline.** The last 150 decisions in memory: a refusal (why,
+  status, rest, where the number came from), the key that took over, the
+  answer that ended it, a pool that had to wait, an error handed back to Agent
+  Zero, a setting that changed. `/kame events`.
+- **A refusal recorder and call timings**, in
+  `usr/plugin-data/api_rotation_by_kame/`: `refusals.jsonl` (the Hermes row
+  shape, keys removed before writing, allowlisted headers, 8 MB cap) and
+  `calls.jsonl` (time to first sign, to first text, total, time already
+  waited; no key, prompt or answer; 4 MB cap). Neither decides anything.
+  Switches: `refusal_recorder_disabled`, `call_timings_disabled`.
+- **Key health that survives a restart** (`share_pool_health`, on): holds are
+  kept in `pool-health.json` as hashes of the keys, read back bounded by the
+  ceiling in force, released on disk by an answer; a missing or damaged file
+  is ignored.
+- **Off switches, as on Hermes:** `rotation_disabled` (KAME does nothing),
+  `spread_disabled` (first ready key in list order), `carousel_disabled` (one
+  attempt per call; the refused key is still rested).
+- **Commands:** `/kame events`, `/kame get`, `/kame set <name> <value>`,
+  `/kame reset <name|all>`, `/kame clear-pool`, `/kame help`; `/kame-quota`
+  (per key: resting or ready, how long, why) and `/kame-quota reset` (counts
+  only); `/kame-keys` (`status`, `add`, `import`, `reset`) — keys merge into
+  the provider's `.env` line after a backup of the previous file
+  (`.env.kame-<timestamp>.bak`, last 5 kept), and are only ever shown masked.
+- **Every setting in one table** (`kame_settings.py`) that the commands, the
+  settings page and `default_config.yaml` are tested against, with the Hermes
+  environment names: also `KAME_DAILY_COOLDOWN`, `KAME_ROTATION_DISABLED`,
+  `KAME_SPREAD_DISABLED`, `KAME_CAROUSEL_DISABLED`, `KAME_RECORDER_DISABLED`,
+  `KAME_CALL_TIMINGS_DISABLED`, `KAME_SHARE_POOL_HEALTH`,
+  `KAME_STORM_COLLAPSE_DISABLED`, `KAME_LIVE_STATUS_DISABLED`.
+- **Clear pool starts every key from zero** — memory *and* the holds on disk.
+  The Hermes port had that bug on its own button (the file put every bench
+  back); this port was built with the fix.
+- The README's `.env` example now says `API_KEY_GOOGLE`, which is the variable
+  Agent Zero v2.x reads for Gemini.
+
+Deliberately not ported, because Agent Zero has no counterpart: stream
+stitching and the first-token timeout (Agent Zero owns the stream since
+1.0.9), Hermes' Gemini tool-slot repair, field probe, key resolver, quotaId
+adapter switch, host footer text, the no-model-fallback switch (Agent Zero
+never falls back) and the Desktop panel (here: the chip, the settings page and
+the commands).
+
 **Verified:**
 
 | Check | Result |
 |---|---|
 | Two real sessions — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | 26 / 26 answered, 16 of them concurrent; 13 real `503`s absorbed at 1s each; all 14 keys carried traffic |
+| A third real session, after the parity work — Agent Zero v2.12, real LiteLLM, NVIDIA NIM, 2 real keys | **12 / 12 answered**, 6 of them concurrent, the two keys sharing the load evenly; every refusal, hold and timing written to disk with **no key fragment** in any file. The same day's Gemini pool (14 keys) was out of its daily quota: every key got a `PerDay` refusal, a 5-minute re-probe, and the holds survived a restart of the process; a retired model (`410 Gone`) was handed back to Agent Zero instead of rotated |
 | Live harness on a real Agent Zero checkout | all green on v2.11 and v2.12 |
-| `tools/a0_upgrade_check.py` against v2.12 | 12 / 12 symbols and 12 / 12 host facts; baseline re-pinned to v2.12 after reading the three changed symbols |
-| Offline suites | 14 / 14 |
+| `tools/a0_upgrade_check.py` against v2.12 | 15 / 15 symbols (three added for the new commands) and 12 / 12 host facts; baseline re-pinned to v2.12 after reading the three changed symbols |
+| Offline suites | 17 / 17 |
+| Answer-key gate — 1,897 real recorded refusals, judged by each port's own engine | A0 and Hermes agree on **every field** (family 100, window 99.69, scope 99.88, action 98.89) |
 
 Versions 1.6.0.x and 1.7.0.x were built but never published on their own;
 everything they did is part of this release.

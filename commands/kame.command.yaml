@@ -1,4 +1,5 @@
 name: kame
-description: "Show KAME's key rotation: which build is running, what each pool holds, and what needs a human."
+description: "KAME key rotation: pools, events, settings. /kame help lists everything."
+argument_hint: "[doctor|events [n]|get|set <name> <value>|reset <name|all>|clear-pool|help]"
 type: script
 script_path: kame_command.py

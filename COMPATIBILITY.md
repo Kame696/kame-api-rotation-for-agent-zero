@@ -110,7 +110,8 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.8 | 1.0.9 | **live-verified** | 12/12 fingerprints unchanged. See §2.1. |
 | V2.9 | 1.2.0 | supported | not separately audited; v2.10 was verified over it |
 | V2.10 | 1.2.0 | **live-verified** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
-| **V2.11** | **1.6.0.4** | **verified — current baseline** | 10/12 unchanged; the 2 changed are both `degraded` and were read (§2.3). Live harness green. |
+| V2.11 | 1.6.0.4 → 1.8.1.0 | **live-verified** | 10/12 unchanged at 1.6.0.4; the 2 changed are both `degraded` and were read (§2.3). Live harness green on 1.8.1.0. |
+| **V2.12** | **1.8.1.0** | **verified — current baseline** | 15/15 symbols (three added in 1.8.1.0 for the new commands, §3.2) and 12/12 host facts. Live harness green; three real sessions. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real
@@ -255,6 +256,9 @@ A failure in any of these can no longer prevent rotation from installing.
 | `RepairableException` | `helpers/errors.py` | In KAME's passthrough tuple — must reach A0's repair loop, never be swallowed as a failed API call. Degrades to an empty tuple if the import fails. | degraded |
 | `Agent.monologue` | `agent.py` | One of three activation doors (§3.3). | degraded |
 | `StopUnusableResponseLoop.execute` | `extensions/…/hist_add_warning/end/_90_stop_unusable_response_loop.py` | Extension folder for the unusable-response floor (§4.2). Reads A0's `_unusable_response_failures` counter and clears only the abort A0 staged. Absent (and inert) before A0 v2.4. | degraded, optional |
+| `save_plugin_config` | `helpers/plugins.py` | 1.8.1.0: `/kame set` and `/kame reset` save through it (plugin_name, project_name, agent_profile, settings). | degraded, optional |
+| `save_dotenv_value` | `helpers/dotenv.py` | 1.8.1.0: `/kame-keys add|import` merge keys into the provider's `usr/.env` line through it, after a backup. | degraded |
+| `_run_script_command` | `plugins/_commands/helpers/commands.py` | 1.8.1.0: `/kame`, `/kame-quota`, `/kame-keys` are script commands; `run(payload)` reads `invocation.raw_arguments` and `context.agent`, answers with `show_markdown` / `toast`. Added in A0 v2.11. | degraded, optional |
 
 ### 3.3 Activation — three independent doors
 

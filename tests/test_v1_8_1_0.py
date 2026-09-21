@@ -250,8 +250,10 @@ check("a 'timeout' that failed in 0.4s rests 3s, not 0 (%s)" % (fast_rest[:2],),
 fresh(ID)
 slow_rest = K._kame_rest_for_failure(ID, "A", asyncio.TimeoutError(), elapsed=30.0)
 check("a timeout that really waited 30s rests 0s", slow_rest[0] == 0.0)
+_engine_src = open(os.path.join(HERE, "kame_engine.py"), encoding="utf-8").read()
 check("the production loop hands the attempt's duration in",
-      "_kame_rest_for_failure(identity, key, e, elapsed=" in open(os.path.join(HERE, "kame_engine.py"), encoding="utf-8").read())
+      "_kame_decide_failure(\n                identity, key, e, elapsed=time.perf_counter() - _attempt_t0" in _engine_src
+      and "return _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)" in _engine_src)
 
 print("\n--- 5. out of credit is the account's ---")
 for ident in ("openai:gpt-6", "openai:gpt-6-mini", "gemini:gemini-3.8-flash"):

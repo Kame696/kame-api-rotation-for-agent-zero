@@ -591,6 +591,39 @@ else:
           "post-response utilities cannot reopen the group" in _mw_src,
           "message-window.js no longer documents the post-response util rule")
 
+# --- v1.8.1.0: what the new commands and settings lean on ---------------------
+# `/kame set` saves through A0's plugin config, `/kame-keys` writes the provider
+# line through A0's own .env writer, and three slash commands are script
+# commands whose `run(payload)` reads `invocation.raw_arguments` and answers
+# with `show_markdown` / `toast` effects. Read from source, because importing
+# these helpers pulls in the whole web stack.
+def _src(*parts):
+    path = os.path.join(_A0, *parts)
+    return open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+
+
+_plugins_src = _src("helpers", "plugins.py")
+check("A0's plugin config can still be read by name and agent",
+      re.search(r"def get_plugin_config\(\s*plugin_name[^)]*agent", _plugins_src, re.S) is not None)
+check("...and saved as (plugin_name, project_name, agent_profile, settings)",
+      re.search(r"def save_plugin_config\(\s*plugin_name[^,]*,\s*project_name[^,]*,\s*agent_profile[^,]*,\s*settings",
+                _plugins_src, re.S) is not None)
+_dotenv_src = _src("helpers", "dotenv.py")
+check("A0's .env writer keeps its name and shape",
+      "def save_dotenv_value(key" in _dotenv_src and "def get_dotenv_file_path(" in _dotenv_src)
+check("A0 still reads a provider's keys from API_KEY_<PROVIDER>",
+      'API_KEY_{service.upper()}' in _src("models.py"))
+_cmd_src = _src("plugins", "_commands", "helpers", "commands.py")
+if not _cmd_src:
+    print("N/A   A0's slash commands (added in v2.11) - not on this build")
+else:
+    check("script commands still receive invocation and the agent",
+          '"invocation": invocation' in _cmd_src and '"agent": getattr(context, "agent0", None)' in _cmd_src)
+    check("a command name may carry a dash (kame-quota, kame-keys)",
+          "a-z0-9_-" in _cmd_src)
+    check("the slash store still renders show_markdown",
+          'type === "show_markdown"' in _src("plugins", "_commands", "webui", "commands-slash-store.js"))
+
 print("=" * 60)
 if _failures:
     print("FAILURES:", _failures)

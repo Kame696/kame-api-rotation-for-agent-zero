@@ -47,9 +47,58 @@ EXPECTED_RESTS = (
 )
 
 
+PLUGIN = "api_rotation_by_kame"
+
+HELP = """**KAME commands**
+
+| command | what it does |
+|---|---|
+| `/kame` | pools, what is resting, what needs a human, the build |
+| `/kame doctor` | the same, plus the cooldown table and where each number came from |
+| `/kame events [n]` | the last decisions, newest first: refused, took over, answered, waited |
+| `/kame get` | every setting, its value, and the environment variable that overrides it |
+| `/kame set <name> <value>` | change a setting now; saved in the plugin config |
+| `/kame reset <name>` · `/kame reset all` | back to the default |
+| `/kame clear-pool` | every key starts again from zero (rests, ladders, holds on disk) |
+| `/kame-quota` · `/kame-quota reset` | the quota picture per key and model · clear the counts |
+| `/kame-keys` · `add` · `import` · `reset` | add and inspect keys in bulk |
+
+Same settings, same environment variables as the Hermes port. Keys appear only
+as fingerprints."""
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     invocation = payload.get("invocation") or {}
-    argument = str(invocation.get("raw_arguments") or "").strip().lower()
+    raw = str(invocation.get("raw_arguments") or "").strip()
+    argument = raw.lower()
+    agent = (payload.get("context") or {}).get("agent")
+
+    verb, _, rest = raw.partition(" ")
+    verb = verb.lower()
+    if verb in ("help", "?", "-h", "--help"):
+        return _show("KAME — help", HELP)
+    if verb in ("get", "set", "reset", "events", "clear-pool", "clear_pool"):
+        try:
+            from usr.plugins.api_rotation_by_kame import kame_engine as engine
+        except Exception as exc:
+            return _toast(f"KAME's engine did not import ({type(exc).__name__}).", level="error")
+        try:
+            if verb == "events":
+                return _show("KAME — events", _render_events(engine.pool_report(), rest))
+            if verb in ("clear-pool", "clear_pool"):
+                count = engine.reset_pool()
+                return _show("KAME — pool cleared",
+                             f"**{count} key(s) start again from zero** — rests, ladders, "
+                             "refusal streaks and the holds kept on disk are gone. "
+                             "No key and no setting was touched.")
+            if verb == "get":
+                return _show("KAME — settings", _render_settings(engine))
+            if verb == "set":
+                name, _, value = rest.strip().partition(" ")
+                return _set_setting(engine, name.strip(), value.strip(), agent)
+            return _reset_setting(engine, rest.strip(), agent)
+        except Exception as exc:
+            return _toast(f"/kame {verb} failed: {type(exc).__name__}: {exc}", level="error")
 
     try:
         from usr.plugins.api_rotation_by_kame.kame_engine import pool_report
@@ -71,6 +120,122 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     return {"text": "", "effects": [
         {"type": "show_markdown", "title": title, "content": content}
     ]}
+
+
+def _show(title: str, content: str) -> dict[str, Any]:
+    return {"text": "", "effects": [
+        {"type": "show_markdown", "title": title, "content": content}
+    ]}
+
+
+def _settings_table():
+    try:
+        from usr.plugins.api_rotation_by_kame import kame_settings
+    except Exception:
+        import kame_settings  # type: ignore  # running from the plugin directory
+    return kame_settings
+
+
+def _render_settings(engine) -> str:
+    table = _settings_table()
+    current = engine.current_settings()
+    lines = ["| setting | value | default | environment | what it does |",
+             "|---|---|---|---|---|"]
+    for name, row in table.SETTINGS.items():
+        value = current.get(name, "(read by its own extension)")
+        env = row[5] or "—"
+        forced = table.env_override(name)
+        if forced:
+            env = f"**{forced} is set — it wins**"
+        lines.append(f"| `{name}` | `{value}` | `{row[1]}` | {env} | {row[6]}: {row[7]} |")
+    lines.append("")
+    lines.append("`/kame set <name> <value>` changes one now. The environment "
+                 "wins over the settings page, as on Hermes.")
+    return "\n".join(lines)
+
+
+def _save(name: str, value, agent, remove: bool = False) -> None:
+    from helpers.plugins import get_plugin_config, save_plugin_config
+
+    config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
+    if remove:
+        config.pop(name, None)
+    else:
+        config[name] = value
+    save_plugin_config(PLUGIN, "", "", config)
+    # Apply now rather than on the next agent start. `activate` re-reads the
+    # config, re-applies every setter and the environment, and puts the change
+    # on the events timeline. Idempotent: the patch is not re-applied.
+    try:
+        from usr.plugins.api_rotation_by_kame.kame_activation import activate
+        activate(agent)
+    except Exception:
+        pass
+
+
+def _set_setting(engine, name: str, value: str, agent) -> dict[str, Any]:
+    table = _settings_table()
+    if not name or not value:
+        return _toast("Usage: /kame set <name> <value> — `/kame get` lists the names.", level="error")
+    ok, parsed, message = table.parse(name, value)
+    if not ok:
+        return _toast(message, level="error")
+    _save(name, parsed, agent)
+    forced = table.env_override(name)
+    tail = (f" `{forced}` is set in the environment and still wins until it is removed."
+            if forced else "")
+    return _show("KAME — setting saved", f"`{name}` = `{parsed}`. In force from the next call.{tail}")
+
+
+def _reset_setting(engine, name: str, agent) -> dict[str, Any]:
+    table = _settings_table()
+    if not name:
+        return _toast("Usage: /kame reset <name> — or /kame reset all", level="error")
+    names = list(table.SETTINGS) if name == "all" else [name]
+    for one in names:
+        if one not in table.SETTINGS:
+            return _toast(f"`{one}` is not a KAME setting.", level="error")
+    from helpers.plugins import get_plugin_config, save_plugin_config
+
+    config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
+    for one in names:
+        config[one] = table.default(one)
+    save_plugin_config(PLUGIN, "", "", config)
+    try:
+        from usr.plugins.api_rotation_by_kame.kame_activation import activate
+        activate(agent)
+    except Exception:
+        pass
+    what = "every setting" if name == "all" else f"`{name}`"
+    return _show("KAME — setting reset", f"{what} back to the default.")
+
+
+def _render_events(report: dict, rest: str) -> str:
+    try:
+        limit = max(1, min(150, int(rest.strip() or "25")))
+    except ValueError:
+        limit = 25
+    rows = (report.get("events") or [])[:limit]
+    if not rows:
+        return ("_Nothing yet. Every refusal, every key that takes over, every "
+                "answer after a refusal and every setting change appears here._")
+    import time as _time
+
+    lines = ["| when | what | pool | key | why | code | rest | number from |",
+             "|---|---|---|---|---|---|---|---|"]
+    for row in rows:
+        when = _time.strftime("%H:%M:%S", _time.localtime(row.get("at") or 0))
+        lines.append(
+            f"| {when} | {row.get('kind', '')} | `{row.get('identity', '')}` | "
+            f"{row.get('key', '') or '—'} | {row.get('reason', '')} | "
+            f"{row.get('code') if row.get('code') is not None else '—'} | "
+            f"{_dur(row.get('seconds')) if row.get('seconds') else '—'} | "
+            f"{row.get('sized_by', '') or '—'} |"
+        )
+    lines.append("")
+    lines.append(f"_{len(rows)} newest. `/kame events 100` shows more; the list "
+                 "holds the last 150 and lives in memory only._")
+    return "\n".join(lines)
 
 
 def _render(report: dict, doctor: bool) -> str:
@@ -168,7 +333,7 @@ def _render(report: dict, doctor: bool) -> str:
     if not doctor:
         lines.append("")
         lines.append("_`/kame doctor` adds the full cooldown table and the "
-                     "session counters._")
+                     "session counters. `/kame help` lists every command._")
         return "\n".join(lines)
 
     # --- doctor: the table, beside what actually happened --------------------

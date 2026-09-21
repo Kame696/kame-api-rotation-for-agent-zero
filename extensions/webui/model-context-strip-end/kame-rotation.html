@@ -95,6 +95,20 @@
           </div>
         </template>
 
+        <template x-if="$store.kameRotation.view.hasEvents">
+          <div class="kame-rot-events">
+            <div class="kame-rot-events-head">Last decisions · <code>/kame events</code> for more</div>
+            <template x-for="ev in $store.kameRotation.view.events" :key="ev.id">
+              <div class="kame-rot-event" :class="ev.good ? 'kame-rot-event-good' : 'kame-rot-event-bad'">
+                <span class="kame-rot-event-time" x-text="ev.time"></span>
+                <span class="kame-rot-event-kind" x-text="ev.kind"></span>
+                <span class="kame-rot-key-id" x-text="ev.key"></span>
+                <span class="kame-rot-event-why" x-text="ev.reason + (ev.rest ? ' · ' + ev.rest : '')"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+
         <template x-if="$store.kameRotation.view.retired">
           <!--
             The one sentence in this panel that asks the reader to DO something.
@@ -113,6 +127,27 @@
 </div>
 
 <style>
+  .kame-rot-events {
+    margin-top: 0.6rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--color-border, rgba(127, 127, 127, 0.25));
+    font-size: 0.75rem;
+  }
+  .kame-rot-events-head {
+    opacity: 0.7;
+    margin-bottom: 0.3rem;
+  }
+  .kame-rot-event {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    gap: 0.4rem;
+    align-items: baseline;
+    padding: 0.1rem 0;
+  }
+  .kame-rot-event-time { opacity: 0.6; font-variant-numeric: tabular-nums; }
+  .kame-rot-event-good .kame-rot-event-kind { color: #2ecc71; }
+  .kame-rot-event-bad .kame-rot-event-kind { color: #e67e22; }
+  .kame-rot-event-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kame-rot-anchor {
     position: static;
     display: flex;

@@ -114,3 +114,39 @@ kame_collapse_storm_logs: true
 # Turning this off silences both. The always-on rotation indicator beside the
 # composer is separate and is toggled from Agent Zero's own interface controls.
 kame_wait_notice: true
+
+# ---------------------------------------------------------------------------
+# v1.8.1.0: the rest of the Hermes port's settings. Same names, same
+# environment variables, same defaults. `/kame get` lists every one with its
+# current value; `/kame set <name> <value>` changes one without this page.
+# ---------------------------------------------------------------------------
+
+# Keep key holds on disk (usr/plugin-data/api_rotation_by_kame/pool-health.json)
+# so restarting Agent Zero does not spend calls on keys already known to be out.
+# A hash of each key, never the key; never longer than max_hold_seconds; a
+# missing or damaged file is ignored. Default on.
+# Environment override: KAME_SHARE_POOL_HEALTH.
+share_pool_health: true
+
+# Stop writing refusals.jsonl (each refusal a provider sent, keys removed,
+# 8 MB at most, decides nothing). Default off - the recorder runs.
+# Environment override: KAME_RECORDER_DISABLED.
+refusal_recorder_disabled: false
+
+# Stop writing calls.jsonl (one line per attempt: durations, outcome, a key
+# fingerprint - no key, prompt or answer; 4 MB at most). Default off.
+# Environment override: KAME_CALL_TIMINGS_DISABLED.
+call_timings_disabled: false
+
+# Turn KAME off without uninstalling it: every call goes to Agent Zero exactly
+# as if the plugin were not there. Environment override: KAME_ROTATION_DISABLED.
+rotation_disabled: false
+
+# Keep the cooldowns but use the first ready key in the order written instead
+# of the least-loaded one. Environment override: KAME_SPREAD_DISABLED.
+spread_disabled: false
+
+# One attempt per call: the refused key is still rested, the error goes back to
+# Agent Zero instead of KAME trying the next key.
+# Environment override: KAME_CAROUSEL_DISABLED.
+carousel_disabled: false
