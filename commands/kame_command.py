@@ -154,15 +154,47 @@ def _render_settings(engine) -> str:
     return "\n".join(lines)
 
 
-def _save(name: str, value, agent, remove: bool = False) -> None:
-    from helpers.plugins import get_plugin_config, save_plugin_config
+def _raw_config(agent):
+    """Read only the exact writable scope, never effective/fallback settings."""
+    if agent is None:
+        # Global command/tests: there is no project/profile fallback to avoid,
+        # so the public helper is already the exact writable scope.
+        from helpers.plugins import get_plugin_config
 
-    config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
+        config = dict(get_plugin_config(PLUGIN, agent=None) or {})
+        return "", "", config
+    import json
+    from pathlib import Path
+    from helpers.plugins import CONFIG_FILE_NAME, determine_plugin_asset_path
+
+    project, profile = "", ""
+    if agent is not None:
+        from helpers import projects
+        project = projects.get_context_project_name(agent.context) or ""
+        profile = agent.config.profile or ""
+    path = Path(determine_plugin_asset_path(PLUGIN, project, profile, CONFIG_FILE_NAME))
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # The host resolves one config file, not a merge. When creating a new
+        # scope retain its effective values so changing one dial cannot reset
+        # every other inherited setting. Write only to this scope, never global.
+        from helpers.plugins import get_plugin_config
+        config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
+    if not isinstance(config, dict):
+        raise ValueError("KAME scoped config must be a JSON object")
+    return project, profile, config
+
+
+def _save(name: str, value, agent, remove: bool = False) -> None:
+    from helpers.plugins import save_plugin_config
+
+    project, profile, config = _raw_config(agent)
     if remove:
         config.pop(name, None)
     else:
         config[name] = value
-    save_plugin_config(PLUGIN, "", "", config)
+    save_plugin_config(PLUGIN, project, profile, config)
     # Apply now rather than on the next agent start. `activate` re-reads the
     # config, re-applies every setter and the environment, and puts the change
     # on the events timeline. Idempotent: the patch is not re-applied.
@@ -195,12 +227,12 @@ def _reset_setting(engine, name: str, agent) -> dict[str, Any]:
     for one in names:
         if one not in table.SETTINGS:
             return _toast(f"`{one}` is not a KAME setting.", level="error")
-    from helpers.plugins import get_plugin_config, save_plugin_config
+    from helpers.plugins import save_plugin_config
 
-    config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
+    project, profile, config = _raw_config(agent)
     for one in names:
         config[one] = table.default(one)
-    save_plugin_config(PLUGIN, "", "", config)
+    save_plugin_config(PLUGIN, project, profile, config)
     try:
         from usr.plugins.api_rotation_by_kame.kame_activation import activate
         activate(agent)

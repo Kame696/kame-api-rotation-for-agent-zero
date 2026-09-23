@@ -6,9 +6,11 @@
 
 **Paste several API keys. KAME picks the healthiest one for every call, reads every refusal, and never lets a rate limit end your run.**
 
+> **Release evidence.** 1.8.1.1 passed offline and runtime compatibility checks. The real-provider session results below belong to 1.8.1.0; 1.8.1.1 was not installed into Agent Zero for this release.
+
 Smart API key rotation, 429 / `RESOURCE_EXHAUSTED` recovery and rate-limit failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or any provider LiteLLM speaks to.
 
-[![Version](https://img.shields.io/badge/version-1.8.1.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.1.1-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.12-purple.svg)](#verified)
 [![Real sessions](https://img.shields.io/badge/real_sessions-26%2F26_answered-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
@@ -58,7 +60,7 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.0 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.1 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -198,7 +200,7 @@ Nothing needs changing. Every setting is on the plugin's settings page and in `/
 | A third real session, after the parity work — Agent Zero v2.12, real LiteLLM, NVIDIA NIM, 2 real keys | **12 / 12 answered**, 6 of them concurrent, the two keys sharing the load evenly; every refusal, hold and timing written to disk with **no key fragment** in any file. The same day's Gemini pool (14 keys) was out of its daily quota: every key got a `PerDay` refusal, a 5-minute re-probe, and the holds survived a restart of the process; a retired model (`410 Gone`) was handed back to Agent Zero instead of rotated |
 | Live harness — KAME's real patches applied to a real Agent Zero checkout | **all green** on v2.11 and v2.12 |
 | Upgrade check — every Agent Zero symbol KAME touches | **15 / 15** fingerprints (three new in 1.8.1.0: the plugin config writer, the `.env` writer, the script-command runner) and **12 / 12** host facts hold on v2.12 |
-| Offline tests | **17 / 17** suites green, including the 1.8.1.0 parity, commands and error-reader suites |
+| Offline tests | **17 / 17** standalone suites green, plus **15 pytest regression tests** for 1.8.1.1 |
 | Answer-key gate — 1,897 real recorded refusals, judged by each port's own engine | A0 and Hermes agree on **every field** (family 100, window 99.69, scope 99.88, action 98.89) |
 | Adversarial review | a second model tried to break the port; its 8 findings are fixed and each is now a test |
 
@@ -296,6 +298,6 @@ MIT — see [LICENSE](LICENSE). Bugs and ideas: [issues](https://github.com/Kame
 
 <div align="center">
 
-🐢⚡ **KAME 1.8.1.0** — *because round-robin was never enough*
+🐢⚡ **KAME 1.8.1.1** — *because round-robin was never enough*
 
 </div>

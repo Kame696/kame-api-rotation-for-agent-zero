@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.1** | Reliability patch: reset, account holds, scoped settings and safe imports | Account-wide holds are stored independently from per-model holds and reach models first seen after the refusal; server-outage thaw can no longer shorten an account limit. Pool reset reports persistence failure instead of claiming success, and a sleeping exhausted pool re-checks after every slice so reset/recovery wakes it promptly. `/kame set/reset` writes only the active project/profile scope. `/kame-keys import` parses dotenv quotes/comments, requires a collision-resistant backup before changing an existing `.env`, recorder redaction is hardened, and call IDs are collision-resistant. Verified against a fresh Agent Zero v2.12 checkout. |
 | **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates, a refused model no longer benches the key. Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, an events timeline (`/kame events`), a refusal recorder and call timings on disk, key health that survives a restart, off switches, `/kame get|set|reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on Agent Zero v2.12 |
 | **1.7.0.5** | Three numbers, measured on real keys | A daily quota label stops buying an hour by itself: measured on fourteen real keys, a key Google had refused *for the day* answered again **6 to 36 minutes later, 21 times out of 21**, so the label now costs a five-minute re-probe and the hour is bought only after the whole pool has gone twenty minutes without a single answer. A retry hint written in **milliseconds** stopped being read as minutes — `683.050353ms` was becoming 40,983 seconds, and on the sister port that cost five keys between four and twelve hours each in one session. And a **5xx no longer escalates at all**: a 503 is not metered, so a longer rest buys nothing, and the old ladder was measured climbing on a *healthy* pool 7 times out of 16 — once holding a working key for forty seconds while its neighbour was serving. |
 | **1.2.0** | The wait, said out loud | An all-keys-cooling wait now says so in the chat, and the settings screen admits its settings are not equally interesting |
@@ -61,7 +62,37 @@ graph LR
 
 ---
 
-## v1.8.1.0 — current
+## v1.8.1.1 — current
+
+**In short:** a narrow reliability patch over 1.8.1.0. It changes no provider
+selection policy and adds no new routing feature; it closes failure modes found
+while auditing restart/reset behavior, shared account limits and command writes.
+
+- **Account and model holds are independent.** A provider-wide account hold is
+  persisted once per provider/key, applies to newly seen models after restart,
+  and cannot overwrite or be shortened with a model's server-outage thaw.
+- **Reset is honest and complete.** Persisted holds are cleared even when health
+  sharing is switched off, and a failed disk clear is reported as an incomplete
+  reset instead of success.
+- **Cold-pool waits wake on facts.** Every sleep slice re-checks readiness, so a
+  reset or genuine concurrent recovery stops a stale wait promptly.
+- **Commands respect scope.** `/kame set` and `/kame reset` read and write the
+  active Agent Zero project/profile config rather than materialising fallback
+  values into a broader scope.
+- **Key import is safer.** Dotenv comments and quoted values are parsed as
+  assignments, backup names are collision-resistant, and an existing `.env` is
+  not modified unless its backup succeeded.
+- **Evidence files are safer.** Credential redaction covers structured/textual
+  secret fields and Authorization values while retaining quota evidence; call
+  IDs use random 64-bit identifiers rather than wall-clock milliseconds.
+
+Compatibility gate: Agent Zero v2.12 — **15/15 patch points unchanged, 12/12
+host facts hold, live compatibility harness green**. The real provider-session
+baseline remains the 1.8.1.0 sessions; 1.8.1.1 was not installed into Agent Zero.
+
+---
+
+## v1.8.1.0
 
 **In short:** the Hermes port's 1.8.x rules, brought across and checked the way
 the rule from 2026-09-04 demands — in a real session, not only in a test suite.

@@ -1,6 +1,6 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.8.1.0 — verified against Agent Zero v2.12 (2026-09-21).**
+**KAME 1.8.1.1 — compatibility re-verified against Agent Zero v2.12 (2026-09-22).**
 Live harness (KAME's real patches on a real Agent Zero checkout) green on **v2.11 and v2.12**, and
 on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10** in earlier releases. Two **real sessions** on v2.12 —
 real LiteLLM, real Gemini keys, `tools/live_a0_session.py` — answered 26 of 26.
@@ -111,7 +111,7 @@ with `ast` instead of importing it. Use `--skip-tests` if you only want those.
 | V2.9 | 1.2.0 | supported | not separately audited; v2.10 was verified over it |
 | V2.10 | 1.2.0 | **live-verified** | 12/12 fingerprints unchanged, live harness green (71 checks). See §2.2. |
 | V2.11 | 1.6.0.4 → 1.8.1.0 | **live-verified** | 10/12 unchanged at 1.6.0.4; the 2 changed are both `degraded` and were read (§2.3). Live harness green on 1.8.1.0. |
-| **V2.12** | **1.8.1.0** | **verified — current baseline** | 15/15 symbols (three added in 1.8.1.0 for the new commands, §3.2) and 12/12 host facts. Live harness green; three real sessions. |
+| **V2.12** | **1.8.1.1** | **verified — current baseline** | 15/15 symbols unchanged and 12/12 host facts hold on a fresh v2.12 checkout; live compatibility harness green. The real-session baseline remains 1.8.1.0. |
 
 "live-verified" means `tests/test_a0_compat.py` was run against a real checkout of
 that tag: KAME's real patches applied to A0's real classes, a real

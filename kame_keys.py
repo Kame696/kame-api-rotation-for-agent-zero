@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import shutil
 import time
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 MAX_BACKUPS = 5
+_IMPORT_LOCK = threading.RLock()
 
 # Prefix -> Agent Zero provider id (conf/model_providers.yaml). Only prefixes
 # that belong to ONE provider: a bare `sk-` is OpenAI, DeepSeek, Moonshot and
@@ -38,6 +41,7 @@ _PREFIXES = (
 
 _SPLIT = re.compile(r"[\s,;|]+")
 _PROVIDER = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def mask(key: str) -> str:
@@ -96,28 +100,134 @@ def plan_add(existing: str, new: List[str]) -> Tuple[List[str], List[str]]:
 
 
 def read_env(path: Path) -> Dict[str, str]:
-    """`NAME=value` lines of the .env, without exporting anything."""
-    out: Dict[str, str] = {}
+    """Parse dotenv assignments without exporting anything.
+
+    Comments only start outside quotes. Both quote styles are accepted and an
+    optional ``export`` prefix is ignored. This is deliberately small and
+    deterministic: KAME needs the key values, not shell expansion.
+    """
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, _, value = line.partition("=")
-            out[name.strip()] = value.strip().strip("\"'")
-    except OSError:
-        pass
+        return parse_env_text(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+
+
+def _dotenv_value(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    quote = ""
+    escaped = False
+    kept: List[str] = []
+    for index, char in enumerate(text):
+        if escaped:
+            kept.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote == '"':
+            escaped = True
+            kept.append(char)
+            continue
+        if quote:
+            kept.append(char)
+            if char == quote:
+                quote = ""
+            continue
+        if char in ("'", '"'):
+            quote = char
+            kept.append(char)
+            continue
+        if char == "#" and (index == 0 or text[index - 1].isspace()):
+            break
+        kept.append(char)
+    value = "".join(kept).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        quote = value[0]
+        value = value[1:-1]
+        if quote == '"':
+            value = value.replace(r'\"', '"').replace(r"\\", "\\")
+    return value
+
+
+def parse_env_text(text: str) -> Dict[str, str]:
+    """Return valid ``NAME=value`` assignments from dotenv-like text."""
+    out: Dict[str, str] = {}
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        name, _, raw = line.partition("=")
+        name = name.strip()
+        if not _ENV_NAME.fullmatch(name):
+            continue
+        out[name] = _dotenv_value(raw)
     return out
 
 
+def _provider_for_env_var(name: str) -> str:
+    match = re.match(r"^API_KEY_([A-Z0-9_]+)$", name, re.I) or re.match(
+        r"^([A-Z0-9_]+)_API_(?:KEY|TOKEN)$", name, re.I
+    )
+    return match.group(1).lower() if match else ""
+
+
+def parse_import(text: str, provider: str = "") -> Tuple[str, List[str]]:
+    """Read either a raw key list or dotenv-formatted key file.
+
+    A dotenv file may contain comments and unrelated settings. With an explicit
+    provider only that provider's API variable is imported. Without one, KAME
+    accepts the file only when all API-key assignments name one provider.
+    """
+    env = parse_env_text(text)
+    api_rows = [(name, value, _provider_for_env_var(name)) for name, value in env.items()]
+    api_rows = [(name, value, found) for name, value, found in api_rows if found and value]
+    wanted = str(provider or "").strip().lower()
+    if api_rows:
+        if wanted:
+            values = [value for _name, value, found in api_rows if found == wanted]
+            return wanted, split_keys("\n".join(values))
+        providers = {found for _name, _value, found in api_rows}
+        if len(providers) == 1:
+            chosen = next(iter(providers))
+            return chosen, split_keys("\n".join(value for _name, value, _found in api_rows))
+        return "", []
+    return wanted, split_keys(text)
+
+
 def backup(path: Path) -> Optional[str]:
-    """Copy the .env aside, keep the last five. Returns the backup's name."""
+    """Copy the .env aside with a collision-resistant name; keep the last five."""
     try:
         if not path.is_file():
             return None
-        target = path.with_name(f"{path.name}.kame-{time.strftime('%Y%m%d-%H%M%S')}.bak")
-        shutil.copy2(path, target)
-        for stale in sorted(path.parent.glob(f"{path.name}.kame-*.bak"))[:-MAX_BACKUPS]:
+        target = None
+        for _ in range(4):
+            candidate = path.with_name(
+                f"{path.name}.kame-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}-{secrets.token_hex(3)}.bak"
+            )
+            try:
+                with path.open("rb") as source, candidate.open("xb") as dest:
+                    shutil.copyfileobj(source, dest)
+                if candidate.read_bytes() != path.read_bytes():
+                    return None
+                try:
+                    shutil.copystat(path, candidate)
+                except OSError:
+                    pass
+                target = candidate
+                break
+            except FileExistsError:
+                continue
+        if target is None:
+            return None
+        backups = sorted(
+            path.parent.glob(f"{path.name}.kame-*.bak"),
+            key=lambda item: (item.stat().st_mtime_ns, item.name),
+        )
+        for stale in backups[:-MAX_BACKUPS]:
             try:
                 stale.unlink()
             except OSError:
@@ -129,6 +239,14 @@ def backup(path: Path) -> Optional[str]:
 
 def add(path: Path, provider: str, keys: List[str],
         save: Callable[[str, str], None]) -> str:
+    # Agent Zero runs commands in one process. Serialize read/merge/save so
+    # two imports cannot both read the same old list and lose one addition.
+    with _IMPORT_LOCK:
+        return _add_locked(path, provider, keys, save)
+
+
+def _add_locked(path: Path, provider: str, keys: List[str],
+                save: Callable[[str, str], None]) -> str:
     """Merge `keys` into the provider's line. Returns the message to show."""
     if not keys:
         return "No key found in that text."
@@ -141,7 +259,10 @@ def add(path: Path, provider: str, keys: List[str],
     merged, added = plan_add(env.get(var, ""), keys)
     if not added:
         return f"`{var}` already holds all {len(keys)} key(s). Nothing changed."
+    existed = path.is_file()
     saved = backup(path)
+    if existed and saved is None:
+        return "Could not create a backup of the existing .env. Nothing changed."
     save(var, ",".join(merged))
     lines = [f"Added {len(added)} key(s) to `{var}` — {len(merged)} in the pool now."]
     lines += [f"- {mask(k)}" for k in added]

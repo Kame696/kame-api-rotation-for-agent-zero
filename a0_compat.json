@@ -1,7 +1,7 @@
 {
-  "kame_version": "1.8.1.0",
+  "kame_version": "1.8.1.1",
   "verified_against": "v2.12",
-  "verified_on": "2026-09-21",
+  "verified_on": "2026-09-22",
   "a0_repo": "https://github.com/agent0ai/agent-zero",
   "supported_range": "Agent Zero v1.14+ and the whole V2 line",
   "verified_versions": [

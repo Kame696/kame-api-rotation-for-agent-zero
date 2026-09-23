@@ -167,7 +167,7 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, contextvars, hashlib, json, math, os, threading, time, re
+import asyncio, contextvars, hashlib, json, math, os, secrets, threading, time, re
 from typing import Any, List
 # v1.0.9: KAME no longer imports litellm, openai or logging. It used to call
 # `acompletion()` itself and silence litellm's loggers; now Agent Zero makes the
@@ -205,10 +205,11 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.1.0"
+KAME_VERSION = "1.8.1.1"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
+_KAME_ACCOUNT_HOLDS = {}  # {(provider, key): {until, kind, scope, at}}
 _KAME_LOCK = threading.Lock()
 
 #: The longest rest each ``provider:model`` has ever been **told** to take on a
@@ -932,13 +933,25 @@ def reset_pool() -> int:
                 for field in ("rest_label", "hold_kind", "hold_scope",
                               "last_hold_kind", "last_hold_window"):
                     kd[field] = ""
+                kd["model_until"] = 0
+                kd["model_kind"] = kd["model_scope"] = ""
+                kd["_hold_projection"] = 0
+        _KAME_ACCOUNT_HOLDS.clear()
         _KAME_STATED_RL.clear()
         _KAME_NO_ANSWER_SINCE.clear()
-    if _KJ is not None:
-        try:
-            _KJ.forget_holds()
-        except Exception:
-            pass
+        # Serialize reset with health writes: a concurrent refusal must not be
+        # removed from disk after it was already applied to memory.
+        if _KJ is not None:
+            try:
+                result = _KJ.forget_holds()
+                if getattr(result, "persistence_ok", True) is False:
+                    raise OSError("pool-health persistence failed")
+            except Exception as exc:
+                _kame_event("setting", reason="pool reset incomplete: memory cleared; persistence failed")
+                raise RuntimeError(
+                    f"Pool reset incomplete: {count} in-memory key(s) cleared; "
+                    "persisted holds could not be cleared. Retry the reset."
+                ) from exc
     _kame_event("setting", reason=f"pool cleared: {count} key(s) start again from zero")
     return count
 
@@ -1237,6 +1250,17 @@ def _next_recovery_seconds(identity: str, all_keys: list):
                 if best is None or eta < best:
                     best = eta
     return best
+
+
+def _pool_has_ready_key(identity: str, all_keys: list) -> bool:
+    """Read-only readiness check used to interrupt a stale exhaustion sleep."""
+    now = time.time()
+    with _KAME_LOCK:
+        pool = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+        candidates = [k for k in all_keys if k in pool and not pool[k].get("retired_at")]
+        if not candidates:
+            candidates = [k for k in all_keys if k in pool]
+        return any(float(pool[k].get("sick_until") or 0) < now for k in candidates)
 
 
 def _session_summary_line() -> str:
@@ -1625,6 +1649,49 @@ def _parse_duration_to_seconds(text):
 _KAME_POOL_GRACE_S = 300.0
 
 
+def _model_hold(kd):
+    """Read the independent model component, accepting legacy state rows.
+
+    sick_until remains an effective projection for older diagnostics. A legacy
+    caller explicitly changing it supplies a new model deadline, not an account
+    deadline; the provider component remains authoritative and independent.
+    Call under _KAME_LOCK, like all health helpers.
+    """
+    until = float(kd.get("sick_until") or 0)
+    projection = float(kd.get("_hold_projection", until) or 0)
+    if "model_until" not in kd or until != projection:
+        kd["model_until"] = until
+        kd["model_kind"] = kd.get("hold_kind") or ("server" if kd.get("consecutive_server") else "")
+        kd["model_scope"] = kd.get("hold_scope", "")
+        # Record that this legacy/external sick_until value has been absorbed
+        # into the model component. Without this acknowledgement a caller that
+        # immediately shortens model_until (server thaw) would have that change
+        # overwritten by the same stale projected sick_until on the next read.
+        kd["_hold_projection"] = until
+    return float(kd.get("model_until") or 0)
+
+
+def _effective_hold_until(identity, key, kd):
+    """Project max(model, account) without destroying either provenance."""
+    model_until = _model_hold(kd)
+    account = _KAME_ACCOUNT_HOLDS.get((str(identity).split(":", 1)[0], key), {})
+    account_until = float(account.get("until") or 0)
+    if account_until > model_until:
+        kd["hold_kind"] = account.get("kind", "")
+        kd["hold_scope"] = "account"
+    else:
+        kd["hold_kind"] = kd.get("model_kind", "")
+        kd["hold_scope"] = kd.get("model_scope", "")
+    kd["sick_until"] = kd["_hold_projection"] = max(model_until, account_until)
+    return kd["sick_until"]
+
+
+def _refresh_account_projections(provider, key):
+    for ident, state in _KAME_KEY_HEALTH.items():
+        if str(ident).split(":", 1)[0] == provider and key in state.get("keys", {}):
+            _effective_hold_until(ident, key, state["keys"][key])
+
+
 def _get_identity_state(identity, all_keys):
     global _KAME_KEY_HEALTH
     if identity not in _KAME_KEY_HEALTH:
@@ -1671,9 +1738,23 @@ def _get_identity_state(identity, all_keys):
                     held = None
                 if held:
                     kd_new = state["keys"][k]
-                    kd_new["sick_until"] = min(float(held["until"]), now + _KAME_MAX_HOLD_S)
-                    kd_new["hold_kind"] = held.get("kind", "")
-                    kd_new["hold_scope"] = held.get("scope", "")
+                    model = held.get("model")
+                    account = held.get("account")
+                    if "model" not in held and "account" not in held:
+                        if held.get("scope") == "account":
+                            account = held
+                        else:
+                            model = held
+                    if model:
+                        kd_new["model_until"] = min(float(model["until"]), now + _KAME_MAX_HOLD_S)
+                        kd_new["model_kind"] = model.get("kind", "")
+                        kd_new["model_scope"] = model.get("scope", "")
+                    if account:
+                        account = dict(account)
+                        account["until"] = min(float(account["until"]), now + _KAME_MAX_HOLD_S)
+                        slot = (str(identity).split(":", 1)[0], k)
+                        if account["until"] > _KAME_ACCOUNT_HOLDS.get(slot, {}).get("until", 0):
+                            _KAME_ACCOUNT_HOLDS[slot] = account
                     kd_new["last_sick_at"] = float(held.get("at", now))
         else:
             # Defensive: backfill for keys created on earlier versions.
@@ -1684,6 +1765,7 @@ def _get_identity_state(identity, all_keys):
             state["keys"][k].setdefault("consecutive_denials", 0)
             state["keys"][k].setdefault("retired_at", 0)
             state["keys"][k]["last_offered"] = now
+        _effective_hold_until(identity, k, state["keys"][k])
 
     # v1.6.0.1: the pool now mirrors the live candidate list instead of only
     # ever growing.
@@ -1752,6 +1834,7 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
         if key not in state["keys"]:
             return applied
         kd = state["keys"][key]
+        _model_hold(kd)
         if success:
             kd["last_used"] = now
             kd["sick_until"] = 0
@@ -1766,6 +1849,8 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             kd["consecutive_unsized"] = 0  # v1.8.1.0: the ladder starts again at 1s
             kd["rest_label"] = ""
             kd["hold_kind"] = ""
+            kd["model_until"] = kd["_hold_projection"] = 0
+            kd["model_kind"] = kd["model_scope"] = kd["hold_scope"] = ""
             # v1.8.1.0: the key answered, so no deadline of its is proven short.
             kd["short_streak"] = 0
             kd["last_hold_until"] = 0
@@ -1780,14 +1865,8 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             # v1.8.1.0: an account-wide hold this key carries on the provider's
             # other models is refuted by this answer — the account is serving.
             provider = str(identity).split(":", 1)[0]
-            for other_id, other_state in _KAME_KEY_HEALTH.items():
-                if other_id == identity or str(other_id).split(":", 1)[0] != provider:
-                    continue
-                okd = other_state.get("keys", {}).get(key)
-                if okd is not None and okd.get("hold_scope") == "account":
-                    okd["sick_until"] = 0
-                    okd["hold_scope"] = ""
-                    okd["hold_kind"] = ""
+            _KAME_ACCOUNT_HOLDS.pop((provider, key), None)
+            _refresh_account_projections(provider, key)
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
             if _KJ is not None:
@@ -1998,12 +2077,6 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             kd["last_hold_until"] = now + applied
             kd["last_hold_kind"] = kind
             kd["last_hold_window"] = lane
-            if now + applied >= float(kd.get("sick_until", 0) or 0):
-                # v1.8.1.0: whose hold is binding. Only a hold a 5xx set may be
-                # thawed when an outage ends; a quota's hour must not be.
-                kd["hold_kind"] = kind
-                kd["hold_scope"] = "account" if (kind == "insufficient_quota" or scope == "account") else ""
-            kd["sick_until"] = max(kd.get("sick_until", 0), now + applied)
             kd["last_sick_at"] = now
             if kind == "insufficient_quota" or scope == "account":
                 # v1.8.0.0: out of credit belongs to the account, not to the
@@ -2014,19 +2087,25 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 # a `PerProject` quota) — bounded by the same ceiling, and
                 # cleared on every model by this key's next answer.
                 provider = str(identity).split(":", 1)[0]
-                for other_id, other_state in _KAME_KEY_HEALTH.items():
-                    if other_id == identity or str(other_id).split(":", 1)[0] != provider:
-                        continue
-                    okd = other_state.get("keys", {}).get(key)
-                    if okd is not None:
-                        okd["sick_until"] = max(okd.get("sick_until", 0), now + applied)
-                        okd["last_sick_at"] = now
-                        okd["hold_scope"] = "account"
-                        if _KJ is not None:
-                            _KJ.note_hold(other_id, key, okd["sick_until"], kind, "account")
-            if _KJ is not None:
-                _KJ.note_hold(identity, key, kd["sick_until"], kd.get("hold_kind", kind),
-                              kd.get("hold_scope", ""))
+                slot = (provider, key)
+                previous = _KAME_ACCOUNT_HOLDS.get(slot, {})
+                deadline = max(float(previous.get("until", 0) or 0), now + applied)
+                _KAME_ACCOUNT_HOLDS[slot] = {
+                    "until": deadline, "kind": kind, "scope": "account", "at": now,
+                }
+                _refresh_account_projections(provider, key)
+                if _KJ is not None:
+                    _KJ.note_hold(identity, key, deadline, kind, "account")
+            else:
+                previous_until = float(kd.get("model_until", 0) or 0)
+                deadline = max(previous_until, now + applied)
+                kd["model_until"] = deadline
+                if now + applied >= previous_until:
+                    kd["model_kind"] = kind
+                    kd["model_scope"] = str(scope or "")
+                _effective_hold_until(identity, key, kd)
+                if _KJ is not None:
+                    _KJ.note_hold(identity, key, deadline, kd.get("model_kind", kind), kd.get("model_scope", ""))
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
     return applied
 
@@ -2062,13 +2141,19 @@ def _thaw_server_cooled_keys(identity, exclude_key, new_cooldown=3.0):
         for i, (k, kd) in enumerate(state["keys"].items()):
             if k == exclude_key:
                 continue
+            model_until = _model_hold(kd)
             if (int(kd.get("consecutive_server", 0)) > 0
-                    and kd.get("hold_kind", "server") == "server"
-                    and float(kd.get("sick_until", 0) or 0) > now):
+                    and kd.get("model_kind", "server") == "server"
+                    and model_until > now):
                 # small per-key stagger so they don't all re-probe in lockstep
                 target = now + new_cooldown + (i % 5) * 0.4
-                if target < float(kd["sick_until"]):
-                    kd["sick_until"] = target
+                if target < model_until:
+                    kd["model_until"] = target
+                    kd["model_kind"] = "server"
+                    kd["model_scope"] = ""
+                    _effective_hold_until(identity, k, kd)
+                    if _KJ is not None:
+                        _KJ.note_hold(identity, k, target, "server", "")
                     thawed += 1
     return thawed
 
@@ -3676,6 +3761,11 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
         await asyncio.sleep(_slice)
         _slept += _slice
         await _kame_honor_intervention()
+        # A reset or a successful concurrent call may release a key before the
+        # deadline observed when this sleep began. Re-check every slice so a
+        # stale 60-second sleep never survives the fact that the pool recovered.
+        if _pool_has_ready_key(identity, all_keys):
+            break
         # v1.2.0: refresh the chat-side notice from inside the slice loop rather
         # than once per sleep. A sleep can be a full minute long; a countdown
         # that only moves every minute reads as frozen, which is the exact
@@ -3736,7 +3826,7 @@ async def _kame_carousel(self, ctx):
     _empty_budget = _KAME_EMPTY_RETRY_BUDGET
 
     attempt_no = 0
-    _call_id = "%x" % int(time.time() * 1000)   # v1.8.1.0: ties calls.jsonl rows together
+    _call_id = secrets.token_hex(8)   # collision-resistant id tying calls.jsonl rows together
     _last_failed_key = None
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1

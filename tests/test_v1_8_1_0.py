@@ -114,6 +114,10 @@ def check(name, cond):
 def fresh(identity, keys=("A", "B")):
     K._KAME_KEY_HEALTH.pop(identity, None)
     K._KAME_NO_ANSWER_SINCE.pop(identity, None)
+    provider = identity.split(":", 1)[0]
+    for slot in [s for s in list(K._KAME_ACCOUNT_HOLDS)
+                 if s[0] == provider and s[1] in keys]:
+        K._KAME_ACCOUNT_HOLDS.pop(slot, None)
     for _k in [k for k in list(K._KAME_STATED_RL) if k == identity or (isinstance(k, tuple) and k[0] == identity)]:
         K._KAME_STATED_RL.pop(_k, None)
     K._get_identity_state(identity, list(keys))
@@ -384,8 +388,8 @@ check("'try again in 5.2s.' next to a 429 code is 5.2s, not 434.2 (%s)" % (K._ex
 
 print("\n--- 7. one version everywhere ---")
 manifest = open(os.path.join(HERE, "plugin.yaml"), encoding="utf-8").read()
-check("engine says 1.8.1.0", K.KAME_VERSION == "1.8.1.0")
-check("manifest says 1.8.1.0", 'version: 1.8.1.0' in manifest or 'version: "1.8.1.0"' in manifest)
+check("engine says 1.8.1.1", K.KAME_VERSION == "1.8.1.1")
+check("manifest says 1.8.1.1", 'version: 1.8.1.1' in manifest or 'version: "1.8.1.1"' in manifest)
 
 print()
 if _failures:

@@ -1,4 +1,4 @@
-"""What KAME keeps beyond the current process — v1.8.1.0 (A0 port).
+"""What KAME keeps beyond the current process — v1.8.1.1 (A0 port).
 
 The Hermes port has four instruments this one lacked until 1.8.1.0, and each is
 ported here with the same contract, the same file names and the same row shape,
@@ -123,10 +123,17 @@ _PREFIXED = re.compile(
     r")",
     re.I,
 )
-_LONG_TOKEN = re.compile(r"\b(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{32,}\b")
+_LONG_TOKEN = re.compile(
+    # quotaId is provider evidence, not an opaque credential. Prefix/field
+    # redaction still runs first, even inside this field.
+    r'''(?P<quota>["']?\bquotaId["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+))'''
+    r"|\b(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{32,}\b",
+    re.I,
+)
 _SECRET_FIELD = re.compile(
-    r'("(?:api[_-]?key|apikey|authorization|access[_-]?token|refresh[_-]?token'
-    r'|secret|password|token)"\s*:\s*)"[^"]*"',
+    r'''((?<![\w-])["']?(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token'''
+    r'''|secret|password|token|bearer)["']?\s*[:=]\s*)'''
+    r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer[ \t]+)?[^\s,;&}\]"']+)''',
     re.I,
 )
 _KEY = re.compile(r"\b(?:AIza|sk-|nvapi-|gsk_|xai-|sk-ant-|hf_)[A-Za-z0-9_\-]{12,}", re.I)
@@ -142,10 +149,17 @@ def redact(text: Any, limit: int = 600) -> str:
     try:
         if text is None:
             return ""
-        raw = text if isinstance(text, str) else str(text)
+        raw = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False, default=str)
+        if raw.lstrip().startswith(("{", "[")):
+            try:
+                raw = json.dumps(_scrub_fields(json.loads(raw)), ensure_ascii=False, default=str)
+            except (ValueError, TypeError):
+                pass
         raw = _SECRET_FIELD.sub(r'\1"[redacted]"', raw)
+        raw = re.sub(r"\bBearer[ \t]+[^\s,;\"'}\]]+", "Bearer [redacted]", raw, flags=re.I)
+        raw = _KEY.sub("[redacted]", raw)
         raw = _PREFIXED.sub("[redacted]", raw)
-        raw = _LONG_TOKEN.sub("[redacted]", raw)
+        raw = _LONG_TOKEN.sub(lambda m: m.group(0) if m.group("quota") else "[redacted]", raw)
         raw = raw.strip()
         if limit and len(raw) > limit:
             return raw[:limit].rstrip() + " …"
@@ -155,9 +169,20 @@ def redact(text: Any, limit: int = 600) -> str:
 
 
 def _redact_corpus(text: str) -> str:
-    """The recorder's redaction — same as Hermes', so both corpora read alike."""
-    text = _KEY.sub("<KEY>", text)
-    return _KEY_FIELD.sub(lambda m: m.group(1) + "<KEY>", text)
+    """Use the same credential scrubber for events and disk evidence."""
+    return redact(text, limit=0)
+
+
+def _scrub_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): "[redacted]" if re.fullmatch(
+            r"api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|secret|password|token|cookie|set-cookie",
+            str(k), re.I) else _scrub_fields(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_fields(v) for v in value]
+    if isinstance(value, str):
+        return redact(value, limit=0)
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -340,11 +365,11 @@ def record_refusal(*, identity: str = "", key: str = "", exc: Any = None,
         provider, _, model = str(identity or "").partition(":")
         row: Dict[str, Any] = {
             "at": round(time.time(), 3),
-            "provider": provider,
-            "model": model,
+            "provider": _safe_text(provider, 256),
+            "model": _safe_text(model, 256),
             "status": status if isinstance(status, int) and not isinstance(status, bool) else None,
             "type": type(exc).__name__ if exc is not None else "",
-            "code": str(_safe_attr(exc, "code") or "") if exc is not None else "",
+            "code": _safe_text(_safe_attr(exc, "code"), 256) if exc is not None else "",
             "message": _safe_text(message or (str(exc) if exc is not None else "")),
             "body": _safe_text(body if body is not None else _safe_attr(exc, "body")),
             "response": "",
@@ -423,15 +448,65 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
 # ---------------------------------------------------------------------------
 _HEALTH_LOCK = threading.Lock()
 _HEALTH: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_ACCOUNT_HEALTH: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _HEALTH_LOADED = False
 _HEALTH_DIRTY = False
 _HEALTH_LAST_WRITE = 0.0
 _HEALTH_WRITE_EVERY_S = 1.0
 _HEALTH_MAX_ENTRIES = 4096
+_HEALTH_SCHEMA = 2
+
+
+class ForgetHoldsResult(int):
+    """Integer-compatible reset count with persistence status attached."""
+
+    def __new__(cls, value: int, persistence_ok: bool = True, error: str = ""):
+        result = int.__new__(cls, int(value))
+        result.persistence_ok = bool(persistence_ok)
+        result.error = str(error or "")
+        return result
+
+
+def _provider(identity: str) -> str:
+    return str(identity or "").split(":", 1)[0]
+
+
+def _clean_health_row(row: Any, now: float, *, account: bool = False) -> Optional[Dict[str, Any]]:
+    """Return one live, bounded-shape row; malformed/expired rows are ignored."""
+    if not isinstance(row, dict):
+        return None
+    try:
+        raw_until = row.get("until", 0)
+        if isinstance(raw_until, bool):
+            return None
+        until = float(raw_until)
+        if not (until > now and until < float("inf")):
+            return None
+        raw_at = row.get("at", now)
+        at = float(raw_at) if not isinstance(raw_at, bool) else now
+        if not (at == at and abs(at) < float("inf")):
+            at = now
+    except Exception:
+        return None
+    return {
+        "until": until,
+        "kind": str(row.get("kind", "") or "")[:24],
+        "scope": "account" if account else str(row.get("scope", "") or "")[:12],
+        "at": at,
+    }
+
+
+def _remember_row(store: Dict[str, Dict[str, Dict[str, Any]]], outer: str,
+                  key_hash: str, row: Dict[str, Any]) -> None:
+    """Keep the longest duplicate when schema-1 account rows collapse by provider."""
+    rows = store.setdefault(str(outer), {})
+    current = rows.get(str(key_hash))
+    if current is None or float(row.get("until", 0)) >= float(current.get("until", 0)):
+        rows[str(key_hash)] = row
 
 
 def _load_health() -> None:
-    global _HEALTH_LOADED, _HEALTH
+    global _HEALTH_LOADED, _HEALTH, _ACCOUNT_HEALTH
     if _HEALTH_LOADED:
         return
     _HEALTH_LOADED = True
@@ -442,7 +517,7 @@ def _load_health() -> None:
         document = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return  # missing, half-written, not JSON: memory only
-    if not isinstance(document, dict) or document.get("schema") != 1:
+    if not isinstance(document, dict) or document.get("schema") not in (1, _HEALTH_SCHEMA):
         return
     holds = document.get("holds")
     if not isinstance(holds, dict):
@@ -452,49 +527,74 @@ def _load_health() -> None:
         if not isinstance(rows, dict):
             continue
         for key_hash, row in rows.items():
-            try:
-                until = float(row.get("until", 0))
-            except Exception:
+            clean = _clean_health_row(
+                row,
+                now,
+                account=isinstance(row, dict) and row.get("scope") == "account",
+            )
+            if clean is None:
                 continue
-            if until > now:
-                _HEALTH.setdefault(str(identity), {})[str(key_hash)] = {
-                    "until": until,
-                    "kind": str(row.get("kind", ""))[:24],
-                    "scope": str(row.get("scope", ""))[:12],
-                    "at": float(row.get("at", now) or now),
-                }
+            if clean["scope"] == "account":
+                _remember_row(_ACCOUNT_HEALTH, _provider(str(identity)), str(key_hash), clean)
+            else:
+                _remember_row(_HEALTH, str(identity), str(key_hash), clean)
+    if document.get("schema") == _HEALTH_SCHEMA:
+        account_holds = document.get("account_holds", {})
+        if isinstance(account_holds, dict):
+            for provider, rows in account_holds.items():
+                if not isinstance(rows, dict):
+                    continue
+                for key_hash, row in rows.items():
+                    clean = _clean_health_row(row, now, account=True)
+                    if clean is not None:
+                        _remember_row(_ACCOUNT_HEALTH, str(provider), str(key_hash), clean)
 
 
-def _flush_health(force: bool = False) -> None:
+def _flush_health(force: bool = False) -> Tuple[bool, str]:
     global _HEALTH_DIRTY, _HEALTH_LAST_WRITE
     now = time.time()
     if not _HEALTH_DIRTY or (not force and now - _HEALTH_LAST_WRITE < _HEALTH_WRITE_EVERY_S):
-        return
+        return True, ""
+    folder = data_dir()
+    if folder is None:
+        # No host data directory means the journal is memory-only.
+        _HEALTH_DIRTY = False
+        return True, ""
     path = _path(HEALTH_FILE)
     if path is None:
-        _HEALTH_DIRTY = False
-        return
-    holds = {}
+        return False, "pool-health data directory is unavailable"
+    holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    account_holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
     count = 0
-    for identity, rows in _HEALTH.items():
-        live = {h: r for h, r in rows.items() if float(r.get("until", 0)) > now}
-        if live:
-            holds[identity] = live
-            count += len(live)
+    for source, target in ((_HEALTH, holds), (_ACCOUNT_HEALTH, account_holds)):
+        for outer, rows in source.items():
+            live: Dict[str, Dict[str, Any]] = {}
+            for key_hash, row in rows.items():
+                clean = _clean_health_row(row, now, account=(source is _ACCOUNT_HEALTH))
+                if clean is not None:
+                    live[str(key_hash)] = clean
+            if live:
+                target[str(outer)] = live
+                count += len(live)
     if count > _HEALTH_MAX_ENTRIES:
-        return
-    handle, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        return False, "pool-health entry limit exceeded"
+    temporary: Optional[str] = None
     try:
+        handle, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump({"schema": 1, "holds": holds}, stream, sort_keys=True)
+            json.dump({"schema": _HEALTH_SCHEMA, "holds": holds,
+                       "account_holds": account_holds}, stream, sort_keys=True)
         os.replace(temporary, path)
         _HEALTH_DIRTY = False
         _HEALTH_LAST_WRITE = now
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
+        return True, ""
+    except Exception as exc:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        return False, (f"{type(exc).__name__}: {exc}")[:240]
 
 
 def note_hold(identity: str, key: str, until: float, kind: str = "",
@@ -506,10 +606,22 @@ def note_hold(identity: str, key: str, until: float, kind: str = "",
             return
         with _HEALTH_LOCK:
             _load_health()
-            _HEALTH.setdefault(str(identity), {})[_long_hash(key)] = {
-                "until": float(until), "kind": str(kind or "")[:24],
-                "scope": str(scope or "")[:12], "at": time.time(),
-            }
+            deadline = float(until)
+            now = time.time()
+            digest = _long_hash(key)
+            account = str(scope or "") == "account"
+            store = _ACCOUNT_HEALTH if account else _HEALTH
+            outer = _provider(identity) if account else str(identity)
+            rows = store.setdefault(outer, {})
+            if deadline > now and deadline < float("inf"):
+                rows[digest] = {
+                    "until": deadline,
+                    "kind": str(kind or "")[:24],
+                    "scope": "account" if account else str(scope or "")[:12],
+                    "at": now,
+                }
+            else:
+                rows.pop(digest, None)
             _HEALTH_DIRTY = True
             _flush_health(force=True)
     except Exception:
@@ -517,7 +629,7 @@ def note_hold(identity: str, key: str, until: float, kind: str = "",
 
 
 def note_answer(identity: str, key: str) -> None:
-    """A key answered: its holds on this identity (and account holds) are gone."""
+    """Clear this model hold plus this provider/key account hold, and only those."""
     global _HEALTH_DIRTY
     try:
         if not SHARE_HEALTH_ON or data_dir() is None:
@@ -525,16 +637,11 @@ def note_answer(identity: str, key: str) -> None:
         with _HEALTH_LOCK:
             _load_health()
             digest = _long_hash(key)
-            provider = str(identity).split(":", 1)[0]
-            changed = False
-            for other, rows in _HEALTH.items():
-                row = rows.get(digest)
-                if row is None:
-                    continue
-                if other == identity or (str(other).split(":", 1)[0] == provider
-                                         and row.get("scope") == "account"):
-                    rows.pop(digest, None)
-                    changed = True
+            model_rows = _HEALTH.get(str(identity)) or {}
+            account_rows = _ACCOUNT_HEALTH.get(_provider(identity)) or {}
+            changed = digest in model_rows or digest in account_rows
+            model_rows.pop(digest, None)
+            account_rows.pop(digest, None)
             if changed:
                 # Written at once: a release lost to a restart would keep a
                 # working key out for up to the ceiling. Rare - only a key
@@ -546,39 +653,61 @@ def note_answer(identity: str, key: str) -> None:
 
 
 def hold_for(identity: str, key: str) -> Optional[Dict[str, Any]]:
-    """A remembered hold still running for this key on this identity, or None."""
+    """Effective hold plus independent ``model`` and ``account`` components."""
+    global _HEALTH_DIRTY
     try:
         if not SHARE_HEALTH_ON or data_dir() is None:
             return None
         with _HEALTH_LOCK:
             _load_health()
-            row = (_HEALTH.get(str(identity)) or {}).get(_long_hash(key))
-            if row and float(row.get("until", 0)) > time.time():
-                return dict(row)
+            now = time.time()
+            digest = _long_hash(key)
+            model_rows = _HEALTH.get(str(identity)) or {}
+            account_rows = _ACCOUNT_HEALTH.get(_provider(identity)) or {}
+            model = _clean_health_row(model_rows.get(digest), now)
+            account = _clean_health_row(account_rows.get(digest), now, account=True)
+            if model is None and digest in model_rows:
+                model_rows.pop(digest, None)
+                _HEALTH_DIRTY = True
+            if account is None and digest in account_rows:
+                account_rows.pop(digest, None)
+                _HEALTH_DIRTY = True
+            if model is None and account is None:
+                return None
+            effective = model
+            if effective is None or (account is not None and account["until"] > effective["until"]):
+                effective = account
+            result = dict(effective or {})
+            result["model"] = dict(model) if model is not None else None
+            result["account"] = dict(account) if account is not None else None
+            return result
     except Exception:
         pass
     return None
 
 
-def forget_holds() -> int:
-    """Drop every remembered hold (``/kame-quota reset``). Returns how many."""
+def forget_holds() -> ForgetHoldsResult:
+    """Drop every hold; return an int-compatible count plus persistence status."""
     global _HEALTH_DIRTY
     try:
         with _HEALTH_LOCK:
             _load_health()
-            count = sum(len(r) for r in _HEALTH.values())
+            count = (sum(len(r) for r in _HEALTH.values())
+                     + sum(len(r) for r in _ACCOUNT_HEALTH.values()))
             _HEALTH.clear()
+            _ACCOUNT_HEALTH.clear()
             _HEALTH_DIRTY = True
-            _flush_health(force=True)
-            return count
-    except Exception:
-        return 0
+            ok, error = _flush_health(force=True)
+            return ForgetHoldsResult(count, ok, error)
+    except Exception as exc:
+        return ForgetHoldsResult(0, False, (f"{type(exc).__name__}: {exc}")[:240])
 
 
 def _reset_for_tests() -> None:
     global _HEALTH_LOADED, _HEALTH_DIRTY, _HEALTH_LAST_WRITE, _refusals_silenced, _calls_silenced
     with _HEALTH_LOCK:
         _HEALTH.clear()
+        _ACCOUNT_HEALTH.clear()
         _HEALTH_LOADED = False
         _HEALTH_DIRTY = False
         _HEALTH_LAST_WRITE = 0.0
