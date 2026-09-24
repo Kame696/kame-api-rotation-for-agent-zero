@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. v2.13 audited with `tools/a0_upgrade_check.py`: 14/15 symbols unchanged (the one change is `adaptive` and does not reach KAME), 12/12 host facts, live harness green; baseline re-pinned. The checker no longer reports a module its Python cannot parse as a missing optional symbol (it used to, and `--update-baseline` then dropped that fingerprint). `tests/run_all.py` runs script and pytest suites alike; CI workflows added. |
 | **1.8.1.2** | Ran on a real Agent Zero; settings are one set per process | The first build of this line verified in a real Agent Zero v2.12 session with real keys (12/12 answered, two 503s rotated). `/kame set` and `/kame reset` write the global settings again: the engine is one per process, and 1.8.1.1's per-profile file let a subordinate flip the dials mid-conversation. `/kame-keys import` of a `GEMINI_API_KEY` or `NVIDIA_API_KEY` file now lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM` (1.8.1.1 wrote variables Agent Zero never reads). The all-keys-resting wait wakes early only when a key recovered early, keeping its padding. A billing refusal no wait fixes (plan lacks the service, country needs billing) goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
 | **1.8.1.1** | Reliability patch: reset, account holds, scoped settings and safe imports | Account-wide holds are stored independently from per-model holds and reach models first seen after the refusal; server-outage thaw can no longer shorten an account limit. Pool reset reports persistence failure instead of claiming success, and a sleeping exhausted pool re-checks after every slice so reset/recovery wakes it promptly. `/kame set/reset` writes only the active project/profile scope. `/kame-keys import` parses dotenv quotes/comments, requires a collision-resistant backup before changing an existing `.env`, recorder redaction is hardened, and call IDs are collision-resistant. Verified against a fresh Agent Zero v2.12 checkout. |
 | **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates, a refused model no longer benches the key. Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, an events timeline (`/kame events`), a refusal recorder and call timings on disk, key health that survives a restart, off switches, `/kame get|set|reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on Agent Zero v2.12 |
@@ -63,7 +64,29 @@ graph LR
 
 ---
 
-## v1.8.1.2 — current
+## v1.8.1.3 — current
+
+**In one line:** nothing the agent does changes; KAME was re-checked against
+Agent Zero v2.13, and the checker and test runner were fixed where they could
+report green without having looked.
+
+- **Agent Zero v2.13 verified.** 14 of 15 patch points unchanged; the one that
+  moved, `LiteLLMChatWrapper.unified_turn`, now hands `response_callback` a
+  `response_preview` as its second argument, which KAME's callback shim passes
+  through without reading. 12/12 host facts, live harness 78/78 green, baseline
+  re-pinned to v2.13 (15/15 against it). No real-key session on v2.13 yet.
+- **The checker says when it cannot read.** Agent Zero v2.12+ uses Python 3.12
+  syntax in `helpers/plugins.py`. On an older Python the checker swallowed the
+  parse error and reported `save_plugin_config` as "not present (optional) … this
+  Agent Zero predates it" — and `--update-baseline` would then have written a
+  baseline without it. It now names the unreadable module and exits 2.
+- **Every suite runs, the right way.** The 1.8.1.1 and 1.8.1.2 suites are pytest
+  modules; run as scripts they exit 0 having run nothing. `tests/run_all.py`
+  runs each suite in its own process and hands pytest modules to pytest.
+- **CI.** `tests.yml` (3 OSes × Python 3.11–3.14) and a weekly `a0-compat.yml`
+  that audits the newest Agent Zero tag.
+
+## v1.8.1.2
 
 **In one line:** the first 1.8.1.x build proven on a real Agent Zero, with
 four fixes; the agent still never stops on a quota.

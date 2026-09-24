@@ -10,8 +10,8 @@
 
 Smart API key rotation, 429 / `RESOURCE_EXHAUSTED` recovery and rate-limit failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or any provider LiteLLM speaks to.
 
-[![Version](https://img.shields.io/badge/version-1.8.1.2-blue.svg)](CHANGELOG.md)
-[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.12-purple.svg)](#verified)
+[![Version](https://img.shields.io/badge/version-1.8.1.3-blue.svg)](CHANGELOG.md)
+[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.13-purple.svg)](#verified)
 [![Real sessions](https://img.shields.io/badge/real_sessions-26%2F26_answered-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -60,7 +60,7 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.2 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.3 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -198,8 +198,8 @@ Nothing needs changing. Every setting is on the plugin's settings page and in `/
 |---|---|
 | Two real sessions — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | **26 / 26 answered**, 16 of them concurrent; 13 real `503`s absorbed at 1s each; all 14 keys carried traffic |
 | A third real session, after the parity work — Agent Zero v2.12, real LiteLLM, NVIDIA NIM, 2 real keys | **12 / 12 answered**, 6 of them concurrent, the two keys sharing the load evenly; every refusal, hold and timing written to disk with **no key fragment** in any file. The same day's Gemini pool (14 keys) was out of its daily quota: every key got a `PerDay` refusal, a 5-minute re-probe, and the holds survived a restart of the process; a retired model (`410 Gone`) was handed back to Agent Zero instead of rotated |
-| Live harness — KAME's real patches applied to a real Agent Zero checkout | **all green** on v2.11 and v2.12 |
-| Upgrade check — every Agent Zero symbol KAME touches | **15 / 15** fingerprints (three new in 1.8.1.0: the plugin config writer, the `.env` writer, the script-command runner) and **12 / 12** host facts hold on v2.12 |
+| Live harness — KAME's real patches applied to a real Agent Zero checkout | **all green** on v2.11, v2.12 and v2.13 |
+| Upgrade check — every Agent Zero symbol KAME touches | **15 / 15** fingerprints (three new in 1.8.1.0: the plugin config writer, the `.env` writer, the script-command runner) and **12 / 12** host facts hold on v2.12 and v2.13 |
 | Offline tests | **17 / 17** standalone suites green, plus **26 pytest regression tests** for 1.8.1.1–1.8.1.2 |
 | Answer-key gate — 1,897 real recorded refusals, judged by each port's own engine | A0 and Hermes agree on **every field** (family 100, window 99.69, scope 99.88, action 98.89) |
 | Adversarial review | a second model tried to break the port; its 8 findings are fixed and each is now a test |
@@ -226,6 +226,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. Compatibility re-verified on v2.13 (live harness green, 12/12 host facts; the one changed symbol is `adaptive`). The upgrade checker no longer mistakes a module its Python cannot parse for a missing symbol. `tests/run_all.py` runs every suite the right way. CI workflows added. |
 | **v1.8.1.2** | Ran on a real Agent Zero; one set of settings per process | Verified in a real Agent Zero v2.12 session (12/12 answered). `/kame set` is global again (1.8.1.1's per-profile file let subordinates flip the dials). `.env` import of `GEMINI_API_KEY` / `NVIDIA_API_KEY` lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM`. The resting wait keeps its padding. A billing refusal no wait fixes goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
 | **v1.8.1.1** | Reliability patch for reset and account holds | Account-wide holds remain independent of model holds; reset reports persistence failures instead of claiming success; a resting pool re-checks after each sleep slice. Project/profile settings writes, dotenv import backups, evidence redaction and call IDs are hardened. Offline tests and Agent Zero v2.12 compatibility checks passed. **This version was not installed into Agent Zero for a real-provider session; the sessions below belong to v1.8.1.0.** |
 | **v1.8.1.0** | Every refusal sized from its own evidence | A new error reader since v1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates. Gemini's bare `429 RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder, reset the moment a key answers; no key is held longer than an hour; a throttle with no number rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, `/kame events`, refusal recorder and call timings, key health across restarts, off switches, `/kame get·set·reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on A0 **v2.12**. |
@@ -300,6 +301,6 @@ MIT — see [LICENSE](LICENSE). Bugs and ideas: [issues](https://github.com/Kame
 
 <div align="center">
 
-🐢⚡ **KAME 1.8.1.2** — *because round-robin was never enough*
+🐢⚡ **KAME 1.8.1.3** — *because round-robin was never enough*
 
 </div>
