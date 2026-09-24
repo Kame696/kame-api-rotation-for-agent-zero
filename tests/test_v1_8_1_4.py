@@ -244,3 +244,13 @@ def test_an_api_key_field_in_json_text_is_redacted(field):
     key = "NoDigitsNoPrefixJustLettersHereOk"
     out = _journal.redact('{"error": {"%s": "%s"}}' % (field, key), limit=0)
     assert key not in out
+
+
+# -- the debug dump is untruncated, not unredacted -------------------------------
+def test_the_full_error_dump_keeps_the_message_but_not_the_key():
+    key = "AIzaSyA-" + "x" * 31
+    exc = _Refusal(f"litellm.APIConnectionError: POST https://generativelanguage.googleapis.com/v1beta/"
+                   f"models/g:generateContent?key={key} failed after 3 retries", None)
+    dump = engine._raw_error_detail(exc, "server", 1.0, None)
+    assert key not in dump
+    assert "failed after 3 retries" in dump

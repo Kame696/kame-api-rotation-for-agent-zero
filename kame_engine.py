@@ -2878,6 +2878,20 @@ def _friendly_error_msg(kind, delay, status_code=None, exc=None):
     return f"⚠️ {name} → cooling {d} · next key..."
 
 
+def _scrub_for_log(value) -> str:
+    """`str(value)` with every credential shape removed, never truncated. v1.8.1.4.
+
+    The journal's scrubber (the same one refusals.jsonl and events use), so a
+    console line and a file line agree about what a secret looks like.
+    """
+    try:
+        if _KJ is not None:
+            return _KJ.redact(value, limit=0)
+    except Exception:
+        pass
+    return re.sub(r"(?i)\b(?:AIza|sk-|nvapi-|gsk_|xai-|hf_)[A-Za-z0-9_\-]{8,}", "[redacted]", str(value))
+
+
 def _raw_error_detail(exc, kind=None, applied=None, status_code=None) -> str:
     """Full, untruncated raw-error dump for the debug log (v1.0.3).
 
@@ -2901,7 +2915,12 @@ def _raw_error_detail(exc, kind=None, applied=None, status_code=None) -> str:
             if v is not None:
                 parts.append(f"{attr}={v!r}")
         head = " | ".join(parts)
-        body = str(exc)  # FULL — the whole point is to see everything, untruncated
+        # FULL — the whole point is to see everything, untruncated. v1.8.1.4:
+        # untruncated, not unredacted. Agent Zero masks the secrets it knows,
+        # but it knows a pool field as one comma-joined value; a single key in
+        # an error (litellm puts Gemini's `?key=` URL in some) is not that
+        # value and would reach the log, the bug report and the screenshot.
+        body = _scrub_for_log(exc)
         return f"{head}\n      raw: {body}"
     except Exception:
         return f"type={type(exc).__name__ if exc is not None else 'error'} (raw detail unavailable)"
@@ -4361,7 +4380,7 @@ async def _kame_summarize_messages(self, messages):
                 message=self.history.agent.read_prompt("fw.topic_summary.msg.md", content=msg_txt),
             )
         except Exception as e:
-            PrintStyle.error(f"[KAME] Compression failed: {e}")
+            PrintStyle.error(f"[KAME] Compression failed: {_scrub_for_log(e)}")
             summary = "[Summary unavailable - " + " | ".join(str(t)[:200] for t in msg_txt[:3]) + "]"
         return summary
     finally:
