@@ -274,6 +274,7 @@ def test_a_throttle_phrase_on_a_400_still_rotates(message):
 
 
 # -- dotenv import: a BOM is not part of a name; an unclosed quote is not a value -
+# (1.8.1.5; found by a differential test against python-dotenv over 22 shapes)
 import kame_keys as _kk  # noqa: E402
 
 

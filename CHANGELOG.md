@@ -80,6 +80,11 @@ graph LR
   off, and a token is kept only if it is 16–512 printable ASCII characters and
   not a URL or a comment. Long tokens that were refused are listed, masked.
   What is already in the `.env` is never touched.
+- **A dotenv import reads as Agent Zero does.** A byte-order mark (Notepad,
+  PowerShell's `utf8BOM`) glued to the first name hid that line, so the first
+  key of such a file was skipped; a value whose opening quote never closes was
+  imported with the quote glued to the key. Checked against python-dotenv,
+  which Agent Zero reads its `.env` with, over 22 shapes.
 - **The ceiling holds when the clock steps back.** Rests are wall-clock
   deadlines. After the computer's clock stepped back two hours (NTP, a resume,
   a hand-set clock) a 30-second rest had become two hours, on every key resting

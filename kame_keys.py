@@ -221,7 +221,7 @@ def _dotenv_value(raw: str) -> str:
             break
         kept.append(char)
     if quote:
-        # v1.8.1.4: an opening quote that never closes is not a value --
+        # v1.8.1.5: an opening quote that never closes is not a value --
         # python-dotenv, which Agent Zero reads its .env with, refuses the line.
         # Kept, `"sk-a` was imported with the quote glued to the key.
         return ""
@@ -238,7 +238,7 @@ def parse_env_text(text: str) -> Dict[str, str]:
     """Return valid ``NAME=value`` assignments from dotenv-like text."""
     out: Dict[str, str] = {}
     for line in str(text or "").splitlines():
-        # v1.8.1.4: a byte-order mark (Notepad, `Set-Content -Encoding
+        # v1.8.1.5: a byte-order mark (Notepad, `Set-Content -Encoding
         # utf8BOM`) glued to the first name made that variable invisible, so
         # the first key line of such a file was silently skipped. The Hermes
         # port strips it too (core/keys.py _BOM_CHARS).
