@@ -128,7 +128,14 @@ def _carousel(make_error, monkeypatch):
 
     ctx["response_callback"], ctx["reasoning_callback"], ctx["tokens_callback"] = \
         engine._kame_wrap_callbacks(ctx, _cb, None, None)
-    return calls, lambda: asyncio.new_event_loop().run_until_complete(engine._kame_carousel(None, ctx))
+    def go():
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(engine._kame_carousel(None, ctx))
+        finally:
+            loop.close()
+
+    return calls, go
 
 
 def test_a0_plan_without_the_service_is_handed_back_once_every_key_said_so(monkeypatch):
