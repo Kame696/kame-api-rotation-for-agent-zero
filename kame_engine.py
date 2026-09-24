@@ -3289,9 +3289,23 @@ def _is_terminal_error(exc: Exception) -> bool:
         # earth answers either, so rotating only walks the pool.
         if status_code in (400, 404, 405, 410, 413, 415, 422, 451, 501):
             return True
-    if "content_policy" in err_msg or "content filter" in err_msg:
+    # v1.8.1.4: phrases that describe the PROMPT or the RESPONSE being filtered,
+    # nothing broader. "response blocked by safety filter" with no status used
+    # to be rotated across every key and rested each one 20s; Hermes hands it
+    # back at once. Hermes' wider words ("blocked by", "safety", "content
+    # policy") are safe there only because a 403 is read as auth before them;
+    # here a bare 403 is not, and "API key blocked by admin" or "key suspended
+    # for violating our content policy" would have ended a turn that the next
+    # key could answer. Both are tested to keep rotating.
+    if any(ind in err_msg for ind in _CONTENT_BLOCK_INDICATORS):
         return True
     return False
+
+
+#: A moderation refusal of the request itself. Mirrors Hermes'
+#: `REQUEST_CONTENT_BLOCK_INDICATORS` (1.8.1.4).
+_CONTENT_BLOCK_INDICATORS = ("content_policy", "content filter", "content_filter",
+                             "safety filter")
 
 
 def _get_all_api_keys(model_instance) -> list:

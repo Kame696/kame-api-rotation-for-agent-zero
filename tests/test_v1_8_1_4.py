@@ -145,3 +145,38 @@ def test_a_refusal_that_names_a_quota_id_is_not_bare_in_either_shape():
                       "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure",
                                    "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}}
     assert engine._is_bare_resource_exhausted(_Refusal("Quota exceeded", 429, body)) is False
+
+
+# -- a moderation block is the request's fault ---------------------------------
+@pytest.mark.parametrize("message,status", [
+    ("response blocked by safety filter", None),
+    ("The prompt was blocked by the safety filter", 403),
+    ("The response was blocked by the content filter", 400),
+    ("content_policy_violation", None),
+])
+def test_a_moderation_block_of_the_request_is_handed_back(message, status):
+    assert engine._is_terminal_error(_Refusal(message, status)) is True
+
+
+@pytest.mark.parametrize("message,status", [
+    ("API key blocked by admin", 403),
+    ("Your access is blocked by your organization's policy", 403),
+    ("Your API key was suspended for violating our content policy", 403),
+    ("Organization safety settings prevent this key from calling the model", 403),
+    ("Request blocked by upstream proxy", None),
+])
+def test_a_bare_key_denial_in_moderation_words_still_rotates(message, status):
+    # No structured code: only the words. These are about the KEY, and the
+    # next key may answer -- never a reason to end the turn.
+    assert engine._is_terminal_error(_Refusal(message, status)) is False
+
+
+def test_a_key_denial_saying_blocked_by_is_still_a_key_problem():
+    # Settled by the auth rules before the content list is ever read.
+    exc = _Refusal("API key blocked by admin", 403, {"error": {"code": "permission_denied"}})
+    assert engine._is_terminal_error(exc) is False
+
+
+def test_a_throttle_mentioning_safety_is_still_a_throttle():
+    exc = _Refusal("Rate limit exceeded for safety tier", 429)
+    assert engine._is_terminal_error(exc) is False
