@@ -228,6 +228,16 @@ check("/kame-keys status lists providers, counts and masked keys",
 check("mask never returns the key", KK.mask(KEYS[0]) != KEYS[0] and len(KK.mask("short")) == 1)
 check("split: commas, spaces, newlines, semicolons, pipes",
       KK.split_keys("a,b c\nd;e|f,a") == ["a", "b", "c", "d", "e", "f"])
+# 1.8.1.5: the words around pasted keys, and a key mangled by the copy, stay out.
+text, _, _ = command("kame_keys_command.py",
+                     "add deepseek minhas chaves: sk-ds-7777777777777777777777, "
+                     "sk-ds-8888888888888888888888\u200b")
+line = KK.read_env(__import__("pathlib").Path(ENV))["API_KEY_DEEPSEEK"]
+check("1.8.1.5 /kame-keys add writes only what looks like a key",
+      "sk-ds-7777777777777777777777" in line and "minhas" not in line
+      and "chaves" not in line and "8888" not in line, line)
+check("...and names the mangled one, masked",
+      "does not look like an API key" in text and "sk-ds-8888888888888888888888" not in text, text)
 
 print("=" * 60)
 if _failures:

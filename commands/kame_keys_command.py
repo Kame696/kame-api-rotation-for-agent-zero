@@ -41,8 +41,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                                          "Rests, refusal streaks and retirements cleared.")
         if verb == "add":
             provider, text = keys.split_provider(rest)
-            return _show("KAME — keys added", keys.add(env_path, provider, keys.split_keys(text),
-                                                        dotenv.save_dotenv_value))
+            found, rejected = keys.pasted_keys(text)
+            return _show("KAME — keys added", keys.add(env_path, provider, found,
+                                                        dotenv.save_dotenv_value, rejected))
         if verb == "import":
             provider, file_text = keys.split_provider(rest)
             path = Path(file_text.strip().strip("\"'")).expanduser()
@@ -54,7 +55,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 return _toast(f"File not found: {path}", "error")
             text = data.decode("utf-8-sig", errors="replace") if not data.startswith(b"\xff\xfe") \
                 else data.decode("utf-16", errors="replace")
-            provider, found = keys.parse_import(text, provider)
+            rejected = []
+            provider, found = keys.parse_import(text, provider, rejected)
             if not found and not provider and len(keys.import_providers(text)) > 1:
                 return _toast(
                     "The file contains keys for more than one provider. Specify one: "
@@ -63,7 +65,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             if not found:
                 return _toast("No key found in that file.", "error")
             return _show("KAME — keys imported", keys.add(env_path, provider, found,
-                                                           dotenv.save_dotenv_value))
+                                                           dotenv.save_dotenv_value, rejected))
         return _toast(f"Unknown: {verb}. Use status, add, import or reset.", "error")
     except Exception as exc:
         # Never the arguments: on the `add` path they are live keys.

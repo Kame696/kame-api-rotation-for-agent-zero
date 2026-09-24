@@ -83,6 +83,66 @@ def split_keys(text: str) -> List[str]:
     return out
 
 
+# 1.8.1.5, ported from the Hermes port's core/keys.py: what a pasted token must
+# look like before it is written into the .env as a key. `split_keys` wrote every
+# token it was given -- the words of `minhas chaves: K1, K2`, a whole
+# `OPENAI_API_KEY=sk-...` line, a key with a zero-width space or smart quotes
+# from a mangled copy -- and each one sat in the pool failing at the provider.
+MIN_KEY_LENGTH = 16
+MAX_KEY_LENGTH = 512
+_NOT_A_KEY = re.compile(r"^(?:https?://|[A-Z_]+=|#|//|-{2,})", re.I)
+_ASSIGNMENT = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[=:]\s*(.+?)\s*$")
+_QUOTES = "\"'`"
+
+
+def _unwrap(token: str) -> str:
+    """Peel a byte-order mark, a `NAME=value` wrapper and matching quotes."""
+    text = str(token or "").strip().strip("\ufeff\ufffe").strip()
+    match = _ASSIGNMENT.match(text)
+    # `https://host` has the assignment shape too; keep the evidence it is a URL.
+    if match and not match.group(2).startswith("//"):
+        text = match.group(2).strip()
+    while len(text) >= 2 and text[0] in _QUOTES and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    return text
+
+
+def looks_like_key(token: str) -> bool:
+    """Long enough, one word, printable ASCII, and not a URL or a comment."""
+    text = str(token or "").strip()
+    if not (MIN_KEY_LENGTH <= len(text) <= MAX_KEY_LENGTH):
+        return False
+    if _NOT_A_KEY.match(text):
+        return False
+    # A zero-width space, a smart quote or a U+FFFD from a mis-decoded file
+    # fails at the provider with a confusing 401 much later.
+    return all(32 < ord(char) < 127 for char in text)
+
+
+def pasted_keys(text: str) -> Tuple[List[str], List[str]]:
+    """``(keys, rejected)`` from text a person pasted or a file held.
+
+    Order is kept and repeats collapse. ``rejected`` holds only tokens long
+    enough to have been meant as a key: the short words of a sentence around
+    the keys are dropped without comment.
+    """
+    keys: List[str] = []
+    rejected: List[str] = []
+    seen = set()
+    for piece in _SPLIT.split(str(text or "")):
+        candidate = _unwrap(piece)
+        if not candidate:
+            continue
+        if not looks_like_key(candidate):
+            if len(candidate) >= MIN_KEY_LENGTH:
+                rejected.append(candidate)
+            continue
+        if candidate not in seen:
+            seen.add(candidate)
+            keys.append(candidate)
+    return keys, rejected
+
+
 def guess_provider(keys: List[str]) -> str:
     """The provider every key's prefix agrees on, or "" when they do not."""
     found = set()
@@ -204,13 +264,25 @@ def _provider_for_env_var(name: str) -> str:
     return match.group(1).lower() if match else ""
 
 
-def parse_import(text: str, provider: str = "") -> Tuple[str, List[str]]:
+def parse_import(text: str, provider: str = "",
+                 rejected: Optional[List[str]] = None) -> Tuple[str, List[str]]:
     """Read either a raw key list or dotenv-formatted key file.
 
     A dotenv file may contain comments and unrelated settings. With an explicit
     provider only that provider's API variable is imported. Without one, KAME
     accepts the file only when all API-key assignments name one provider.
+
+    Only tokens that look like keys are returned (1.8.1.5); the others are
+    appended to ``rejected`` when the caller passes a list.
     """
+    chosen, found = _parse_import(text, provider)
+    keys, refused = pasted_keys("\n".join(found))
+    if rejected is not None:
+        rejected.extend(refused)
+    return chosen, keys
+
+
+def _parse_import(text: str, provider: str = "") -> Tuple[str, List[str]]:
     env = parse_env_text(text)
     api_rows = [(name, value, _provider_for_env_var(name)) for name, value in env.items()]
     api_rows = [(name, value, canonical_provider(found, split_keys(value)))
@@ -279,11 +351,18 @@ def backup(path: Path) -> Optional[str]:
 
 
 def add(path: Path, provider: str, keys: List[str],
-        save: Callable[[str, str], None]) -> str:
+        save: Callable[[str, str], None], rejected: Optional[List[str]] = None) -> str:
     # Agent Zero runs commands in one process. Serialize read/merge/save so
     # two imports cannot both read the same old list and lose one addition.
     with _IMPORT_LOCK:
-        return _add_locked(path, provider, keys, save)
+        message = _add_locked(path, provider, keys, save)
+    if rejected:
+        # Masked like every key: a rejected token is usually junk, and
+        # "usually" is not worth betting a key on.
+        message += "\n" + "\n".join(
+            f"- {mask(token)} skipped: does not look like an API key" for token in rejected
+        )
+    return message
 
 
 def _add_locked(path: Path, provider: str, keys: List[str],
