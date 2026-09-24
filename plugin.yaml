@@ -1,7 +1,7 @@
 name: api_rotation_by_kame
 title: KAME API Rotation
 description: "KAME is a learning API-key rotation engine for Agent Zero. Paste several keys into one provider field (key1,key2,key3) and it picks the healthiest key for every call instead of cycling them round-robin. Every refusal is read from its own evidence: the provider's retry delay to the second, per-minute and daily quotas told apart, outages rested 1s, Gemini's bare 429 RESOURCE_EXHAUSTED on a short 1-2-4-8s ladder, and no key ever held longer than an hour. When every key is resting it waits for the first one back and says so in the chat, so a rate limit never ends the turn. Supports Agent Zero v1.14+ and the whole V2 line, verified on v2.13. Zero configuration."
-version: 1.8.1.5
+version: 1.8.1.6
 settings_sections:
   - agent
 per_project_config: false

@@ -1,6 +1,6 @@
 # KAME ↔ Agent Zero compatibility
 
-**KAME 1.8.1.3 — compatibility re-verified against Agent Zero v2.13 (2026-09-24): 15/15 symbols after re-pinning, 12/12 host facts, live harness green. 1.8.1.4 and 1.8.1.5 re-ran the live harness on v2.13: green. The real-key sessions below were run on v2.12 with 1.8.1.2.**
+**KAME 1.8.1.3 — compatibility re-verified against Agent Zero v2.13 (2026-09-24): 15/15 symbols after re-pinning, 12/12 host facts, live harness green. 1.8.1.4, 1.8.1.5 and 1.8.1.6 re-ran the live harness on v2.13: green. The real-key sessions below were run on v2.12 with 1.8.1.2.**
 Live harness (KAME's real patches on a real Agent Zero checkout) green on **v2.11, v2.12 and v2.13**, and
 on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10** in earlier releases. Two **real sessions** on v2.12 —
 real LiteLLM, real Gemini keys, `tools/live_a0_session.py` — answered 26 of 26.

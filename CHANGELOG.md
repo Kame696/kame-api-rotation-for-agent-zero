@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.6** | Keys land where Agent Zero reads them | A stray first word is no longer taken for a provider; every Unicode key file imports. |
 | **1.8.1.5** | Only keys go in; the ceiling holds | `/kame-keys add`/`import` write only what looks like a key (the Hermes filter, ported); a rest can no longer outlast `max_hold_seconds` after a clock step back or a lowered ceiling. |
 | **1.8.1.4** | Same brain as Hermes, closer | Nine decisions aligned with Hermes after a cross-port replay of 877 refusal shapes: busy server vs spent key, a stated server wait, a token count containing 429, a flagged prompt, Codex's `usage_not_included`, Gemini's bare `RESOURCE_EXHAUSTED` in a parsed body. Key backups owner-only from birth; the debug error dump redacts keys. |
 | **1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. v2.13 audited with `tools/a0_upgrade_check.py`: 14/15 symbols unchanged (the one change is `adaptive` and does not reach KAME), 12/12 host facts, live harness green; baseline re-pinned. The checker no longer reports a module its Python cannot parse as a missing optional symbol (it used to, and `--update-baseline` then dropped that fingerprint). `tests/run_all.py` runs script and pytest suites alike; CI workflows added. |
@@ -66,7 +67,27 @@ graph LR
 
 ---
 
-## v1.8.1.5 — current
+## v1.8.1.6 — current
+
+**In one line:** `/kame-keys` writes keys only under a provider Agent Zero
+reads, from any Unicode file.
+
+- **A word of the sentence is not a provider.** `/kame-keys add minhas chaves
+  sk-…` took `minhas` for the provider and wrote the key into
+  `API_KEY_MINHAS`, a variable nothing reads. The first word now counts as a
+  provider only if Agent Zero lists it (its own list, plugins included) or your
+  `.env` already holds keys for it; otherwise KAME asks which provider, as it
+  already did for a key whose prefix does not say.
+- **Every Unicode key file imports.** UTF-16 big-endian and UTF-32 files (either
+  byte order) arrived with a NUL inside every key; they now read like any other
+  file, as in the Hermes port.
+- **Unchanged here:** the ceiling. This port already bounded every hold by
+  `max_hold_seconds`, the provider's own wait included; the Hermes port does
+  so too from 1.8.1.6.
+- **Verified:** all 23 offline suites; live harness green on Agent Zero v2.13.
+  No real-key session on 1.8.1.6.
+
+## v1.8.1.5
 
 **In one line:** the agent still never stops on a quota; only keys reach the
 `.env`, and the ceiling bounds every rest whatever the computer's clock does.
