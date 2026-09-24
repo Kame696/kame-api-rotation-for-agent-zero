@@ -158,6 +158,12 @@ _put(Reading(TERMINAL, certain=False, why="the provider filed this under its mal
      "invalid_request_error", "INVALID_ARGUMENT")
 _put(Reading(NOT_A_FAILURE, why="the provider returned this as a completion"),
      "max_tokens_exceeded", "token_limit_exceeded")
+# A missing plan entitlement has no time-based reset (Hermes catalog.py, the
+# same row). v1.8.1.4: this port only knew it from the sentence "to use Codex
+# with your ChatGPT plan", so the same refusal worded "with your plan" -- or
+# any other product that files the code -- rested 30s as a throttle, forever.
+_put(Reading(BILLING, window=ACCOUNT, scope=ACCOUNT, why="plan does not include this service"),
+     "usage_not_included")
 # Google's odd one out: FAILED_PRECONDITION on a 400 is "enable billing".
 _put(Reading(BILLING, window=ACCOUNT, scope=ACCOUNT,
              why="the free tier is unavailable here; billing must be enabled"),
@@ -505,8 +511,9 @@ BILLING_PATTERNS = (
     re.compile(r"credit[\s_-]*limit[\s_-]*is[\s_-]*insufficient", re.I),
     re.compile(r"balance[\s_-]*is[\s_-]*insufficient", re.I),
     # Codex, `usage_not_included`: the ChatGPT plan does not include Codex at
-    # all, and no wait changes a plan. The answer key calls it billing; the
-    # Hermes port still reads it as a throttle (owed to Hermes, PARITY.md).
+    # all, and no wait changes a plan. The answer key calls it billing. The
+    # field itself is in the catalogue above (v1.8.1.4, as in Hermes); this
+    # sentence stays for a refusal that arrives without the field.
     re.compile(r"to[\s_-]*use[\s_-]*codex[\s_-]*with[\s_-]*your[\s_-]*chatgpt[\s_-]*plan", re.I),
 )
 AMBIGUOUS_BILLING_PATTERNS = (re.compile(r"exceeded your current quota.*billing", re.I | re.S),)

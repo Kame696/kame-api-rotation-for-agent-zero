@@ -2576,7 +2576,11 @@ def _is_bare_resource_exhausted(exc) -> bool:
     # flat 30s. The quota-id patterns below already accept both spellings.
     if not re.search(r'["\']status["\']\s*:\s*["\']resource_exhausted["\']|\(resource_exhausted\)|429\s+resource_exhausted', text):
         return False
-    if "quotaid" in text or "quota_id" in text or "retrydelay" in text or "retry_delay" in text:
+    # v1.8.1.4: the quota id under all three spellings `_QUOTA_ID_PATTERNS`
+    # reads -- a parsed payload files it as `quota_limit`, and a refusal that
+    # names `GenerateRequestsPerMinute...` there is a named window, not bare.
+    if ("quotaid" in text or "quota_id" in text or "quota_limit" in text or "quotalimit" in text
+            or "retrydelay" in text or "retry_delay" in text):
         return False
     try:
         if _extract_retry_delay(exc, with_source=True)[1] != "default":

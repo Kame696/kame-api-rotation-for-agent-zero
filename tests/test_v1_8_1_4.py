@@ -203,3 +203,23 @@ def test_a_429_written_as_a_status_is_still_a_throttle(text):
 @pytest.mark.parametrize("text", ["142935 tokens", "34290", "token count (1429000)", "version 4.29"])
 def test_429_inside_another_number_is_not(text):
     assert engine._names_a_throttle(text) is False
+
+
+# -- a plan without the service, whatever the sentence --------------------------
+@pytest.mark.parametrize("body", [
+    {"type": "usage_not_included", "message": "Upgrade to Plus."},              # SDK: inner error
+    {"error": {"type": "usage_not_included", "message": "Upgrade to Plus."}},   # parsed from text
+], ids=["inner", "nested"])
+def test_usage_not_included_is_billing_by_its_field(body):
+    exc = _Refusal("To use Codex with your plan, upgrade to Plus.", 429, body)
+    delay, kind, _status = engine._classify_error(exc)
+    assert kind == "insufficient_quota"
+    assert engine._no_clock_fixes(exc) is True
+
+
+def test_a_per_minute_quota_limit_in_parsed_details_is_not_bare():
+    exc = _Refusal("Gemini HTTP 429 (RESOURCE_EXHAUSTED): You exceeded your current quota.", 429)
+    exc.details = {"reason": "", "status": "RESOURCE_EXHAUSTED",
+                   "metadata": {"quota_limit": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                                "quota_limit_value": "15"}}
+    assert engine._is_bare_resource_exhausted(exc) is False
