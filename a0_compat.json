@@ -1,7 +1,7 @@
 {
   "kame_version": "1.8.1.2",
-  "verified_against": "v2.12",
-  "verified_on": "2026-09-22",
+  "verified_against": "v2.13",
+  "verified_on": "2026-09-24",
   "a0_repo": "https://github.com/agent0ai/agent-zero",
   "supported_range": "Agent Zero v1.14+ and the whole V2 line",
   "verified_versions": [
@@ -133,7 +133,7 @@
   ],
   "fingerprints": {
     "models.LiteLLMChatWrapper.unified_call": "48fd6a946bc195cc",
-    "models.LiteLLMChatWrapper.unified_turn": "581aba9d8ba8468f",
+    "models.LiteLLMChatWrapper.unified_turn": "1a2da2bd381c76eb",
     "helpers.dotenv.get_dotenv_value": "8f4d212eafa43d98",
     "agent.Agent.monologue": "9c7f5c5563c0512a",
     "agent.Agent.handle_intervention": "9600342982509d76",
