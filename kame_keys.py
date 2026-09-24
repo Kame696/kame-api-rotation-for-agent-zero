@@ -160,6 +160,11 @@ def _dotenv_value(raw: str) -> str:
         if char == "#" and (index == 0 or text[index - 1].isspace()):
             break
         kept.append(char)
+    if quote:
+        # v1.8.1.4: an opening quote that never closes is not a value --
+        # python-dotenv, which Agent Zero reads its .env with, refuses the line.
+        # Kept, `"sk-a` was imported with the quote glued to the key.
+        return ""
     value = "".join(kept).strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         quote = value[0]
@@ -173,7 +178,11 @@ def parse_env_text(text: str) -> Dict[str, str]:
     """Return valid ``NAME=value`` assignments from dotenv-like text."""
     out: Dict[str, str] = {}
     for line in str(text or "").splitlines():
-        line = line.strip()
+        # v1.8.1.4: a byte-order mark (Notepad, `Set-Content -Encoding
+        # utf8BOM`) glued to the first name made that variable invisible, so
+        # the first key line of such a file was silently skipped. The Hermes
+        # port strips it too (core/keys.py _BOM_CHARS).
+        line = line.strip().lstrip("\ufeff\ufffe")
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):

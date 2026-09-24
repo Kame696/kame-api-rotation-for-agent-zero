@@ -271,3 +271,20 @@ def test_a_request_fault_that_mentions_429_or_quota_is_terminal(message):
 ])
 def test_a_throttle_phrase_on_a_400_still_rotates(message):
     assert engine._is_terminal_error(_Refusal(message, 400)) is False
+
+
+# -- dotenv import: a BOM is not part of a name; an unclosed quote is not a value -
+import kame_keys as _kk  # noqa: E402
+
+
+def test_a_bom_at_the_start_of_the_file_does_not_hide_the_first_key():
+    assert _kk.parse_env_text("\ufeffAPI_KEY_OPENAI=sk-one,sk-two\nX=1\n")["API_KEY_OPENAI"] == "sk-one,sk-two"
+
+
+def test_an_unclosed_quote_imports_nothing_rather_than_a_glued_quote():
+    assert _kk.parse_env_text('API_KEY_OPENAI="sk-one\n').get("API_KEY_OPENAI", "") == ""
+
+
+def test_quoted_and_commented_values_still_read_as_dotenv_reads_them():
+    env = _kk.parse_env_text('API_KEY_OPENAI="sk-a,sk-b" # mine\nAPI_KEY_GROQ=gsk_x # c\n')
+    assert env["API_KEY_OPENAI"] == "sk-a,sk-b" and env["API_KEY_GROQ"] == "gsk_x"
