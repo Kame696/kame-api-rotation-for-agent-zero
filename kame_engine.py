@@ -2554,7 +2554,13 @@ def _is_bare_resource_exhausted(exc) -> bool:
     # The STRUCTURED status - the provider's JSON field or the host's own
     # "429 (RESOURCE_EXHAUSTED)" rendering - not the word anywhere in prose,
     # where a relay can quote it about somebody else's refusal.
-    if not re.search(r'"status"\s*:\s*"resource_exhausted"|\(resource_exhausted\)|429\s+resource_exhausted', text):
+    #
+    # v1.8.1.4: either quote. `_evidence_text` renders a parsed body with
+    # repr(), so an SDK that hands the payload over as a dict reads
+    # 'status': 'resource_exhausted' -- single quotes, which the JSON-only
+    # pattern never matched, and that refusal skipped the 1-2-4s ladder for a
+    # flat 30s. The quota-id patterns below already accept both spellings.
+    if not re.search(r'["\']status["\']\s*:\s*["\']resource_exhausted["\']|\(resource_exhausted\)|429\s+resource_exhausted', text):
         return False
     if "quotaid" in text or "quota_id" in text or "retrydelay" in text or "retry_delay" in text:
         return False

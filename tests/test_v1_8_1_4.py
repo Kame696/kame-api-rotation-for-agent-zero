@@ -110,3 +110,38 @@ def test_quota_reset_telemetry_is_not_a_server_retry_instruction(status):
                    headers={"x-ratelimit-reset-requests": "180s", "x-ratelimit-remaining-requests": "999"})
     assert engine._classify_error(exc)[:2] == (engine._KAME_SERVER_BASE_S, "server")
     assert engine._delay_source(exc, "server") == "kame"
+
+
+# -- Gemini's bare RESOURCE_EXHAUSTED, whatever shape the body arrives in -------
+_BARE_BODY = {"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).",
+                        "status": "RESOURCE_EXHAUSTED"}}
+
+
+def _first_rest(exc, key):
+    ident = "gemini:gemini-3.8-flash"
+    engine._get_identity_state(ident, [key])
+    applied, kind, _sc, label, _src = engine._kame_decide_failure(ident, key, exc)
+    return applied, kind, label
+
+
+def test_a_bare_refusal_with_a_parsed_body_starts_the_ladder_at_one_second():
+    # An SDK that hands the payload over as a dict: `_evidence_text` renders it
+    # with repr(), single quotes. The detector only knew JSON's double quotes.
+    exc = _Refusal("Resource has been exhausted (e.g. check quota).", 429, _BARE_BODY)
+    assert engine._is_bare_resource_exhausted(exc) is True
+    assert _first_rest(exc, "AIzaSyA-bare-dict-000000000000000000") == (1.0, "per_minute", "backoff.1")
+
+
+def test_a_bare_refusal_quoted_as_json_text_still_starts_at_one_second():
+    # litellm's native Gemini path puts the raw JSON in the message.
+    import json as _json
+    exc = _Refusal("litellm.RateLimitError: VertexAIException - " + _json.dumps(_BARE_BODY, indent=2), 429)
+    assert engine._is_bare_resource_exhausted(exc) is True
+    assert _first_rest(exc, "AIzaSyA-bare-json-000000000000000000") == (1.0, "per_minute", "backoff.1")
+
+
+def test_a_refusal_that_names_a_quota_id_is_not_bare_in_either_shape():
+    body = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded",
+                      "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                                   "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}}
+    assert engine._is_bare_resource_exhausted(_Refusal("Quota exceeded", 429, body)) is False
