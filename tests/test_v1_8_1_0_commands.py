@@ -238,6 +238,11 @@ check("1.8.1.5 /kame-keys add writes only what looks like a key",
       and "chaves" not in line and "8888" not in line, line)
 check("...and names the mangled one, masked",
       "does not look like an API key" in text and "sk-ds-8888888888888888888888" not in text, text)
+mangled = os.path.join(TMP, "mangled.txt")
+open(mangled, "w", encoding="utf-8").write("sk-ds-9999999999999999999999\u200b\n")
+text, _, _ = command("kame_keys_command.py", f"import deepseek {mangled}")
+check("1.8.1.5 an import where every token is refused says why",
+      "No key found" in text and "did not look like an API key" in text and "9999" not in text, text)
 
 print("=" * 60)
 if _failures:

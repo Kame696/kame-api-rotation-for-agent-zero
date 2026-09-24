@@ -63,7 +63,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                     "/kame-keys import <provider> <path>", "error"
                 )
             if not found:
-                return _toast("No key found in that file.", "error")
+                # Counted, not shown: a toast is one line, and the tokens are masked anyway.
+                refused = f" {len(rejected)} token(s) did not look like an API key." if rejected else ""
+                return _toast("No key found in that file." + refused, "error")
             return _show("KAME — keys imported", keys.add(env_path, provider, found,
                                                            dotenv.save_dotenv_value, rejected))
         return _toast(f"Unknown: {verb}. Use status, add, import or reset.", "error")
