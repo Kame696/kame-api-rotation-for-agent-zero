@@ -1448,8 +1448,22 @@ def pool_report() -> dict:
     }
 
 
+#: v1.8.1.4. The status code written in the text ("Error code: 429", "HTTP 429"),
+#: never three digits inside another number. As a substring of this list, "429"
+#: matched "you requested 34290 tokens", "prompt is too long: 214290 tokens"
+#: and "token count (1429000)": a context-length 400 read as a throttle, was
+#: never terminal, and every key was rested while the oversized request went
+#: out again. Hermes had the same substring and gets the same rule.
+_STATUS_429_IN_TEXT = re.compile(r"(?<![0-9.])429(?![0-9])")
+
+
+def _names_a_throttle(err_msg: str) -> bool:
+    return (any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS)
+            or bool(_STATUS_429_IN_TEXT.search(err_msg)))
+
+
 _RATE_LIMIT_INDICATORS = (
-    "429", "too many requests", "rate limit", "rate_limit",
+    "too many requests", "rate limit", "rate_limit",
     "quota exceeded", "quota left", "no quota",
     "resource exhausted", "resource_exhausted",
     "tokens per min", "requests per min", "quota_exceeded",
@@ -2549,7 +2563,7 @@ def _is_bare_resource_exhausted(exc) -> bool:
         return False
     if status is not None and status != 429:
         return False
-    if status is None and "429" not in text:
+    if status is None and not _STATUS_429_IN_TEXT.search(text):
         return False
     # The STRUCTURED status - the provider's JSON field or the host's own
     # "429 (RESOURCE_EXHAUSTED)" rendering - not the word anywhere in prose,
@@ -2677,7 +2691,7 @@ def _classify_error(exc):
         return _KAME_SERVER_BASE_S, "server", (status_code or 503)
 
     # Rate limits / quota (only when it is NOT an explicit server 5xx above)
-    if status_code == 429 or any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
+    if status_code == 429 or _names_a_throttle(err_msg):
         parsed = _extract_retry_delay(exc)
         # v1.6.0.3. The provider's own field first, and it settles the question
         # in both directions. A ``PerMinute`` quota id means this is a rolling
@@ -3271,7 +3285,7 @@ def _is_terminal_error(exc: Exception) -> bool:
         return False
     err_msg = _evidence_text(exc)
     # Rate-limit indicators always mean "try another key", never terminal
-    if any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS):
+    if _names_a_throttle(err_msg):
         return False
     # v1.0.3: an invalid/expired KEY is terminal for the key, not the run. Gemini
     # packs it into a 400; without this check the 400 branch below would abort the

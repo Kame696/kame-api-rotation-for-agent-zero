@@ -180,3 +180,26 @@ def test_a_key_denial_saying_blocked_by_is_still_a_key_problem():
 def test_a_throttle_mentioning_safety_is_still_a_throttle():
     exc = _Refusal("Rate limit exceeded for safety tier", 429)
     assert engine._is_terminal_error(exc) is False
+
+
+# -- "429" is a status only when it stands alone --------------------------------
+@pytest.mark.parametrize("message,body", [
+    ("This model's maximum context length is 32768 tokens. However, you requested 34290 tokens.",
+     {"error": {"message": "...34290 tokens.", "type": "invalid_request_error"}}),
+    ("prompt is too long: 214290 tokens > 200000 maximum",
+     {"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long: 214290 tokens"}}),
+    ("The input token count (1429000) exceeds the maximum number of tokens allowed (1048576).",
+     {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "The input token count (1429000) exceeds"}}),
+], ids=["openai-compat", "anthropic", "gemini"])
+def test_a_context_length_400_with_429_in_a_token_count_is_terminal(message, body):
+    assert engine._is_terminal_error(_Refusal(message, 400, body)) is True
+
+
+@pytest.mark.parametrize("text", ["error code: 429 - too many requests", "http 429", "(429)", "429"])
+def test_a_429_written_as_a_status_is_still_a_throttle(text):
+    assert engine._names_a_throttle(text) is True
+
+
+@pytest.mark.parametrize("text", ["142935 tokens", "34290", "token count (1429000)", "version 4.29"])
+def test_429_inside_another_number_is_not(text):
+    assert engine._names_a_throttle(text) is False
