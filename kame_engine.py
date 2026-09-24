@@ -1721,9 +1721,20 @@ def _model_hold(kd):
 
 def _effective_hold_until(identity, key, kd):
     """Project max(model, account) without destroying either provenance."""
+    # v1.8.1.5: never past the ceiling from *now*. Every hold is stored at most
+    # `_KAME_MAX_HOLD_S` ahead of the moment it was set, so a component further
+    # out than that means the wall clock stepped back since (NTP, a resume, a
+    # hand-set clock) or the ceiling was lowered. Measured: a 30s rest read
+    # 7229s after a two-hour step back. Every selection passes through here
+    # (`_get_identity_state`), so this is where the hold is trimmed.
+    ceiling = time.time() + _KAME_MAX_HOLD_S
     model_until = _model_hold(kd)
+    if model_until > ceiling:
+        kd["model_until"] = model_until = ceiling
     account = _KAME_ACCOUNT_HOLDS.get((str(identity).split(":", 1)[0], key), {})
     account_until = float(account.get("until") or 0)
+    if account_until > ceiling:
+        account["until"] = account_until = ceiling
     if account_until > model_until:
         kd["hold_kind"] = account.get("kind", "")
         kd["hold_scope"] = "account"

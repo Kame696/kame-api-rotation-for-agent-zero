@@ -99,3 +99,79 @@ def test_an_existing_line_is_not_filtered_by_a_merge(tmp_path):
     saved = {}
     kk.add(env, "openai", [K1], lambda name, value: saved.__setitem__(name, value))
     assert saved == {"API_KEY_OPENAI": f"short-old,{K1}"}
+
+
+# -- A rest never outlasts the ceiling measured from now ------------------------
+#
+# Holds are absolute wall-clock deadlines. Every one is stored at most
+# `_KAME_MAX_HOLD_S` ahead of the moment it was set, but a wall clock that steps
+# back afterwards (NTP, a resume, a hand-set clock) moved it further out: a 30s
+# rest read 7229s after a two-hour step, past the one-hour ceiling, on every key
+# resting at that moment (experiments/clock_step_back.py; Hermes the same). A
+# lowered ceiling was likewise not honoured until the key's next refusal.
+
+if not any(name in sys.modules for name in ("test_v1_8_1_1_reliability", "tests.test_v1_8_1_1_reliability")):
+    import test_v1_8_1_1_reliability  # noqa: F401,E402  (installs the Agent Zero stubs)
+import kame_engine as engine  # noqa: E402
+
+
+class _Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def __getattr__(self, name):
+        import time as _time
+        return getattr(_time, name)
+
+
+class _Throttle(Exception):
+    status_code = 429
+
+    def __init__(self, message="Rate limit exceeded. Please retry after 30s."):
+        super().__init__(message)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = _Clock(2_000_000_000.0)
+    monkeypatch.setattr(engine, "time", fake)
+    return fake
+
+
+def test_a_clock_stepped_back_cannot_stretch_a_rest_past_the_ceiling(clock):
+    ident, key = "openai:clock-step", "sk-clock-step-00000000000001"
+    engine._get_identity_state(ident, [key])
+    engine._kame_decide_failure(ident, key, _Throttle())
+    clock.now -= 7200.0
+    engine._get_identity_state(ident, [key])
+    assert engine._next_recovery_seconds(ident, [key]) <= engine._KAME_MAX_HOLD_S
+
+
+def test_an_account_hold_is_bounded_the_same_way(clock):
+    ident, key = "openai:clock-step-account", "sk-clock-step-00000000000002"
+    engine._get_identity_state(ident, [key])
+    engine._kame_decide_failure(ident, key, _Throttle("You exceeded your current quota (insufficient_quota)"))
+    clock.now -= 7200.0
+    engine._get_identity_state(ident, [key])
+    assert engine._next_recovery_seconds(ident, [key]) <= engine._KAME_MAX_HOLD_S
+
+
+def test_a_lowered_ceiling_applies_to_a_rest_already_running(clock, monkeypatch):
+    ident, key = "openai:clock-dial", "sk-clock-dial-000000000000003"
+    engine._get_identity_state(ident, [key])
+    engine._kame_decide_failure(ident, key, _Throttle("Rate limit exceeded. Please retry after 3000s."))
+    monkeypatch.setattr(engine, "_KAME_MAX_HOLD_S", 600.0)
+    engine._get_identity_state(ident, [key])
+    assert engine._next_recovery_seconds(ident, [key]) <= 600.0
+
+
+def test_an_ordinary_rest_is_untouched(clock):
+    ident, key = "openai:clock-plain", "sk-clock-plain-00000000000004"
+    engine._get_identity_state(ident, [key])
+    applied = engine._kame_decide_failure(ident, key, _Throttle())[0]
+    clock.now += 1.0
+    engine._get_identity_state(ident, [key])
+    assert engine._next_recovery_seconds(ident, [key]) == pytest.approx(applied - 1.0)
