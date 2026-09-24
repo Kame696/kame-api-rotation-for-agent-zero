@@ -90,22 +90,42 @@ def latest_a0_tag():
 
 # --- stage 2: fingerprint the symbols KAME depends on -----------------------
 
+class Unreadable(Exception):
+    """A module exists but this interpreter cannot parse it.
+
+    Not the same thing as a missing symbol, and must never be reported as one.
+    Agent Zero's ``helpers/plugins.py`` uses the ``type X = ...`` statement
+    (Python 3.12+); parsed by 3.11 it raised SyntaxError, which used to come
+    back as None -- so an *optional* symbol read "not present, this Agent Zero
+    predates it, nothing to do", and ``--update-baseline`` then wrote a
+    baseline with that fingerprint silently dropped. The file was there the
+    whole time; only the interpreter was too old to read it.
+    """
+
+    def __init__(self, path, error):
+        super().__init__(f"{path}: {error}")
+        self.path = path
+        self.error = error
+
+
 def _source_of(a0_path, dotted, symbol):
     """Return the source text of `symbol` inside module `dotted`, or None.
 
     Parses the file with `ast` instead of importing it, so this works without
     A0's runtime dependencies installed. `symbol` is "Class.method", "Class",
-    or a plain function name.
+    or a plain function name. Raises ``Unreadable`` when the file exists but
+    cannot be parsed here -- a verdict this checker cannot give, not a
+    missing symbol.
     """
     path = os.path.join(a0_path, *dotted.split(".")) + ".py"
     if not os.path.isfile(path):
         return None
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
     try:
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
         tree = ast.parse(src)
-    except SyntaxError:
-        return None
+    except (SyntaxError, UnicodeDecodeError) as exc:
+        raise Unreadable(path, exc) from exc
 
     parts = symbol.split(".")
 
@@ -138,14 +158,19 @@ def _fingerprint(text):
 
 
 def fingerprints(a0_path, watch):
-    out, missing = {}, []
+    """Hash every watched symbol. Returns (hashes, missing, unreadable)."""
+    out, missing, unreadable = {}, [], []
     for entry in watch:
-        src = _source_of(a0_path, entry["module"], entry["symbol"])
+        try:
+            src = _source_of(a0_path, entry["module"], entry["symbol"])
+        except Unreadable as exc:
+            unreadable.append((entry, exc))
+            continue
         if src is None:
             missing.append(entry)
             continue
         out[entry["id"]] = _fingerprint(src)
-    return out, missing
+    return out, missing, unreadable
 
 
 # --- stage 2b: host-fact tripwires (v1.6.0.1) --------------------------------
@@ -365,7 +390,18 @@ def main():
         return 2
 
     print(f"\nFingerprinting {len(base['watch'])} patch points in {args.a0_path}")
-    current, missing = fingerprints(args.a0_path, base["watch"])
+    current, missing, unreadable = fingerprints(args.a0_path, base["watch"])
+    if unreadable:
+        for entry, exc in unreadable:
+            print(f"{BAD} UNREADABLE  {entry['id']}")
+            print(f"         {exc.path}")
+            print(f"         {type(exc.error).__name__}: {exc.error}")
+        print(f"\n{BAD} this Python ({sys.version.split()[0]}) cannot parse "
+              f"{len(unreadable)} of Agent Zero's watched module(s), so it cannot "
+              f"say whether those symbols changed. Run the checker with a Python "
+              f"at least as new as the one Agent Zero targets (3.12+ for v2.12 and "
+              f"v2.13). Nothing was compared and the baseline was not touched.")
+        return 2
     by_id = {e["id"]: e for e in base["watch"]}
     recorded = base["fingerprints"]
 
