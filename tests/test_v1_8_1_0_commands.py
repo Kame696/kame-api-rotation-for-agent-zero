@@ -243,6 +243,17 @@ open(mangled, "w", encoding="utf-8").write("sk-ds-9999999999999999999999\u200b\n
 text, _, _ = command("kame_keys_command.py", f"import deepseek {mangled}")
 check("1.8.1.5 an import where every token is refused says why",
       "No key found" in text and "did not look like an API key" in text and "9999" not in text, text)
+# 1.8.1.6: a stray first word is not a provider, and a UTF-16 BE file imports.
+before_env = open(ENV, encoding="utf-8").read()
+text, _, _ = command("kame_keys_command.py", "add minhas chaves sk-ds-6666666666666666666666")
+check("1.8.1.6 a word of the sentence is not a provider",
+      "Which provider" in text and "API_KEY_MINHAS" not in open(ENV, encoding="utf-8").read()
+      and open(ENV, encoding="utf-8").read() == before_env, text)
+big_endian = os.path.join(TMP, "keys-utf16be.txt")
+open(big_endian, "wb").write(b"\xfe\xff" + "sk-ds-5555555555555555555555\n".encode("utf-16-be"))
+text, _, _ = command("kame_keys_command.py", f"import deepseek {big_endian}")
+check("1.8.1.6 a UTF-16 BE file imports",
+      "sk-ds-5555555555555555555555" in KK.read_env(__import__("pathlib").Path(ENV))["API_KEY_DEEPSEEK"], text)
 
 print("=" * 60)
 if _failures:

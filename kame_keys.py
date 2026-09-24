@@ -14,6 +14,7 @@ backs up. A key is never returned whole in any message.
 
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import secrets
@@ -21,7 +22,7 @@ import shutil
 import time
 import threading
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 MAX_BACKUPS = 5
 _IMPORT_LOCK = threading.RLock()
@@ -54,6 +55,17 @@ _PROVIDER_ALIASES = {
     "hf": "huggingface", "grok": "xai", "claude": "anthropic",
 }
 
+# 1.8.1.6. Agent Zero v2.13's chat provider ids (conf/model_providers.yaml): the
+# names `split_provider` accepts when the host's own list cannot be read. The
+# command adds whatever the running Agent Zero lists, plugins included.
+_A0_PROVIDERS = frozenset({
+    "a0_venice", "anthropic", "azure", "bedrock", "cerebras", "cometapi", "deepseek",
+    "github_copilot", "google", "groq", "huggingface", "llama_cpp", "lm_studio",
+    "mistral", "moonshot", "nebius", "nvidia_nim", "ollama", "ollama_cloud", "omlx",
+    "openai", "openrouter", "other", "sambanova", "venice", "vllm", "xai", "zai",
+    "zai_coding",
+})
+
 
 def canonical_provider(provider: str, keys: Optional[List[str]] = None) -> str:
     """Agent Zero's id for `provider`: the key prefix first, then the alias table."""
@@ -62,6 +74,34 @@ def canonical_provider(provider: str, keys: Optional[List[str]] = None) -> str:
         return guessed
     name = str(provider or "").strip().lower()
     return _PROVIDER_ALIASES.get(name, name)
+
+
+# Longest first: BOM_UTF32_LE begins with BOM_UTF16_LE. The codec names carry no
+# endianness suffix so the codec itself consumes the mark. Ported from the
+# Hermes port's core/keys.py (1.8.1.6).
+_BOMS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def decode_text(data: bytes) -> str:
+    """An imported file as text, honouring whatever byte-order mark it starts with.
+
+    1.8.1.6: the command decoded UTF-16 LE and UTF-8 only; a UTF-16 BE or
+    UTF-32 file became mojibake with NULs in every key. Unmarked is UTF-8.
+    ``errors="replace"``: a file that is not text yields refused tokens and a
+    report, never an exception in a chat turn.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        return str(data or "")
+    for mark, encoding in _BOMS:
+        if data.startswith(mark):
+            return bytes(data).decode(encoding, errors="replace")
+    return bytes(data).decode("utf-8", errors="replace")
 
 
 def mask(key: str) -> str:
@@ -154,13 +194,35 @@ def guess_provider(keys: List[str]) -> str:
     return found.pop() if len(found) == 1 else ""
 
 
-def split_provider(text: str) -> Tuple[str, str]:
-    """`("openrouter", "sk-or-...")` when the first word names a provider."""
+def split_provider(text: str, known: Optional[Iterable[str]] = None,
+                   env: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+    """`("openrouter", "sk-or-...")` when the first word names a provider.
+
+    1.8.1.6: a provider Agent Zero knows -- its own list (``known``, from the
+    host), the ids and aliases above -- or one the .env (``env``) already holds
+    a key line for. Any other first word used to be taken as a provider:
+    `/kame-keys add minhas chaves sk-...` wrote the key into API_KEY_MINHAS,
+    a variable nothing reads. Such a word is now text, and a key whose prefix
+    does not name its provider gets the "Which provider?" question instead.
+    """
     text = str(text or "").strip()
     first, _, rest = text.partition(" ")
-    if _PROVIDER.match(first.lower()) and not guess_provider([first]) and rest.strip():
-        return first.lower(), rest.strip()
+    word = first.lower()
+    if (_PROVIDER.match(word) and not guess_provider([first]) and rest.strip()
+            and _names_a_provider(word, known, env)):
+        return word, rest.strip()
     return "", text
+
+
+def _names_a_provider(word: str, known: Optional[Iterable[str]],
+                      env: Optional[Dict[str, str]]) -> bool:
+    name = _PROVIDER_ALIASES.get(word, word)
+    names = set(_A0_PROVIDERS) | {str(k).strip().lower() for k in (known or ())}
+    if word in names or name in names:
+        return True
+    up = word.upper()
+    return any(str((env or {}).get(var, "") or "").strip() not in ("", "None")
+               for var in (f"API_KEY_{up}", f"{up}_API_KEY", f"{up}_API_TOKEN"))
 
 
 def env_var_for(provider: str, env: Dict[str, str]) -> str:

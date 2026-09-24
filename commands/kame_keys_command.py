@@ -40,12 +40,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             return _show("KAME — keys", f"**{count} key(s) start again from zero.** "
                                          "Rests, refusal streaks and retirements cleared.")
         if verb == "add":
-            provider, text = keys.split_provider(rest)
+            provider, text = keys.split_provider(rest, _host_providers(), keys.read_env(env_path))
             found, rejected = keys.pasted_keys(text)
             return _show("KAME — keys added", keys.add(env_path, provider, found,
                                                         dotenv.save_dotenv_value, rejected))
         if verb == "import":
-            provider, file_text = keys.split_provider(rest)
+            provider, file_text = keys.split_provider(rest, _host_providers(), keys.read_env(env_path))
             path = Path(file_text.strip().strip("\"'")).expanduser()
             if not file_text.strip():
                 return _toast("Which file? Usage: /kame-keys import [provider] <path>", "error")
@@ -53,8 +53,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 data = path.read_bytes()
             except FileNotFoundError:
                 return _toast(f"File not found: {path}", "error")
-            text = data.decode("utf-8-sig", errors="replace") if not data.startswith(b"\xff\xfe") \
-                else data.decode("utf-16", errors="replace")
+            text = keys.decode_text(data)
             rejected = []
             provider, found = keys.parse_import(text, provider, rejected)
             if not found and not provider and len(keys.import_providers(text)) > 1:
@@ -72,6 +71,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         # Never the arguments: on the `add` path they are live keys.
         return _toast(f"/kame-keys {verb} failed: {type(exc).__name__}", "error")
+
+
+def _host_providers():
+    """Every chat provider id the running Agent Zero lists, plugins included."""
+    try:
+        from helpers import providers
+        return {str(option.get("value") or "").lower() for option in providers.get_providers("chat")}
+    except Exception:
+        return None
 
 
 def _status(keys, engine, env_path: Path) -> str:

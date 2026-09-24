@@ -16,7 +16,7 @@ rather than as a wall of prose.
 > OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux and GLM. Every
 > verdict comes from the payload itself, never from a list of known provider
 > names, so a provider outside these 12 is read the same way on its first
-> refusal. Detail: [the section below](#v1810--current).
+> refusal. Detail: [the section below](#v1810).
 
 | Version | Headline | What changed for you |
 |---|---|---|
