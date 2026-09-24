@@ -613,10 +613,36 @@ _KAME_CALL_COUNT = 0
 _KAME_TALLY = {}
 
 
+def _stated_server_delay(exc):
+    """The wait a busy provider named itself, or None. v1.8.1.4.
+
+    Hermes' rule R26, ported: on a server failure only a *retry instruction*
+    counts -- the SDK's own retry attribute, `Retry-After` / `Retry-After-Ms`,
+    or the provider's sentence ("try again in 7s"). Quota-reset telemetry
+    (`x-ratelimit-reset-requests: 180s` beside a 503) describes a counter, not
+    the outage, and must not turn a one-second rest into three minutes.
+    """
+    if _KE is None:
+        return None
+    try:
+        now = time.time()
+        headers = [(k, v) for k, v in _KE._header_items(_KE.headers_of(exc))
+                   if str(k).strip().lower() in ("retry-after", "retry-after-ms")]
+        for secs, _src in (_KE._from_exception(exc), _KE._from_headers(headers, now),
+                           _KE._from_text(_evidence_text(exc) or str(exc))):
+            if secs is not None and 0 < secs <= _KAME_HARD_DELAY_CAP_S:
+                return float(secs)
+    except Exception:
+        return None
+    return None
+
+
 def _delay_source(exc, kind: str) -> str:
     """provider / kame / default — see `_KAME_TALLY`."""
     if kind == "other":
         return "default"
+    if kind == "server":
+        return "provider" if _stated_server_delay(exc) is not None else "kame"
     # v1.8.1.0: a throttle the evidence reader sized says where its number
     # came from — the provider's field, header or sentence, or one window's
     # default (KAME's number). A long daily reset the provider stated is the
@@ -2625,10 +2651,23 @@ def _classify_error(exc):
     # 'server' kind gets the gentle escalating cooldown, not the 1h daily floor.
     # 498 (v1.8.1.0): Groq's "flex tier capacity exceeded" — a busy server in
     # a status no standard set lists, which used to land in `other` at 20s.
+    #
+    # v1.8.1.4 (Hermes parity, found by a cross-port replay): two rules the
+    # Hermes table has and this one did not. "overloaded" is a busy server
+    # whatever status carries it -- `kame_evidence.judge` already declines a
+    # 429 that says so (unless a structured type says rate_limit, the Kimi
+    # case, which it returns as a throttle before this line), and without the
+    # word here the 429 fell through to the quota branch and rested a healthy
+    # key 30s, escalating. And a 5xx that names its own wait is obeyed, like
+    # every other refusal that names one: this branch returned 1s even beside
+    # `Retry-After: 30`.
     if status_code in (498, 500, 502, 503, 504, 529) \
             or "service unavailable" in err_msg or "serviceunavailable" in err_msg \
             or "internal server error" in err_msg or "bad gateway" in err_msg \
-            or "gateway timeout" in err_msg:
+            or "gateway timeout" in err_msg or "overloaded" in err_msg:
+        stated = _stated_server_delay(exc)
+        if stated is not None:
+            return stated, "server", (status_code or 503)
         return _KAME_SERVER_BASE_S, "server", (status_code or 503)
 
     # Rate limits / quota (only when it is NOT an explicit server 5xx above)
