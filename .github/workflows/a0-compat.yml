@@ -1,0 +1,56 @@
+# Does KAME still fit the Agent Zero that just shipped?
+#
+# Weekly, and on demand with any Agent Zero tag or branch. This is the
+# COMPATIBILITY.md upgrade runbook's "Audit" and "Test" steps, unattended:
+# tools/a0_upgrade_check.py fingerprints every patch point, asserts the host
+# facts, and runs the live harness (tests/test_a0_compat.py) on the real
+# checkout. Exit 1 means something needs a human read -- an 'adaptive'
+# CHANGED is expected noise, but it still stops here on purpose, so the
+# baseline is re-pinned by a person who read it.
+#
+# Python 3.13: Agent Zero v2.12+ uses Python 3.12 syntax, and the checker
+# refuses (exit 2) rather than guess on an interpreter that cannot parse it.
+name: a0-compat
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays 06:23 UTC
+  workflow_dispatch:
+    inputs:
+      a0_ref:
+        description: "Agent Zero tag or branch (default: newest vX.Y tag)"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Fetch Agent Zero
+        run: |
+          REF="${{ github.event.inputs.a0_ref || 'latest' }}"
+          if [ "$REF" = "latest" ]; then
+            REF=$(git ls-remote --tags --refs https://github.com/agent0ai/agent-zero.git \
+                  | awk -F/ '{print $3}' | grep -E '^v[0-9]+(\.[0-9]+)*$' | sort -V | tail -1)
+          fi
+          echo "Agent Zero ref: $REF"
+          git clone --depth 1 --branch "$REF" https://github.com/agent0ai/agent-zero.git "$RUNNER_TEMP/a0"
+          echo "A0_PATH=$RUNNER_TEMP/a0" >> "$GITHUB_ENV"
+
+      - name: Install the live harness's dependencies
+        run: python -m pip install -r tests/requirements.txt pytest
+
+      - name: Upgrade check (fingerprints, host facts, live harness)
+        run: python tools/a0_upgrade_check.py "$A0_PATH"
