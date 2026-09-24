@@ -55,11 +55,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             text = data.decode("utf-8-sig", errors="replace") if not data.startswith(b"\xff\xfe") \
                 else data.decode("utf-16", errors="replace")
             provider, found = keys.parse_import(text, provider)
-            if not found and not provider:
+            if not found and not provider and len(keys.import_providers(text)) > 1:
                 return _toast(
                     "The file contains keys for more than one provider. Specify one: "
                     "/kame-keys import <provider> <path>", "error"
                 )
+            if not found:
+                return _toast("No key found in that file.", "error")
             return _show("KAME — keys imported", keys.add(env_path, provider, found,
                                                            dotenv.save_dotenv_value))
         return _toast(f"Unknown: {verb}. Use status, add, import or reset.", "error")

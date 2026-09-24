@@ -388,8 +388,8 @@ check("'try again in 5.2s.' next to a 429 code is 5.2s, not 434.2 (%s)" % (K._ex
 
 print("\n--- 7. one version everywhere ---")
 manifest = open(os.path.join(HERE, "plugin.yaml"), encoding="utf-8").read()
-check("engine says 1.8.1.1", K.KAME_VERSION == "1.8.1.1")
-check("manifest says 1.8.1.1", 'version: 1.8.1.1' in manifest or 'version: "1.8.1.1"' in manifest)
+check("engine says 1.8.1.2", K.KAME_VERSION == "1.8.1.2")
+check("manifest says 1.8.1.2", 'version: 1.8.1.2' in manifest or 'version: "1.8.1.2"' in manifest)
 
 print()
 if _failures:

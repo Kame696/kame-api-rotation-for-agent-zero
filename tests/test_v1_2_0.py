@@ -330,12 +330,13 @@ check("F1 the notice is refreshed from inside the sleep slices (a live countdown
 # v1.8.1.0 adds a fifth exit: `carousel_disabled` hands the error to Agent
 # Zero after one attempt, and closes the notice on the way out like the rest.
 check("F2 every exit from the carousel closes the notice",
-      _carousel_src.count("_kame_wait_notice_finish(") == 5,
+      # 1.8.1.2 adds a sixth: every key refused with a billing reason no wait fixes.
+      _carousel_src.count("_kame_wait_notice_finish(") == 6,
       str(_carousel_src.count("_kame_wait_notice_finish(")))
 check("F3 a success closes it as 'resumed'",
       '_kame_wait_notice_finish(st, "resumed")' in _carousel_src)
 check("F4 stop / nudge during the sleep closes it as 'stopped'",
-      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 4)
+      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 5)
 check("F5 the notice never touches the model's history",
       not re.search(r"_kame_wait_notice[\s\S]{0,3000}?(hist_add|history\.|append_message)",
                     _engine_src))

@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.1.1"
+KAME_VERSION = "1.8.1.2"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -3187,6 +3187,27 @@ def _is_revoked_key(exc: Exception) -> bool:
     return any(pat.search(err_msg) for pat in _INVALID_KEY_PATTERNS)
 
 
+def _no_clock_fixes(exc) -> bool:
+    """v1.8.1.2: a billing refusal no wait fixes (evidence only, never a name).
+
+    `usage_not_included` (the plan does not include the service) or
+    `FAILED_PRECONDITION` (the free tier is not offered where the account is).
+    """
+    parts = [str(exc)]
+    for attribute in ("body", "message", "response"):
+        try:
+            value = getattr(exc, attribute, None)
+        except Exception:
+            value = None
+        if value is not None:
+            try:
+                parts.append(json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value))
+            except Exception:
+                pass
+    text = " ".join(parts).lower()
+    return "usage_not_included" in text or "failed_precondition" in text
+
+
 def _is_terminal_error(exc: Exception) -> bool:
     """Classify errors as terminal (don't retry) or transient (rotate key)."""
     # v1.8.1.0: a verdict about the KEY or its account is never terminal for
@@ -3764,7 +3785,12 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
         # A reset or a successful concurrent call may release a key before the
         # deadline observed when this sleep began. Re-check every slice so a
         # stale 60-second sleep never survives the fact that the pool recovered.
-        if _pool_has_ready_key(identity, all_keys):
+        # 1.8.1.2: early recovery only, as Hermes does (`slept < eta`). Waking
+        # on ordinary expiry here dropped the +0.5s padding and 0.1-1.5s
+        # jitter this wait was sized with, so concurrent sleepers re-probed a
+        # just-expired key together.
+        if (_soonest_eta is not None and _slept < _soonest_eta
+                and _pool_has_ready_key(identity, all_keys)):
             break
         # v1.2.0: refresh the chat-side notice from inside the slice loop rather
         # than once per sleep. A sleep can be a full minute long; a countdown
@@ -3827,6 +3853,7 @@ async def _kame_carousel(self, ctx):
 
     attempt_no = 0
     _call_id = secrets.token_hex(8)   # collision-resistant id tying calls.jsonl rows together
+    _no_clock_fix = set()   # v1.8.1.2: keys whose refusal this call no wait can fix
     _last_failed_key = None
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
@@ -4029,6 +4056,16 @@ async def _kame_carousel(self, ctx):
                 identity, key, e, elapsed=time.perf_counter() - _attempt_t0
             )
             _tally_failure(identity, kind, sc, _sized_by)
+            # v1.8.1.2 (owner decision, same rule as Hermes): a billing refusal
+            # naming a missing entitlement -- `usage_not_included`, or Google's
+            # FAILED_PRECONDITION "location not supported without billing" --
+            # is fixed by no wait. Once every key of this call has said so, the
+            # eternal carousel hands the error to Agent Zero instead of waiting
+            # forever. Credit/spend exhaustion is untouched: time fixes it.
+            if kind == "insufficient_quota" and _no_clock_fixes(e):
+                _no_clock_fix.add(key)
+            else:
+                _no_clock_fix.discard(key)
             _kame_event(_kame_event_kind(kind), identity, key,
                         reason=_KAME_EVENT_REASON.get(kind, kind), code=sc,
                         seconds=applied, detail=str(e), sized_by=_rung or _sized_by)
@@ -4062,6 +4099,12 @@ async def _kame_carousel(self, ctx):
                 # v1.8.1.0: the key is sized and rested above; what happens
                 # next is Agent Zero's own retry, exactly as without KAME.
                 _kame_wait_notice_finish(st, "stopped")
+                raise e
+            if _no_clock_fix and set(all_keys) <= _no_clock_fix:
+                _kame_wait_notice_finish(st, "stopped")
+                _kame_event("surfaced", identity, key,
+                            reason="every key: plan or country does not allow this; handed to Agent Zero",
+                            code=sc, detail=str(e))
                 raise e
             await asyncio.sleep(0)
             continue

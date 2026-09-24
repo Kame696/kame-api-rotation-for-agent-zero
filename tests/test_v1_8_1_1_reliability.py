@@ -168,11 +168,16 @@ def test_engine_account_hold_reaches_new_model_and_success_preserves_other_model
     K._get_identity_state("p:model-a", [key])
     K._get_identity_state("p:model-b", [key])
     K._mark_key_health("p:model-b", key, False, 180, "daily")
+    # 1.8.1.2: a daily label now re-probes early (15s, doubling), so read the
+    # model-b hold back instead of assuming the old flat five minutes.
+    model_b_until = K._KAME_KEY_HEALTH["p:model-b"]["keys"][key]["model_until"]
+    assert model_b_until > time.time()
     K._mark_key_health("p:model-a", key, False, 300, "per_minute", scope="account")
     assert K._get_identity_state("p:model-new", [key])["keys"][key]["sick_until"] > time.time() + 250
     K._mark_key_health("p:model-a", key, True)
     assert K._KAME_KEY_HEALTH["p:model-a"]["keys"][key]["sick_until"] <= time.time()
-    assert K._KAME_KEY_HEALTH["p:model-b"]["keys"][key]["sick_until"] > time.time() + 150
+    # model-a's answer refutes the account hold, never model-b's own hold.
+    assert K._KAME_KEY_HEALTH["p:model-b"]["keys"][key]["sick_until"] == model_b_until
 
 
 def test_server_thaw_shortens_only_model_component_and_persists_it():
@@ -241,45 +246,43 @@ def test_existing_env_is_not_changed_when_backup_fails(tmp_path, monkeypatch):
     assert not saved and "Nothing changed" in message
 
 
-def test_settings_command_reads_and_writes_only_the_active_scope(tmp_path, monkeypatch):
+def test_settings_command_always_uses_the_global_scope(tmp_path, monkeypatch):
+    """1.8.1.2 (owner decision): one engine per process, one set of dials.
+
+    1.8.1.1 wrote the agent's project/profile file; a subordinate on another
+    profile then flipped the process-global engine back at its next monologue.
+    Whatever scope the agent is in, the command reads and writes the global
+    config and never asks for a scoped path.
+    """
     plugin_helpers = types.ModuleType("helpers.plugins")
     plugin_helpers.CONFIG_FILE_NAME = "config.json"
-    scoped = tmp_path / "project" / "agents" / "profile" / "plugins" / "api_rotation_by_kame" / "config.json"
-    scoped.parent.mkdir(parents=True)
-    scoped.write_text('{"only_here": 1}', encoding="utf-8")
-    saved = []
-
-    def determine(plugin, project, profile, filename):
-        assert (plugin, project, profile, filename) == (
-            "api_rotation_by_kame", "project-x", "profile-x", "config.json"
-        )
-        return str(scoped)
-
-    plugin_helpers.determine_plugin_asset_path = determine
+    saved, asked = [], []
+    plugin_helpers.determine_plugin_asset_path = lambda *a: asked.append(a) or str(tmp_path / "x.json")
     plugin_helpers.save_plugin_config = lambda plugin, project, profile, config: saved.append(
         (plugin, project, profile, dict(config))
     )
-    plugin_helpers.get_plugin_config = lambda *a, **k: {"global_fallback": True}
+    plugin_helpers.get_plugin_config = lambda plugin, agent=None, **k: (
+        {"global_value": True} if agent is None else {"scoped_value": True})
     project_helpers = types.ModuleType("helpers.projects")
     project_helpers.get_context_project_name = lambda context: "project-x"
     monkeypatch.setitem(sys.modules, "helpers.plugins", plugin_helpers)
     monkeypatch.setitem(sys.modules, "helpers.projects", project_helpers)
     monkeypatch.setattr(sys.modules["helpers"], "projects", project_helpers, raising=False)
 
-    spec = importlib.util.spec_from_file_location("kame_command_1811_scope", HERE / "commands" / "kame_command.py")
+    spec = importlib.util.spec_from_file_location("kame_command_1812_scope", HERE / "commands" / "kame_command.py")
     command = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(command)
     agent = types.SimpleNamespace(context=object(), config=types.SimpleNamespace(profile="profile-x"))
-    project, profile, config = command._raw_config(agent)
-    assert (project, profile, config) == ("project-x", "profile-x", {"only_here": 1})
+    assert command._raw_config(agent) == ("", "", {"global_value": True})
     command._save("new_value", 2, agent)
-    assert saved == [
-        ("api_rotation_by_kame", "project-x", "profile-x", {"only_here": 1, "new_value": 2})
-    ]
-    scoped.unlink()
-    command._save("new_value", 3, agent)
-    assert saved[-1] == ("api_rotation_by_kame", "project-x", "profile-x",
-                         {"global_fallback": True, "new_value": 3})
+    assert saved == [("api_rotation_by_kame", "", "", {"global_value": True, "new_value": 2})]
+    assert asked == []
+
+
+def test_activation_reads_the_global_config_only():
+    source = (HERE / "kame_activation.py").read_text(encoding="utf-8")
+    assert 'get_plugin_config("api_rotation_by_kame", agent=None)' in source
+    assert 'get_plugin_config("api_rotation_by_kame", agent=agent)' not in source
 
 
 def test_call_id_source_is_collision_resistant():

@@ -1,4 +1,4 @@
-"""What KAME keeps beyond the current process — v1.8.1.1 (A0 port).
+"""What KAME keeps beyond the current process — v1.8.1.2 (A0 port).
 
 The Hermes port has four instruments this one lacked until 1.8.1.0, and each is
 ported here with the same contract, the same file names and the same row shape,
@@ -149,7 +149,15 @@ def redact(text: Any, limit: int = 600) -> str:
     try:
         if text is None:
             return ""
-        raw = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False, default=str)
+        # 1.8.1.2: the same shapes as Hermes' core/redact.py, so both ports'
+        # refusals.jsonl read alike: containers as JSON, bytes decoded, any
+        # other object by str() — never JSON-quoted.
+        if isinstance(text, (bytes, bytearray)):
+            text = bytes(text).decode("utf-8", "replace")
+        if isinstance(text, (dict, list, tuple)):
+            raw = json.dumps(text, ensure_ascii=False, default=str)
+        else:
+            raw = text if isinstance(text, str) else str(text)
         if raw.lstrip().startswith(("{", "[")):
             try:
                 raw = json.dumps(_scrub_fields(json.loads(raw)), ensure_ascii=False, default=str)

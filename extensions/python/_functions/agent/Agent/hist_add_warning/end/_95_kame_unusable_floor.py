@@ -51,7 +51,7 @@ def _read_floor(agent) -> int:
     try:
         from helpers.plugins import get_plugin_config
 
-        cfg = get_plugin_config("api_rotation_by_kame", agent=agent) or {}
+        cfg = get_plugin_config("api_rotation_by_kame", agent=None) or {}  # 1.8.1.2: global only
         return int(cfg.get("kame_unusable_response_limit", DEFAULT_FLOOR))
     except Exception:
         return DEFAULT_FLOOR

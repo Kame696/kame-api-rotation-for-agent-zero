@@ -155,35 +155,19 @@ def _render_settings(engine) -> str:
 
 
 def _raw_config(agent):
-    """Read only the exact writable scope, never effective/fallback settings."""
-    if agent is None:
-        # Global command/tests: there is no project/profile fallback to avoid,
-        # so the public helper is already the exact writable scope.
-        from helpers.plugins import get_plugin_config
+    """KAME's settings live in ONE place: the global plugin config.
 
-        config = dict(get_plugin_config(PLUGIN, agent=None) or {})
-        return "", "", config
-    import json
-    from pathlib import Path
-    from helpers.plugins import CONFIG_FILE_NAME, determine_plugin_asset_path
+    1.8.1.2. The engine is one per process and `activate()` applies every
+    setting to process-global state, so a per-project or per-profile file
+    would make two agents disagree about one engine: 1.8.1.1 wrote the
+    `agent0` profile file, and each subordinate on another profile flipped
+    the dials back to the global values at its next monologue. The owner
+    chose one set of dials per process. `agent` is accepted and ignored.
+    """
+    from helpers.plugins import get_plugin_config
 
-    project, profile = "", ""
-    if agent is not None:
-        from helpers import projects
-        project = projects.get_context_project_name(agent.context) or ""
-        profile = agent.config.profile or ""
-    path = Path(determine_plugin_asset_path(PLUGIN, project, profile, CONFIG_FILE_NAME))
-    try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        # The host resolves one config file, not a merge. When creating a new
-        # scope retain its effective values so changing one dial cannot reset
-        # every other inherited setting. Write only to this scope, never global.
-        from helpers.plugins import get_plugin_config
-        config = dict(get_plugin_config(PLUGIN, agent=agent) or {})
-    if not isinstance(config, dict):
-        raise ValueError("KAME scoped config must be a JSON object")
-    return project, profile, config
+    config = dict(get_plugin_config(PLUGIN, agent=None) or {})
+    return "", "", config
 
 
 def _save(name: str, value, agent, remove: bool = False) -> None:

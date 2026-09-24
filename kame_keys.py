@@ -43,6 +43,26 @@ _SPLIT = re.compile(r"[\s,;|]+")
 _PROVIDER = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# 1.8.1.2. The names people actually give these variables, mapped to Agent
+# Zero's provider ids (conf/model_providers.yaml). `GEMINI_API_KEY` is the
+# Google AI Studio convention and `NVIDIA_API_KEY` NVIDIA's; Agent Zero reads
+# `API_KEY_GOOGLE` and `API_KEY_NVIDIA_NIM`. Without this, 1.8.1.1 imported a
+# Gemini .env into `API_KEY_GEMINI`, reported success, and no key was ever used.
+_PROVIDER_ALIASES = {
+    "gemini": "google", "google_ai": "google", "googleai": "google",
+    "nvidia": "nvidia_nim", "nim": "nvidia_nim",
+    "hf": "huggingface", "grok": "xai", "claude": "anthropic",
+}
+
+
+def canonical_provider(provider: str, keys: Optional[List[str]] = None) -> str:
+    """Agent Zero's id for `provider`: the key prefix first, then the alias table."""
+    guessed = guess_provider(keys or []) if keys else ""
+    if guessed:
+        return guessed
+    name = str(provider or "").strip().lower()
+    return _PROVIDER_ALIASES.get(name, name)
+
 
 def mask(key: str) -> str:
     """`AIzaSy…q7R8` — enough to find it in a console, never the key."""
@@ -184,8 +204,9 @@ def parse_import(text: str, provider: str = "") -> Tuple[str, List[str]]:
     """
     env = parse_env_text(text)
     api_rows = [(name, value, _provider_for_env_var(name)) for name, value in env.items()]
-    api_rows = [(name, value, found) for name, value, found in api_rows if found and value]
-    wanted = str(provider or "").strip().lower()
+    api_rows = [(name, value, canonical_provider(found, split_keys(value)))
+                for name, value, found in api_rows if found and value]
+    wanted = canonical_provider(provider) if str(provider or "").strip() else ""
     if api_rows:
         if wanted:
             values = [value for _name, value, found in api_rows if found == wanted]
@@ -196,6 +217,13 @@ def parse_import(text: str, provider: str = "") -> Tuple[str, List[str]]:
             return chosen, split_keys("\n".join(value for _name, value, _found in api_rows))
         return "", []
     return wanted, split_keys(text)
+
+
+def import_providers(text: str) -> set:
+    """Every Agent Zero provider a dotenv text assigns an API key to."""
+    return {canonical_provider(_provider_for_env_var(name), split_keys(value))
+            for name, value in parse_env_text(text).items()
+            if _provider_for_env_var(name) and value}
 
 
 def backup(path: Path) -> Optional[str]:
@@ -250,7 +278,7 @@ def _add_locked(path: Path, provider: str, keys: List[str],
     """Merge `keys` into the provider's line. Returns the message to show."""
     if not keys:
         return "No key found in that text."
-    provider = (provider or guess_provider(keys)).lower()
+    provider = canonical_provider(provider, keys) if provider else guess_provider(keys)
     if not provider:
         return ("Which provider? The keys do not say. Usage: "
                 "`/kame-keys add <provider> key1,key2` — e.g. `openai`, `deepseek`.")

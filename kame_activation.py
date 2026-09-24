@@ -66,7 +66,9 @@ def activate(agent=None):
         # Pick up plugin settings (best-effort; defaults preserve behavior).
         try:
             from helpers.plugins import get_plugin_config
-            cfg = get_plugin_config("api_rotation_by_kame", agent=agent) or {}
+            # 1.8.1.2: global only. One engine per process, one set of dials;
+            # a profile/project file must not flip them per agent.
+            cfg = get_plugin_config("api_rotation_by_kame", agent=None) or {}
 
             # v1.0.3: optional raw full-error logging (debug; off by default).
             # Set FIRST so the v1.0.4 'verbose+errors' log level can force it on.

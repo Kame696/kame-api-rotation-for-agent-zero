@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.2** | Ran on a real Agent Zero; settings are one set per process | The first build of this line verified in a real Agent Zero v2.12 session with real keys (12/12 answered, two 503s rotated). `/kame set` and `/kame reset` write the global settings again: the engine is one per process, and 1.8.1.1's per-profile file let a subordinate flip the dials mid-conversation. `/kame-keys import` of a `GEMINI_API_KEY` or `NVIDIA_API_KEY` file now lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM` (1.8.1.1 wrote variables Agent Zero never reads). The all-keys-resting wait wakes early only when a key recovered early, keeping its padding. A billing refusal no wait fixes (plan lacks the service, country needs billing) goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
 | **1.8.1.1** | Reliability patch: reset, account holds, scoped settings and safe imports | Account-wide holds are stored independently from per-model holds and reach models first seen after the refusal; server-outage thaw can no longer shorten an account limit. Pool reset reports persistence failure instead of claiming success, and a sleeping exhausted pool re-checks after every slice so reset/recovery wakes it promptly. `/kame set/reset` writes only the active project/profile scope. `/kame-keys import` parses dotenv quotes/comments, requires a collision-resistant backup before changing an existing `.env`, recorder redaction is hardened, and call IDs are collision-resistant. Verified against a fresh Agent Zero v2.12 checkout. |
 | **1.8.1.0** | Every refusal sized from its own evidence | A new error reader since 1.2.0, built from **13,561 real refusals** and graded against **68 error shapes** (11 kinds) across **12 providers and gateways** — Gemini, OpenAI, Codex, Anthropic, NVIDIA, OpenRouter, Groq, DeepSeek, AIHubMix, TokenRouter, ZenMux, GLM — evidence-based, so an untested provider reads by the same rules. The provider's own number is obeyed and never inflated, per-minute told from per-day, a daily label costs a 5-minute re-probe instead of an hour, 5xx never escalates, a refused model no longer benches the key. Gemini's bare 429 `RESOURCE_EXHAUSTED` climbs a 1-2-4-8…64s ladder instead of a flat rest; no key is ever held longer than an hour; a throttle that names no wait rests 30s; a real timeout rotates without benching; out of credit rests the key on every model. **Same features as the Hermes 1.8.1.0:** its error reader, an events timeline (`/kame events`), a refusal recorder and call timings on disk, key health that survives a restart, off switches, `/kame get|set|reset`, `/kame-quota`, `/kame-keys` — same setting names and environment variables. Verified in real sessions on Agent Zero v2.12 |
 | **1.7.0.5** | Three numbers, measured on real keys | A daily quota label stops buying an hour by itself: measured on fourteen real keys, a key Google had refused *for the day* answered again **6 to 36 minutes later, 21 times out of 21**, so the label now costs a five-minute re-probe and the hour is bought only after the whole pool has gone twenty minutes without a single answer. A retry hint written in **milliseconds** stopped being read as minutes — `683.050353ms` was becoming 40,983 seconds, and on the sister port that cost five keys between four and twelve hours each in one session. And a **5xx no longer escalates at all**: a 503 is not metered, so a longer rest buys nothing, and the old ladder was measured climbing on a *healthy* pool 7 times out of 16 — once holding a working key for forty seconds while its neighbour was serving. |
@@ -62,7 +63,30 @@ graph LR
 
 ---
 
-## v1.8.1.1 — current
+## v1.8.1.2 — current
+
+**In one line:** the first 1.8.1.x build proven on a real Agent Zero, with
+four fixes; the agent still never stops on a quota.
+
+- **Ran for real.** Real Agent Zero v2.12, real Gemini keys: 12 of 12 calls
+  answered, including 6 at the same time; two provider hiccups (503) were
+  handled by switching keys.
+- **Key import works.** Importing a `.env` with `GEMINI_API_KEY` or
+  `NVIDIA_API_KEY` now saves the keys where Agent Zero actually reads them.
+  1.8.1.1 said "added" and the keys were never used.
+- **Settings stay put.** `/kame set` changes one setting for the whole
+  Agent Zero again. In 1.8.1.1 a helper agent on another profile could
+  silently switch them back mid-conversation.
+- **Smoother waiting.** When every key is resting, KAME keeps its small safety
+  margin before trying again, so several chats do not all hit the same key at
+  the same instant.
+- **Better judgment.** If *every* key says "your plan does not include this"
+  or "your country needs billing", Agent Zero gets that message instead of
+  waiting forever. Quota and rate limits still wait and come back on their own.
+- **Same brain as Hermes.** Both ports give the same answer on all 1,984 real
+  errors recorded by the author.
+
+## v1.8.1.1
 
 **In short:** a narrow reliability patch over 1.8.1.0. It changes no provider
 selection policy and adds no new routing feature; it closes failure modes found
