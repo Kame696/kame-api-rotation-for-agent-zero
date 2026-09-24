@@ -237,7 +237,11 @@ def backup(path: Path) -> Optional[str]:
                 f"{path.name}.kame-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}-{secrets.token_hex(3)}.bak"
             )
             try:
-                with path.open("rb") as source, candidate.open("xb") as dest:
+                # 1.8.1.4: created owner-only, not at the umask's 0644. The
+                # copystat below then gives it the .env's own mode, but until
+                # then a plaintext copy of every key sat world-readable.
+                fd = os.open(str(candidate), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with path.open("rb") as source, os.fdopen(fd, "wb") as dest:
                     shutil.copyfileobj(source, dest)
                 if candidate.read_bytes() != path.read_bytes():
                     return None
