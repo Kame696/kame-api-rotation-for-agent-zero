@@ -1457,9 +1457,17 @@ def pool_report() -> dict:
 _STATUS_429_IN_TEXT = re.compile(r"(?<![0-9.])429(?![0-9])")
 
 
-def _names_a_throttle(err_msg: str) -> bool:
+def _names_a_throttle(err_msg: str, strict: bool = False) -> bool:
+    """Whether the words name a throttle. `strict` (v1.8.1.4, as in Hermes): the
+    phrases only, for a status that already blames the request -- under a 400,
+    "Invalid value 429 for parameter max_tokens" is a value, not a status."""
+    if strict:
+        return any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS)
     return (any(ind in err_msg for ind in _RATE_LIMIT_INDICATORS)
             or bool(_STATUS_429_IN_TEXT.search(err_msg)))
+
+
+_REQUEST_FAULT_STATUSES = (400, 404, 405, 410, 413, 415, 422, 451, 501)
 
 
 _RATE_LIMIT_INDICATORS = (
@@ -3308,7 +3316,8 @@ def _is_terminal_error(exc: Exception) -> bool:
         return False
     err_msg = _evidence_text(exc)
     # Rate-limit indicators always mean "try another key", never terminal
-    if _names_a_throttle(err_msg):
+    _st = getattr(exc, "status_code", None)
+    if _names_a_throttle(err_msg, strict=_st in _REQUEST_FAULT_STATUSES):
         return False
     # v1.0.3: an invalid/expired KEY is terminal for the key, not the run. Gemini
     # packs it into a 400; without this check the 400 branch below would abort the

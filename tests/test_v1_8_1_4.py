@@ -254,3 +254,20 @@ def test_the_full_error_dump_keeps_the_message_but_not_the_key():
     dump = engine._raw_error_detail(exc, "server", 1.0, None)
     assert key not in dump
     assert "failed after 3 retries" in dump
+
+
+# -- under a request-fault status, only a throttle phrase rotates ---------------
+@pytest.mark.parametrize("message", [
+    "Invalid value 429 for parameter max_tokens",
+    "Invalid request: could not parse: 'we have exceeded your current quota'",
+])
+def test_a_request_fault_that_mentions_429_or_quota_is_terminal(message):
+    assert engine._is_terminal_error(_Refusal(message, 400)) is True
+
+
+@pytest.mark.parametrize("message", [
+    "Quota exceeded for quota metric 'Generate Content API requests per minute'",
+    "upstream returned 429 Too Many Requests",
+])
+def test_a_throttle_phrase_on_a_400_still_rotates(message):
+    assert engine._is_terminal_error(_Refusal(message, 400)) is False
