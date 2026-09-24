@@ -130,8 +130,16 @@ _LONG_TOKEN = re.compile(
     r"|\b(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{32,}\b",
     re.I,
 )
+#: 1.8.1.4, as in the Hermes port: a credential in a URL query parameter
+#: (Google's ?key=, and api_key/token elsewhere) is a secret by position.
+_QUERY_SECRET = re.compile(
+    r"([?&](?:key|api[_-]?key|apikey|access[_-]?token|token|auth)=)[^&\s#\"'<>]+",
+    re.I,
+)
+# 1.8.1.4: `x-api-key` / `x-goog-api-key` are header names that carry the key
+# itself; the lookbehind below kept them out when they appeared as JSON fields.
 _SECRET_FIELD = re.compile(
-    r'''((?<![\w-])["']?(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token'''
+    r'''((?<![\w-])["']?(?:(?:x-(?:goog-)?)?api[_-]?key|authorization|access[_-]?token|refresh[_-]?token'''
     r'''|secret|password|token|bearer)["']?\s*[:=]\s*)'''
     r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer[ \t]+)?[^\s,;&}\]"']+)''',
     re.I,
@@ -163,6 +171,7 @@ def redact(text: Any, limit: int = 600) -> str:
                 raw = json.dumps(_scrub_fields(json.loads(raw)), ensure_ascii=False, default=str)
             except (ValueError, TypeError):
                 pass
+        raw = _QUERY_SECRET.sub(lambda m: m.group(1) + "[redacted]", raw)
         raw = _SECRET_FIELD.sub(r'\1"[redacted]"', raw)
         raw = re.sub(r"\bBearer[ \t]+[^\s,;\"'}\]]+", "Bearer [redacted]", raw, flags=re.I)
         raw = _KEY.sub("[redacted]", raw)

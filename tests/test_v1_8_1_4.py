@@ -223,3 +223,24 @@ def test_a_per_minute_quota_limit_in_parsed_details_is_not_bare():
                    "metadata": {"quota_limit": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
                                 "quota_limit_value": "15"}}
     assert engine._is_bare_resource_exhausted(exc) is False
+
+
+# -- redaction: query parameters and x-api-key fields ---------------------------
+import kame_journal as _journal  # noqa: E402
+
+
+@pytest.mark.parametrize("url", [
+    "https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key={k}",
+    "https://api.example.com/v1/chat?model=m&api_key={k}&stream=true",
+])
+def test_a_query_parameter_credential_is_redacted_whatever_its_shape(url):
+    key = "NoDigitsNoPrefixJustLettersHereOk"
+    out = _journal.redact(f"POST {url.format(k=key)} returned 429", limit=0)
+    assert key not in out
+
+
+@pytest.mark.parametrize("field", ["x-api-key", "x-goog-api-key", "api_key"])
+def test_an_api_key_field_in_json_text_is_redacted(field):
+    key = "NoDigitsNoPrefixJustLettersHereOk"
+    out = _journal.redact('{"error": {"%s": "%s"}}' % (field, key), limit=0)
+    assert key not in out
