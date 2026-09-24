@@ -60,7 +60,7 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.4 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.5 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -226,6 +226,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.1.5** | Only keys go in; the ceiling holds | `/kame-keys add` and `import` write only what looks like a key: the words around a paste ("my keys: …"), a whole `OPENAI_API_KEY=…` line or a key mangled by the copy (a zero-width space, smart quotes) no longer land in the `.env` as keys — the rejected ones are listed, masked. A rest can no longer outlast `max_hold_seconds` when the computer's clock steps back (a 30s rest had become two hours) or when the ceiling is lowered mid-rest. |
 | **v1.8.1.4** | Same brain as Hermes, closer | A cross-port replay of 877 recorded refusal shapes found nine places this port decided differently from Hermes; each is fixed with a test. A busy server ("overloaded") is a server, not a spent key, and a stated server wait is obeyed; a context-too-long error is handed back instead of read as a rate limit because a token count contains 429; a flagged prompt is handed back, a key denial still rotates; Codex's `usage_not_included` is billing by its field. Key backups are owner-only from the first byte; the debug error dump no longer prints a key. |
 | **v1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. Compatibility re-verified on v2.13 (live harness green, 12/12 host facts; the one changed symbol is `adaptive`). The upgrade checker no longer mistakes a module its Python cannot parse for a missing symbol. `tests/run_all.py` runs every suite the right way. CI workflows added. |
 | **v1.8.1.2** | Ran on a real Agent Zero; one set of settings per process | Verified in a real Agent Zero v2.12 session (12/12 answered). `/kame set` is global again (1.8.1.1's per-profile file let subordinates flip the dials). `.env` import of `GEMINI_API_KEY` / `NVIDIA_API_KEY` lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM`. The resting wait keeps its padding. A billing refusal no wait fixes goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
@@ -302,6 +303,6 @@ MIT — see [LICENSE](LICENSE). Bugs and ideas: [issues](https://github.com/Kame
 
 <div align="center">
 
-🐢⚡ **KAME 1.8.1.4** — *because round-robin was never enough*
+🐢⚡ **KAME 1.8.1.5** — *because round-robin was never enough*
 
 </div>

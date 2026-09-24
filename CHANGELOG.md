@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.5** | Only keys go in; the ceiling holds | `/kame-keys add`/`import` write only what looks like a key (the Hermes filter, ported); a rest can no longer outlast `max_hold_seconds` after a clock step back or a lowered ceiling. |
 | **1.8.1.4** | Same brain as Hermes, closer | Nine decisions aligned with Hermes after a cross-port replay of 877 refusal shapes: busy server vs spent key, a stated server wait, a token count containing 429, a flagged prompt, Codex's `usage_not_included`, Gemini's bare `RESOURCE_EXHAUSTED` in a parsed body. Key backups owner-only from birth; the debug error dump redacts keys. |
 | **1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. v2.13 audited with `tools/a0_upgrade_check.py`: 14/15 symbols unchanged (the one change is `adaptive` and does not reach KAME), 12/12 host facts, live harness green; baseline re-pinned. The checker no longer reports a module its Python cannot parse as a missing optional symbol (it used to, and `--update-baseline` then dropped that fingerprint). `tests/run_all.py` runs script and pytest suites alike; CI workflows added. |
 | **1.8.1.2** | Ran on a real Agent Zero; settings are one set per process | The first build of this line verified in a real Agent Zero v2.12 session with real keys (12/12 answered, two 503s rotated). `/kame set` and `/kame reset` write the global settings again: the engine is one per process, and 1.8.1.1's per-profile file let a subordinate flip the dials mid-conversation. `/kame-keys import` of a `GEMINI_API_KEY` or `NVIDIA_API_KEY` file now lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM` (1.8.1.1 wrote variables Agent Zero never reads). The all-keys-resting wait wakes early only when a key recovered early, keeping its padding. A billing refusal no wait fixes (plan lacks the service, country needs billing) goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
@@ -65,7 +66,31 @@ graph LR
 
 ---
 
-## v1.8.1.4 — current
+## v1.8.1.5 — current
+
+**In one line:** the agent still never stops on a quota; only keys reach the
+`.env`, and the ceiling bounds every rest whatever the computer's clock does.
+
+- **Only keys go in.** `/kame-keys add` and `import` wrote every token they
+  were given: the words around a paste (`my keys: K1, K2` put `my` and `keys:`
+  into `API_KEY_…`), a whole `OPENAI_API_KEY=sk-…` line as one "key", a key
+  carrying a zero-width space, smart quotes or a `\ufffd` from a mis-decoded
+  file — each then sat in the pool failing at the provider. The Hermes port's
+  filter is ported: a `NAME=value`, quotes and a byte-order mark are peeled
+  off, and a token is kept only if it is 16–512 printable ASCII characters and
+  not a URL or a comment. Long tokens that were refused are listed, masked.
+  What is already in the `.env` is never touched.
+- **The ceiling holds when the clock steps back.** Rests are wall-clock
+  deadlines. After the computer's clock stepped back two hours (NTP, a resume,
+  a hand-set clock) a 30-second rest had become two hours, on every key resting
+  at that moment; a lowered `max_hold_seconds` waited for each key's next
+  refusal. Every selection now trims a rest to the ceiling from now.
+- **Verified:** all 22 offline suites; live harness green on Agent Zero v2.13;
+  the cross-port replay unchanged (122/133 of this port's own refusal shapes);
+  the failure-path fuzz with huge numbers added raises nothing. No real-key
+  session on 1.8.1.5.
+
+## v1.8.1.4
 
 **In one line:** the agent still never stops on a quota; this port now reads
 nine more refusals the way Hermes does, and never prints a key while debugging.
