@@ -20,6 +20,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.1.4** | Same brain as Hermes, closer | Nine decisions aligned with Hermes after a cross-port replay of 877 refusal shapes: busy server vs spent key, a stated server wait, a token count containing 429, a flagged prompt, Codex's `usage_not_included`, Gemini's bare `RESOURCE_EXHAUSTED` in a parsed body. Key backups owner-only from birth; the debug error dump redacts keys. |
 | **1.8.1.3** | Checked against Agent Zero v2.13 | No runtime change. v2.13 audited with `tools/a0_upgrade_check.py`: 14/15 symbols unchanged (the one change is `adaptive` and does not reach KAME), 12/12 host facts, live harness green; baseline re-pinned. The checker no longer reports a module its Python cannot parse as a missing optional symbol (it used to, and `--update-baseline` then dropped that fingerprint). `tests/run_all.py` runs script and pytest suites alike; CI workflows added. |
 | **1.8.1.2** | Ran on a real Agent Zero; settings are one set per process | The first build of this line verified in a real Agent Zero v2.12 session with real keys (12/12 answered, two 503s rotated). `/kame set` and `/kame reset` write the global settings again: the engine is one per process, and 1.8.1.1's per-profile file let a subordinate flip the dials mid-conversation. `/kame-keys import` of a `GEMINI_API_KEY` or `NVIDIA_API_KEY` file now lands in `API_KEY_GOOGLE` / `API_KEY_NVIDIA_NIM` (1.8.1.1 wrote variables Agent Zero never reads). The all-keys-resting wait wakes early only when a key recovered early, keeping its padding. A billing refusal no wait fixes (plan lacks the service, country needs billing) goes back to Agent Zero once every key said so. Same decision as Hermes on all 1,984 recorded refusals. |
 | **1.8.1.1** | Reliability patch: reset, account holds, scoped settings and safe imports | Account-wide holds are stored independently from per-model holds and reach models first seen after the refusal; server-outage thaw can no longer shorten an account limit. Pool reset reports persistence failure instead of claiming success, and a sleeping exhausted pool re-checks after every slice so reset/recovery wakes it promptly. `/kame set/reset` writes only the active project/profile scope. `/kame-keys import` parses dotenv quotes/comments, requires a collision-resistant backup before changing an existing `.env`, recorder redaction is hardened, and call IDs are collision-resistant. Verified against a fresh Agent Zero v2.12 checkout. |
@@ -64,7 +65,32 @@ graph LR
 
 ---
 
-## v1.8.1.3 — current
+## v1.8.1.4 — current
+
+**In one line:** the agent still never stops on a quota; this port now reads
+nine more refusals the way Hermes does, and never prints a key while debugging.
+
+- **A busy server is a server.** A 429 that says "overloaded" rested each key
+  30s as if it were spent (and escalated); it now rotates at once like any busy
+  server. A server error that names its own wait (`Retry-After`) is obeyed —
+  quota-reset headers on a 5xx are not a wait.
+- **A context-too-long error is handed back.** "you requested 34290 tokens"
+  contains the digits 429 and was read as a rate limit: every key rested, the
+  oversized request sent again. `429` now counts only as a number on its own,
+  and under a request-fault status only a throttle phrase rotates.
+- **A flagged prompt is handed back** ("blocked by the safety filter"); a key
+  denial that merely says "blocked by" still rotates.
+- **Codex `usage_not_included` is billing by its field**, whatever the sentence,
+  so the 1.8.1.2 hand-back applies to it.
+- **Gemini's bare `RESOURCE_EXHAUSTED`** takes the 1-2-4s ladder when the body
+  arrives parsed, and a `quota_limit` naming a window is not bare.
+- **Keys:** the `.env` backup is owner-only from its first byte; a key in a URL
+  query or an `x-api-key` field is redacted from `refusals.jsonl`; the
+  `kame_log_full_errors` dump prints the whole message minus credentials.
+- **Verified:** all 21 offline suites; live harness green on Agent Zero v2.13;
+  a fuzz of 26,164 odd payloads raises nothing. No real-key session on 1.8.1.4.
+
+## v1.8.1.3
 
 **In one line:** nothing the agent does changes; KAME was re-checked against
 Agent Zero v2.13, and the checker and test runner were fixed where they could
