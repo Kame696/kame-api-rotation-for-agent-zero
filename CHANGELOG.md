@@ -69,6 +69,25 @@ graph LR
 
 ## v1.8.1.6 — current
 
+**One release, four steps.** v1.8.1.6 is the only GitHub release for
+v1.8.1.3–v1.8.1.6; the entries below it are the steps inside it.
+
+**In a quick list:**
+
+- **`/kame-keys add` and `import` store only real keys**, under a provider
+  Agent Zero reads — not the words around a paste, not a stray first word.
+- **Every key file imports**, whatever its Unicode encoding (BOM, UTF-16, UTF-32).
+- **A busy server ("overloaded") is treated as a busy server**, not a spent
+  key, and a wait it states is obeyed.
+- **A prompt blocked by a moderation filter is handed back once**, not resent
+  on every key.
+- **A too-long request no longer loops over every key** because its error
+  text happened to contain "429" (as in "142935 tokens").
+- **A computer clock that jumps back** (sleep, time sync) can't keep a key out
+  past the ceiling.
+- **Key backups are private** (owner-only) from the first byte.
+- **Checked against Agent Zero v2.13.**
+
 **In one line:** `/kame-keys` writes keys only under a provider Agent Zero
 reads, from any Unicode file.
 
@@ -85,9 +104,12 @@ reads, from any Unicode file.
   `max_hold_seconds`, the provider's own wait included; the Hermes port does
   so too from 1.8.1.6.
 - **Verified:** all 23 offline suites; live harness green on Agent Zero v2.13.
-  No real-key session on 1.8.1.6.
+  Real session on Agent Zero v2.12 code with 14 real Gemini keys: 12 of 12
+  calls answered (6 at the same time), 48 provider 503s rotated at 1s each.
 
 ## v1.8.1.5
+
+*Shipped inside the v1.8.1.6 release; not released on its own.*
 
 **In one line:** the agent still never stops on a quota; only keys reach the
 `.env`, and the ceiling bounds every rest whatever the computer's clock does.
@@ -118,6 +140,8 @@ reads, from any Unicode file.
 
 ## v1.8.1.4
 
+*Shipped inside the v1.8.1.6 release; not released on its own.*
+
 **In one line:** the agent still never stops on a quota; this port now reads
 nine more refusals the way Hermes does, and never prints a key while debugging.
 
@@ -142,6 +166,8 @@ nine more refusals the way Hermes does, and never prints a key while debugging.
   a fuzz of 26,164 odd payloads raises nothing. No real-key session on 1.8.1.4.
 
 ## v1.8.1.3
+
+*Shipped inside the v1.8.1.6 release; not released on its own.*
 
 **In one line:** nothing the agent does changes; KAME was re-checked against
 Agent Zero v2.13, and the checker and test runner were fixed where they could
