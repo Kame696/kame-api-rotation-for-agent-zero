@@ -6,13 +6,15 @@
 
 **Paste several API keys. KAME picks the healthiest one for every call, reads every refusal, and never lets a rate limit end your run.**
 
-> **Release evidence.** 1.8.1.6 ran in a real Agent Zero v2.12 session with 14 real Gemini keys: 12/12 calls answered (6 sequential, 6 concurrent), 48 provider 503s rotated at 1s each, all 14 keys used. It also passed all 23 offline suites, the v2.13 compatibility harness, and a cross-port check that gives the same decision as Hermes on all 2,679 recorded refusals.
+> **1.8.1.8 — clean lifecycle and native interruption handling.** Uninstall/reload preserves other extensions, limiter patches no longer stack, and compression respects native stop/intervention exceptions. All 24 offline suites and remote native Agent Zero v2.12/v2.13 acceptance passed: [14 green CI jobs](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/37091291526). See [validation and limits](VALIDATION.md). No Agent Zero installation on the author's computer or real-provider 1.8.1.8 performance claim.
+
+> **Historical real-provider evidence (1.8.1.6).** 1.8.1.6 ran in a real Agent Zero v2.12 session with 14 real Gemini keys: 12/12 calls answered (6 sequential, 6 concurrent), 48 provider 503s rotated at 1s each, all 14 keys used. It also passed all 23 offline suites, the v2.13 compatibility harness, and a cross-port check that gives the same decision as Hermes on all 2,679 recorded refusals.
 
 Smart API key rotation, 429 / `RESOURCE_EXHAUSTED` recovery and rate-limit failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or any provider LiteLLM speaks to.
 
-[![Version](https://img.shields.io/badge/version-1.8.1.6-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.1.8-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.13-purple.svg)](#verified)
-[![Real sessions](https://img.shields.io/badge/real_sessions-26%2F26_answered-brightgreen.svg)](#verified)
+[![Native host tests](https://img.shields.io/badge/remote_native_hosts-2%2F2_passed-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-rotation-for-agent-zero?style=social)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/stargazers)
@@ -60,7 +62,7 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.6 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.1.8 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -201,7 +203,7 @@ Nothing needs changing. Every setting is on the plugin's settings page and in `/
 | A fourth real session, on 1.8.1.6 — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | **12 / 12 answered**, 6 of them concurrent; 48 real `503`s absorbed at 1s each; all 14 keys carried traffic |
 | Live harness — KAME's real patches applied to a real Agent Zero checkout | **all green** on v2.11, v2.12 and v2.13 |
 | Upgrade check — every Agent Zero symbol KAME touches | **15 / 15** fingerprints (three new in 1.8.1.0: the plugin config writer, the `.env` writer, the script-command runner) and **12 / 12** host facts hold on v2.12 and v2.13 |
-| Offline tests | **23 / 23** suites green through `tests/run_all.py` (standalone scripts and pytest files, 1.8.1.1–1.8.1.6) |
+| Offline tests | **24 / 24** suites green through `tests/run_all.py` (standalone scripts and pytest files, through 1.8.1.8) |
 | Answer-key gate — 1,897 real recorded refusals, judged by each port's own engine | A0 and Hermes agree on **every field** (family 100, window 99.69, scope 99.88, action 98.89) |
 | Adversarial review | a second model tried to break the port; its 8 findings are fixed and each is now a test |
 
@@ -227,6 +229,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.1.8** | Clean lifecycle, native stops, remote acceptance | Owned bindings preserve foreign extensions and updated host methods on reload; rate limiter methods/locks restore cleanly; compression propagates stop/intervention. 18 targeted regressions, 24 suites, 14 CI jobs; native v2.12/v2.13 with actual SDK/TCP interruption tests. Classifier, selector and native execution preserved. |
 | **v1.8.1.6** | Keys land where Agent Zero reads them | `/kame-keys add` no longer takes the first word of a sentence for a provider (`add my keys sk-…` wrote into `API_KEY_MY`, which nothing reads): the word must be a provider Agent Zero knows, or one your `.env` already has keys for, otherwise KAME asks. `/kame-keys import` reads UTF-16 and UTF-32 files of either byte order. |
 | **v1.8.1.5** | Only keys go in; the ceiling holds *(inside the v1.8.1.6 release)* | `/kame-keys add` and `import` write only what looks like a key: the words around a paste ("my keys: …"), a whole `OPENAI_API_KEY=…` line or a key mangled by the copy (a zero-width space, smart quotes) no longer land in the `.env` as keys — the rejected ones are listed, masked. A rest can no longer outlast `max_hold_seconds` when the computer's clock steps back (a 30s rest had become two hours) or when the ceiling is lowered mid-rest. |
 | **v1.8.1.4** | Same brain as Hermes, closer *(inside the v1.8.1.6 release)* | A cross-port replay of 877 recorded refusal shapes found nine places this port decided differently from Hermes; each is fixed with a test. A busy server ("overloaded") is a server, not a spent key, and a stated server wait is obeyed; a context-too-long error is handed back instead of read as a rate limit because a token count contains 429; a flagged prompt is handed back, a key denial still rotates; Codex's `usage_not_included` is billing by its field. Key backups are owner-only from the first byte; the debug error dump no longer prints a key. |
@@ -305,6 +308,6 @@ MIT — see [LICENSE](LICENSE). Bugs and ideas: [issues](https://github.com/Kame
 
 <div align="center">
 
-🐢⚡ **KAME 1.8.1.6** — *because round-robin was never enough*
+🐢⚡ **KAME 1.8.1.8** — *because round-robin was never enough*
 
 </div>

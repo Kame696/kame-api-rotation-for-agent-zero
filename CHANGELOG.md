@@ -1,5 +1,36 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.1.8 — Clean lifecycle and native stops (2026-10-03)
+
+**In short:** better coexistence with host updates and other extensions, without
+replacing Agent Zero's request/stream/result engine or changing its API choices.
+
+- Owned callable bindings restore only KAME's own layer. A foreign outer wrapper
+  survives uninstall, and its captured KAME layer becomes native passthrough.
+- Repeated load/unload does not stack limiter constructors; original limiter
+  methods and owned instance locks are restored. Weak references avoid retaining
+  discarded instances. Inherited methods and updated host methods remain intact.
+- Compression propagates native intervention/repair/handled exceptions instead
+  of turning them into fallback summaries. Cancellation/context cleanup remains.
+- Remote native v2.12/v2.13 tests cover real SDK/TCP 429 and mid-stream failure,
+  original-request replay, incomplete unexecuted tools, early-stop and cancellation.
+- Every prior offline suite is retained. Historical compatibility fingerprints
+  stay strict through an explicit per-host baseline; version assertions follow
+  the release rather than a stale 1.8.1.6 literal.
+
+**Evidence:** 18 targeted regressions, all 24 offline suites, 14 CI jobs, and
+23 extended native checks per host after the full historical host harness.
+Fourteen initial regression witnesses failed on 1.8.1.6 before the repair.
+See [VALIDATION.md](VALIDATION.md) for scope, exclusions and measured overhead.
+Restart the host once after upgrading from an older plugin.
+
+**Preserved:** classifier, selector, quota policy, global settings, history,
+model/provider choice, reasoning, auxiliary calls and native delegated execution.
+No optional request racing. No new provider-speed or universal uptime guarantee.
+1.8.1.7 was not a separate Agent Zero release; the prior public baseline is 1.8.1.6.
+
+---
+
 Every release, newest first. Each one opens with **In short** — the whole
 release as a handful of lines — and folds the reasoning, the logs it came from
 and the verification underneath, so this page reads as a list of releases

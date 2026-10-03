@@ -48,6 +48,7 @@ INCLUDE_FILES = (
     "a0_compat.json",
     "CHANGELOG.md",
     "COMPATIBILITY.md",
+    "VALIDATION.md",
     "README.md",
     "LICENSE",
 )
