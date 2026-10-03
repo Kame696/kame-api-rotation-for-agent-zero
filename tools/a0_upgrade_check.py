@@ -351,6 +351,7 @@ def run_live_tests(a0_path):
 
 
 def main():
+    global BASELINE
     ap = argparse.ArgumentParser(description="Check KAME against a new Agent Zero.")
     ap.add_argument("a0_path", nargs="?", help="path to an Agent Zero checkout")
     ap.add_argument("--latest", action="store_true",
@@ -359,7 +360,10 @@ def main():
                     help="re-pin a0_compat.json to this checkout + version "
                          "(do this ONLY after the audit is green)")
     ap.add_argument("--skip-tests", action="store_true")
+    ap.add_argument("--baseline", help="explicit previously audited host baseline JSON")
     args = ap.parse_args()
+    if args.baseline:
+        BASELINE = os.path.abspath(args.baseline)
 
     try:
         base = _load_baseline()

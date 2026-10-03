@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
-      - run: python -m pip install pytest
+      - run: python -m pip install pytest httpx
       - name: Run every offline suite, without Agent Zero
         env:
           PYTHONIOENCODING: utf-8
@@ -36,8 +36,10 @@ jobs:
         host:
           - tag: v2.12
             sha: b1cbd1f960a1a5c4482b324dcff4742aa67b7a51
+            baseline: tests/host_baselines/v2.12.json
           - tag: v2.13
             sha: e3051fb584b1a36be2b0a0c90606f1c2c2d356ec
+            baseline: a0_compat.json
     env:
       PYTHONIOENCODING: utf-8
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
@@ -56,7 +58,7 @@ jobs:
       - name: Install native test dependencies on remote runner
         run: python -m pip install -r tests/requirements.txt pytest
       - name: Verify host fingerprints and contracts
-        run: python tools/a0_upgrade_check.py "$GITHUB_WORKSPACE/host" --skip-tests
+        run: python tools/a0_upgrade_check.py "$GITHUB_WORKSPACE/host" --skip-tests --baseline "${{ matrix.host.baseline }}"
       - name: Exercise native host, lifecycle, SDK and interrupted TCP streams
         run: python tests/native_1818.py "$GITHUB_WORKSPACE/host" "$RUNNER_TEMP/native-${{ matrix.host.tag }}.json"
       - uses: actions/upload-artifact@v4
