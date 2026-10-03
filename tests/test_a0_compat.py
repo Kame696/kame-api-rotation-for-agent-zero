@@ -102,8 +102,10 @@ if orig_turn is not None:
     check("original unified_turn stored",
           models.LiteLLMChatWrapper._kame_original_unified_turn is orig_turn)
     check("unified_turn is in the bound list", "unified_turn" in kame._KAME_BOUND_ENTRY_POINTS)
-check("Topic.summarize_messages patched", history.Topic.summarize_messages is kame._kame_summarize_messages)
-check("Bulk.summarize patched", history.Bulk.summarize is kame._kame_bulk_summarize)
+check("Topic.summarize_messages owns the KAME implementation",
+      getattr(history.Topic.summarize_messages, "_kame_implementation", None) is kame._kame_summarize_messages)
+check("Bulk.summarize owns the KAME implementation",
+      getattr(history.Bulk.summarize, "_kame_implementation", None) is kame._kame_bulk_summarize)
 
 # =============================================================================
 # LIVE ROTATION — real LiteLLMChatWrapper, real transport, fake network only

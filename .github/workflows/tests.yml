@@ -1,18 +1,10 @@
-# Offline suites on every push and pull request.
-#
-# The suites stub Agent Zero, so they need no checkout of it; most are scripts
-# (one process each) and two are pytest modules. tests/run_all.py runs each the
-# right way and fails if any does.
 name: tests
-
 on:
   push:
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   offline:
     name: offline suites (${{ matrix.os }}, Python ${{ matrix.python }})
@@ -29,9 +21,47 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
-      - name: Install pytest
-        run: python -m pip install pytest
-      - name: Run every suite
+      - run: python -m pip install pytest
+      - name: Run every offline suite, without Agent Zero
         env:
           PYTHONIOENCODING: utf-8
         run: python tests/run_all.py
+  native:
+    name: native Agent Zero ${{ matrix.host.tag }} (remote only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - tag: v2.12
+            sha: b1cbd1f960a1a5c4482b324dcff4742aa67b7a51
+          - tag: v2.13
+            sha: e3051fb584b1a36be2b0a0c90606f1c2c2d356ec
+    env:
+      PYTHONIOENCODING: utf-8
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: agent0ai/agent-zero
+          ref: ${{ matrix.host.sha }}
+          path: host
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+      - name: Install native test dependencies on remote runner
+        run: python -m pip install -r tests/requirements.txt pytest
+      - name: Verify host fingerprints and contracts
+        run: python tools/a0_upgrade_check.py "$GITHUB_WORKSPACE/host" --skip-tests
+      - name: Exercise native host, lifecycle, SDK and interrupted TCP streams
+        run: python tests/native_1818.py "$GITHUB_WORKSPACE/host" "$RUNNER_TEMP/native-${{ matrix.host.tag }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ matrix.host.tag }}
+          path: ${{ runner.temp }}/native-${{ matrix.host.tag }}.json
+          if-no-files-found: warn

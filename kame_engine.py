@@ -205,7 +205,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.1.6"
+KAME_VERSION = "1.8.1.8"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -4283,7 +4283,7 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     return wrapped_response, wrapped_reasoning, wrapped_tokens
 
 
-def _kame_make_entry_wrapper(entry_name, original):
+def _kame_make_entry_wrapper(entry_name, original, binding=None):
     """Build KAME's replacement for ONE A0 model entry point (v1.0.9).
 
     The same wrapper serves ``unified_call`` (returns a ``(response, reasoning)``
@@ -4304,6 +4304,15 @@ def _kame_make_entry_wrapper(entry_name, original):
         explicit_caching=False,
         **kwargs,
     ):
+        # An outer extension may retain this callable after uninstall. Leave
+        # that extension intact while making our captured layer a passthrough.
+        if binding is not None and not binding["active"]:
+            return await original(
+                self, system_message=system_message, user_message=user_message,
+                messages=messages, response_callback=response_callback,
+                reasoning_callback=reasoning_callback, tokens_callback=tokens_callback,
+                rate_limiter_callback=rate_limiter_callback,
+                explicit_caching=explicit_caching, **kwargs)
         provider = (self.a0_model_conf.provider if getattr(self, "a0_model_conf", None) else "unknown").lower()
         model = (getattr(self, "model_name", "") or "unknown").lower()
         identity = f"{provider}:{model}"
@@ -4400,6 +4409,8 @@ async def _kame_summarize_messages(self, messages):
                 message=self.history.agent.read_prompt("fw.topic_summary.msg.md", content=msg_txt),
             )
         except Exception as e:
+            if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
+                raise
             PrintStyle.error(f"[KAME] Compression failed: {_scrub_for_log(e)}")
             summary = "[Summary unavailable - " + " | ".join(str(t)[:200] for t in msg_txt[:3]) + "]"
         return summary
@@ -4420,7 +4431,9 @@ async def _kame_bulk_summarize(self):
                 system=self.history.agent.read_prompt("fw.topic_summary.sys.md"),
                 message=self.history.agent.read_prompt("fw.topic_summary.msg.md", content=content),
             )
-        except Exception:
+        except Exception as e:
+            if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
+                raise
             PrintStyle.error(f"[KAME] Bulk compression failed.")
             self.summary = "[Bulk summary unavailable]"
         return self.summary
@@ -4431,40 +4444,88 @@ async def _kame_bulk_summarize(self):
 # --- SHIELD: RATE LIMITER DEADLOCK FIX ---
 
 def _patch_rate_limiters():
-    """Replace asyncio.Lock with threading.Lock on RateLimiter class."""
+    """Apply the lock shield once, retaining enough state for clean removal."""
     try:
         from helpers.rate_limiter import RateLimiter
         import models
-        _orig_init = RateLimiter.__init__
+        import weakref
+        previous = vars(RateLimiter).get("_kame_rate_limiter_state")
+        if previous and previous["active"]:
+            return True
+        state = {"active": True, "locks": weakref.WeakKeyDictionary()}
+        RateLimiter._kame_rate_limiter_state = state
 
-        def _kame_init(self_rl, seconds=60, **limits):
-            _orig_init(self_rl, seconds, **limits)
-            self_rl._lock = threading.Lock()
-        RateLimiter.__init__ = _kame_init
+        def convert(instance):
+            old = getattr(instance, "_lock", None)
+            if not isinstance(old, asyncio.Lock):
+                return
+            lock = threading.Lock()
+            try:
+                state["locks"][instance] = (old, lock)
+            except TypeError:
+                return  # A future non-weakrefable host instance stays native.
+            instance._lock = lock
 
-        async def _kame_cleanup(self_rl):
-            with self_rl._lock:
-                now = time.time()
-                cutoff = now - self_rl.timeframe
-                for key in self_rl.values:
-                    self_rl.values[key] = [(t, v) for t, v in self_rl.values[key] if t > cutoff]
+        def owns_lock(instance):
+            try:
+                pair = state["locks"].get(instance)
+                return pair is not None and instance._lock is pair[1]
+            except TypeError:
+                return False
 
-        async def _kame_get_total(self_rl, key: str) -> int:
-            with self_rl._lock:
-                if key not in self_rl.values:
-                    return 0
-                return sum(value for _, value in self_rl.values[key])
+        def init_factory(original, binding):
+            def initialize(instance, *args, **kwargs):
+                original(instance, *args, **kwargs)
+                if state["active"] and binding["active"]:
+                    convert(instance)
+            return initialize
 
-        RateLimiter.cleanup = _kame_cleanup
-        RateLimiter.get_total = _kame_get_total
+        def cleanup_factory(original, binding):
+            async def cleanup(instance):
+                if not state["active"] or not binding["active"] or not owns_lock(instance):
+                    return await original(instance)
+                with instance._lock:
+                    cutoff = time.time() - instance.timeframe
+                    for key in instance.values:
+                        instance.values[key] = [(t, v) for t, v in instance.values[key] if t > cutoff]
+            return cleanup
 
+        def total_factory(original, binding):
+            async def get_total(instance, key):
+                if not state["active"] or not binding["active"] or not owns_lock(instance):
+                    return await original(instance, key)
+                with instance._lock:
+                    return sum(value for _, value in instance.values.get(key, []))
+            return get_total
+
+        for name, factory in (("__init__", init_factory), ("cleanup", cleanup_factory),
+                              ("get_total", total_factory)):
+            _kame_bind_owned(RateLimiter, name, factory)
         if hasattr(models, "rate_limiters"):
             for rl in models.rate_limiters.values():
-                if isinstance(rl, RateLimiter) and isinstance(rl._lock, asyncio.Lock):
-                    rl._lock = threading.Lock()
+                if isinstance(rl, RateLimiter):
+                    convert(rl)
         return True
     except Exception:
+        _unpatch_rate_limiters()
         return False
+
+
+def _unpatch_rate_limiters():
+    """Restore owned methods and only the instance locks we actually replaced."""
+    try:
+        from helpers.rate_limiter import RateLimiter
+        state = vars(RateLimiter).get("_kame_rate_limiter_state")
+        if state:
+            state["active"] = False
+            for instance, (original, owned) in list(state["locks"].items()):
+                if getattr(instance, "_lock", None) is owned:
+                    instance._lock = original
+            state["locks"].clear()
+            delattr(RateLimiter, "_kame_rate_limiter_state")
+        _kame_unbind_owned(RateLimiter)
+    except Exception:
+        pass
 
 
 # --- PATCH APPLICATION ---
@@ -4472,6 +4533,75 @@ def _patch_rate_limiters():
 # v1.0.9: the entry points KAME looked for by name before shape-detection existed.
 # Only used as the layer-2 fallback (see _kame_bind_entry_points).
 _KAME_LEGACY_ENTRY_NAMES = ("unified_turn", "unified_call")
+
+
+def _kame_bind_owned(cls, name, factory):
+    """Own one binding, not the whole host class or another extension's layer."""
+    registry = vars(cls).get("_kame_owned_bindings")
+    if registry is None:
+        registry = {}
+        setattr(cls, "_kame_owned_bindings", registry)
+    previous = registry.get(name)
+    original = getattr(cls, name)
+    before = original
+    stash = f"_kame_original_{name}"
+    if previous and original is previous["wrapper"]:
+        state = dict(previous)
+        original = state["original"]
+    else:
+        state = {"had_local": name in vars(cls), "local_value": vars(cls).get(name),
+                 "had_stash": stash in vars(cls), "stash_value": vars(cls).get(stash)}
+        inherited = getattr(original, "_kame_binding", None)
+        if inherited and inherited.get("wrapper") is original:
+            # A subclass needs its own lease, not a second rotation through
+            # the inherited wrapper. The parent's lease remains active.
+            original = inherited["original"]
+    state.update(active=True, original=original)
+    wrapper = factory(original, state)
+    state["wrapper"] = wrapper
+    wrapper._kame_binding = state
+    try:
+        setattr(cls, name, wrapper)
+        setattr(cls, stash, original)
+    except Exception:
+        state["active"] = False
+        if getattr(cls, name, None) is wrapper:
+            setattr(cls, name, before)
+        raise
+    if previous:
+        previous["active"] = False
+    registry[name] = state
+    return wrapper
+
+
+def _kame_unbind_owned(cls):
+    registry = vars(cls).get("_kame_owned_bindings", {})
+    for name, state in list(registry.items()):
+        state["active"] = False
+        if getattr(cls, name, None) is state["wrapper"]:
+            if state["had_local"]:
+                setattr(cls, name, state["local_value"])
+            else:
+                delattr(cls, name)
+        stash = f"_kame_original_{name}"
+        if vars(cls).get(stash) is state["original"]:
+            if state["had_stash"]:
+                setattr(cls, stash, state["stash_value"])
+            else:
+                delattr(cls, stash)
+        registry.pop(name, None)
+    if vars(cls).get("_kame_owned_bindings") is registry and not registry:
+        delattr(cls, "_kame_owned_bindings")
+
+
+def _kame_accessory_factory(implementation):
+    def factory(original, binding):
+        async def wrapped(self, *args, **kwargs):
+            fn = implementation if binding["active"] else original
+            return await fn(self, *args, **kwargs)
+        wrapped._kame_implementation = implementation
+        return wrapped
+    return factory
 
 
 def _kame_bind_entry_points(cls) -> int:
@@ -4502,12 +4632,8 @@ def _kame_bind_entry_points(cls) -> int:
     bound = []
     for name in names:
         try:
-            original = getattr(cls, name)
-            stash = f"_kame_original_{name}"
-            if not hasattr(cls, stash):
-                setattr(cls, stash, original)
-            # Re-binding after a hot reload must wrap the ORIGINAL, never a wrapper.
-            setattr(cls, name, _kame_make_entry_wrapper(name, getattr(cls, stash)))
+            _kame_bind_owned(cls, name, lambda original, binding, n=name:
+                             _kame_make_entry_wrapper(n, original, binding))
             bound.append(name)
         except Exception:
             continue
@@ -4519,13 +4645,7 @@ def _kame_bind_entry_points(cls) -> int:
 def _kame_unbind_entry_points(cls) -> None:
     """Restore every entry point KAME wrapped (used by both uninstall and rollback)."""
     global _KAME_BOUND_ENTRY_POINTS
-    for name in list(_KAME_BOUND_ENTRY_POINTS) or list(_KAME_LEGACY_ENTRY_NAMES):
-        stash = f"_kame_original_{name}"
-        if hasattr(cls, stash):
-            try:
-                setattr(cls, name, getattr(cls, stash))
-            except Exception:
-                pass
+    _kame_unbind_owned(cls)
     _KAME_BOUND_ENTRY_POINTS = []
 
 
@@ -4562,12 +4682,8 @@ def apply_kame_patch():
     try:
         # Shield 5: Compression Timeout Guard (summarize calls only)
         from helpers.history import Topic, Bulk
-        if not hasattr(Topic, "_kame_original_summarize_messages"):
-            Topic._kame_original_summarize_messages = Topic.summarize_messages
-        if not hasattr(Bulk, "_kame_original_summarize"):
-            Bulk._kame_original_summarize = Bulk.summarize
-        Topic.summarize_messages = _kame_summarize_messages
-        Bulk.summarize = _kame_bulk_summarize
+        _kame_bind_owned(Topic, "summarize_messages", _kame_accessory_factory(_kame_summarize_messages))
+        _kame_bind_owned(Bulk, "summarize", _kame_accessory_factory(_kame_bulk_summarize))
     except Exception:
         pass
 
@@ -4611,12 +4727,12 @@ def remove_kame_patch():
 
     try:
         from helpers.history import Topic, Bulk
-        if hasattr(Topic, "_kame_original_summarize_messages"):
-            Topic.summarize_messages = Topic._kame_original_summarize_messages
-        if hasattr(Bulk, "_kame_original_summarize"):
-            Bulk.summarize = Bulk._kame_original_summarize
+        _kame_unbind_owned(Topic)
+        _kame_unbind_owned(Bulk)
     except Exception:
         pass
+
+    _unpatch_rate_limiters()
 
     _KAME_LAYER = 3
     _KAME_PATCHED = False
