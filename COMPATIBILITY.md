@@ -1,5 +1,7 @@
 # KAME ↔ Agent Zero compatibility
 
+**KAME 1.8.2.7 — checked against Agent Zero v2.12, v2.13 and v2.14 (2026-10-17): 15/15 patch points (v2.12's one change is the `adaptive` `unified_turn`, as before) and 16/16 host facts on each, remote native acceptance green on all three.** Four host facts are new in 1.8.2.7: Agent Zero still builds a chat model from a provider and a name (`models.get_chat_model`, `ModelConfig`: KAME's fallback list uses it), the central menu still has the `sidebar-quick-actions-dropdown-start` slot (the KAME panel entry), `ensureModalOpen` is still global (both doors into the panel), and a raised model error still ends the task (`_90_handle_critical_exception`: why this port waits or uses your fallback list instead of handing a call back as Hermes does). The baseline is re-pinned to v2.14 only after the live harness is green on it.
+
 **KAME 1.8.1.3 — compatibility re-verified against Agent Zero v2.13 (2026-09-24): 15/15 symbols after re-pinning, 12/12 host facts, live harness green. 1.8.1.4, 1.8.1.5 and 1.8.1.6 re-ran the live harness on v2.13: green. The real-key sessions below were run on v2.12 with 1.8.1.2.**
 Live harness (KAME's real patches on a real Agent Zero checkout) green on **v2.11, v2.12 and v2.13**, and
 on **v1.14, v1.20, v2.1, v2.4, v2.7, v2.8, v2.10** in earlier releases. Two **real sessions** on v2.12 —

@@ -87,10 +87,13 @@ GEMINI_503_BODY = (
     "RESOURCE_EXHAUSTED. quota_metric generate_content_free_tier_requests; "
     "quotaId GenerateRequestsPerDayPerProjectPerModel PerDay daily limit"
 )
-for code in (500, 502, 503, 504, 529):
+for code in (500, 502, 503, 529):
     d, kind, sc = K._classify_error(FakeErr(GEMINI_503_BODY, status_code=code))
     check(f"{code} + quota/daily text -> 'server' base, not 'daily'",
           kind == "server" and d == K._KAME_SERVER_BASE_S and sc == code)
+# v1.8.2.7 (owner, Hermes decisions/0024): 504 is a timeout - rest 0 s, never daily.
+d, kind, sc = K._classify_error(FakeErr(GEMINI_503_BODY, status_code=504))
+check("504 + quota/daily text -> 'timeout' (0 s), not 'daily'", kind == "timeout" and d == 0 and sc == 504)
 
 # 503 with no status_code but unambiguous server text -> still server.
 d, kind, sc = K._classify_error(FakeErr("Service Unavailable - please try again later"))
@@ -104,8 +107,8 @@ check("text 'bad gateway' -> 'server'",
 _, _k504, _ = K._classify_error(FakeErr("504 Gateway Timeout"))
 check("'gateway timeout' text -> transient short, never daily", _k504 in ("timeout", "server"))
 # A 504 status with no 'timeout' word -> 'server' (the 5xx rule).
-check("504 status (no timeout word) -> 'server'",
-      K._classify_error(FakeErr("504 upstream unavailable", status_code=504))[1] == "server")
+check("504 status (no timeout word) -> 'timeout' (v1.8.2.7, decisions/0024)",
+      K._classify_error(FakeErr("504 upstream unavailable", status_code=504))[1] == "timeout")
 
 
 # ==========================================================================

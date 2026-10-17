@@ -331,12 +331,16 @@ check("F1 the notice is refreshed from inside the sleep slices (a live countdown
 # Zero after one attempt, and closes the notice on the way out like the rest.
 check("F2 every exit from the carousel closes the notice",
       # 1.8.1.2 adds a sixth: every key refused with a billing reason no wait fixes.
-      _carousel_src.count("_kame_wait_notice_finish(") == 6,
+      # 1.8.2.7 adds four: answered by a fallback model (twice: from the wait and
+      # from a refusal), the wait bound, and a fallback hop handing back.
+      # review 2026-10-17 M1: and a bounded call on a fallback model.
+      # second review N10: and a call the user stopped (CancelledError).
+      _carousel_src.count("_kame_wait_notice_finish(") == 12,
       str(_carousel_src.count("_kame_wait_notice_finish(")))
 check("F3 a success closes it as 'resumed'",
       '_kame_wait_notice_finish(st, "resumed")' in _carousel_src)
 check("F4 stop / nudge during the sleep closes it as 'stopped'",
-      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 5)
+      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 9)
 check("F5 the notice never touches the model's history",
       not re.search(r"_kame_wait_notice[\s\S]{0,3000}?(hist_add|history\.|append_message)",
                     _engine_src))
@@ -372,8 +376,10 @@ check("F11 every setting in default_config.yaml is reachable from the screen "
 check("F12 the screen uses A0's own settings markup",
       'class="field-title"' in _html and 'class="section-title"' in _html
       and 'x-if="config"' in _html)
-check("F13 both shelves are labelled and explained",
-      "What KAME tells you" in _html and "Tuning" in _html
+# 1.8.2.7 rethought the screen: six on show, "Show advanced settings", and the
+# off-switches folded under Troubleshooting (the Hermes 1.8.2.7 layout).
+check("F13 the shelves are labelled and explained",
+      "Show advanced settings" in _html and "Troubleshooting" in _html
       and "works with none of these touched" in _html)
 
 

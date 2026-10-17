@@ -37,6 +37,9 @@ REQUIRED = (
     # its pre-1.8.1.0 rules — which is exactly the silent downgrade this list
     # exists to make loud.
     "kame_evidence.py",
+    # v1.8.2.7: the provider quirks learned from 82 providers' documentation.
+    # Same reason as the reader above: without it rotation runs on fewer rules.
+    "kame_quirks.py",
     "kame_activation.py",
     "hooks.py",
     "plugin.yaml",
@@ -68,8 +71,25 @@ OPTIONAL = (
     "extensions/python/banners/_40_kame_retired_keys.py",
     "extensions/python/agent_init/_10_kame_api_rotation.py",
     "extensions/python/monologue_start/_10_kame_api_rotation.py",
+    # 1.8.2.8: the reply line (model and time of each reply).
+    "extensions/python/monologue_start/_12_kame_turn_clock.py",
+    "extensions/python/monologue_end/_90_kame_reply_line.py",
     "commands/kame.command.yaml",
     "commands/kame_command.py",
+    # v1.8.2.7: backups for a slow first word (the speed boost), and the panel
+    # in Agent Zero's central menu with the settings it edits.
+    "kame_hedging.py",
+    # v1.8.2.7 parity with Hermes: learned pacing, latency tiebreak, region in
+    # the identity, continuing a cut answer. Each one missing costs that one.
+    "kame_pacing.py",
+    "kame_latency.py",
+    "kame_region.py",
+    "kame_stitch.py",
+    "api/kame_settings_set.py",
+    "webui/main.html",
+    "webui/kame-panel.html",
+    "webui/kame-panel-store.js",
+    "extensions/webui/sidebar-quick-actions-dropdown-start/kame-entry.html",
 )
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))

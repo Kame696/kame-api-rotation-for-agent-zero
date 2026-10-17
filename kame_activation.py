@@ -105,10 +105,47 @@ def activate(agent=None):
                 ("refusal_recorder_disabled", "set_recorder_disabled", False),
                 ("call_timings_disabled", "set_call_timings_disabled", False),
                 ("share_pool_health", "set_share_pool_health", True),
+                # v1.8.2.7: the fallback list, speed and the wait bound.
+                ("fallback_models", "set_fallback_models", ""),
+                ("failover_after_seconds", "set_failover_after", 60),
+                ("max_total_wait_seconds", "set_max_total_wait", 0),
+                ("hedge_mode", "set_hedge_mode", "adaptive"),
+                ("hedge_max_legs", "set_hedge_max_legs", 3),
+                ("probe_burst_max_legs", "set_probe_burst", 16),
+                # v1.8.2.7: the rest of the Hermes settings that apply here.
+                ("stream_silence_timeout_seconds", "set_stream_silence_timeout", 0),
+                ("stream_resume_limit", "set_stream_resume_limit", -1),
+                ("stream_stitch_disabled", "set_stream_stitch_disabled", False),
+                ("hedging_disabled", "set_hedging_disabled", False),
+                ("pacing_rpm_overrides", "set_pacing_rpm_overrides", ""),
+                ("key_region_overrides", "set_key_region_overrides", ""),
             ):
                 _fn = getattr(_kame_engine, _setter, None)
                 if _fn is not None:
                     _fn(cfg.get(_setting, _default))
+            # v1.8.2.8: the three choices. A config saved before they existed
+            # keeps what its number meant: a time changed from the default is
+            # "timed", 0 is never / off; untouched is "auto".
+            try:
+                from usr.plugins.api_rotation_by_kame.kame_settings import choice_from_config
+            except Exception:
+                choice_from_config = None
+            for _choice, _setter in (("model_switch", "set_model_switch"),
+                                     ("first_token_wait", "set_first_token_wait")):
+                _fn = getattr(_kame_engine, _setter, None)
+                if _fn is not None:
+                    _fn(choice_from_config(cfg, _choice) if choice_from_config else
+                        (cfg.get(_choice) or "auto"))
+            _reply = getattr(_kame_engine, "set_reply_notice", None)
+            if _reply is not None:
+                _reply(cfg.get("reply_notice", "always"))
+            _hedge_number = getattr(_kame_engine, "set_hedge_number", None)
+            for _setting, _default in (("hedge_budget_pct", 10), ("hedge_burst", 3),
+                                       ("hedge_quantile", 90), ("hedge_cold_s", 6),
+                                       ("hedge_cold_reasoning_s", 30),
+                                       ("hedge_max_prompt_tokens", 32000)):
+                if _hedge_number is not None:
+                    _hedge_number(_setting, cfg.get(_setting, _default))
         except Exception:
             # Older A0 versions may lack get_plugin_config; fall back to defaults.
             pass

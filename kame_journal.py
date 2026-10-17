@@ -217,9 +217,17 @@ WAIT = "wait"
 RECOVERY = "recovery"
 SURFACED = "surfaced"
 SETTING = "setting"
+#: 1.8.2.7: KAME answered with the next model of its own fallback list.
+MODEL_SWITCH = "model_switch"
+#: 1.8.2.7: a backup request (a slow first word) or keys asked together (a dry pool).
+BACKUP = "backup"
 _KINDS = frozenset({ROTATION, SWITCH, QUARANTINE, INVALID_KEY, DENIED_MODEL,
-                    STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING})
-GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING})
+                    STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING,
+                    MODEL_SWITCH, BACKUP})
+GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP})
+#: 1.8.2.7: which job an event belongs to. `chat` is the conversation; the
+#: others are Agent Zero's background calls (memory, titles, summaries).
+JOBS = ("chat", "utility", "compress", "")
 
 
 class Events:
@@ -233,7 +241,7 @@ class Events:
     def add(self, kind: str, *, identity: str = "", key: str = "",
             reason: str = "", code: Optional[int] = None,
             seconds: Optional[float] = None, at: Optional[float] = None,
-            detail: str = "", sized_by: str = "") -> Dict[str, Any]:
+            detail: str = "", sized_by: str = "", job: str = "") -> Dict[str, Any]:
         """Record one event. ``key`` must already be a fingerprint; it is
         truncated anyway, so a raw key passed by mistake is useless, not leaked.
         """
@@ -249,6 +257,7 @@ class Events:
                 "seconds": round(float(seconds), 1) if seconds is not None else None,
                 "detail": redact(detail) if detail else "",
                 "sized_by": str(sized_by or "")[:24],
+                "job": str(job) if job in JOBS else "",
             }
         except Exception:
             return {}
@@ -416,6 +425,46 @@ def _ms(seconds: Optional[float]) -> Optional[int]:
     if value != value or value < 0:
         return None
     return int(round(value * 1000.0))
+
+
+#: 1.8.2.7 (Hermes 1.8.2.5 `timings.first_word_history`): what the backup
+#: trigger is seeded from after a restart.
+HISTORY_PER_IDENTITY = 200
+HISTORY_MAX_AGE_S = 7 * 24 * 3600.0
+
+
+def first_word_history(now: Optional[float] = None) -> Dict[str, List[float]]:
+    """``{identity: [seconds to the first sign, oldest first]}`` from calls.jsonl.
+
+    Answered attempts only (``outcome == "ok"``), the last
+    ``HISTORY_PER_IDENTITY`` per model, none older than ``HISTORY_MAX_AGE_S``.
+    Reads only; any failure returns what was read so far (usually nothing).
+    """
+    now = time.time() if now is None else now
+    out: Dict[str, Deque[float]] = {}
+    path = _path(CALLS_FILE)
+    if path is None or not path.is_file():
+        return {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("outcome") != "ok":
+                    continue
+                ms = row.get("ms_to_first_sign") or row.get("ms_to_first_text")
+                at = row.get("at")
+                identity = row.get("identity")
+                if not identity or not isinstance(ms, (int, float)) or ms <= 0:
+                    continue
+                if isinstance(at, (int, float)) and now - at > HISTORY_MAX_AGE_S:
+                    continue
+                out.setdefault(identity, deque(maxlen=HISTORY_PER_IDENTITY)).append(ms / 1000.0)
+    except OSError:
+        pass
+    return {identity: list(samples) for identity, samples in out.items()}
 
 
 def record_call(*, identity: str = "", key: str = "", attempt: int = 0,

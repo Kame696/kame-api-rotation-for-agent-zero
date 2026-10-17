@@ -39,6 +39,15 @@ INCLUDE_FILES = (
     # all four out, which is why `collect()` is now checked against
     # integrity.py's own lists (tests/test_v1_8_1_0_parity.py).
     "kame_evidence.py",
+    # v1.8.2.7: the provider quirks (REQUIRED) and the speed boost (optional).
+    "kame_quirks.py",
+    "kame_hedging.py",
+    # v1.8.2.7 parity with Hermes: learned pacing, latency tiebreak, region in
+    # the identity, continuing a cut answer. Each one missing costs that one.
+    "kame_pacing.py",
+    "kame_latency.py",
+    "kame_region.py",
+    "kame_stitch.py",
     "kame_journal.py",
     "kame_settings.py",
     "kame_keys.py",

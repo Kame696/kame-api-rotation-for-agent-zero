@@ -256,8 +256,10 @@ slow_rest = K._kame_rest_for_failure(ID, "A", asyncio.TimeoutError(), elapsed=30
 check("a timeout that really waited 30s rests 0s", slow_rest[0] == 0.0)
 _engine_src = open(os.path.join(HERE, "kame_engine.py"), encoding="utf-8").read()
 check("the production loop hands the attempt's duration in",
-      "_kame_decide_failure(\n                identity, key, e, elapsed=time.perf_counter() - _attempt_t0" in _engine_src
-      and "return _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)" in _engine_src)
+      # 1.8.2.7: with backups, the elapsed time of the leg that failed.
+      "elapsed=_leg_elapsed if _leg_elapsed is not None else time.perf_counter() - _attempt_t0" in _engine_src
+      # 1.8.2.7: the result also teaches the pacer and the latency tiebreak.
+      and "result = _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)" in _engine_src)
 
 print("\n--- 5. out of credit is the account's ---")
 for ident in ("openai:gpt-6", "openai:gpt-6-mini", "gemini:gemini-3.8-flash"):
@@ -388,8 +390,8 @@ check("'try again in 5.2s.' next to a 429 code is 5.2s, not 434.2 (%s)" % (K._ex
 
 print("\n--- 7. one version everywhere ---")
 manifest = open(os.path.join(HERE, "plugin.yaml"), encoding="utf-8").read()
-check("engine says 1.8.1.8", K.KAME_VERSION == "1.8.1.8")
-check("manifest says 1.8.1.8", 'version: 1.8.1.8' in manifest or 'version: "1.8.1.8"' in manifest)
+check("engine says 1.8.2.8", K.KAME_VERSION == "1.8.2.8")
+check("manifest says 1.8.2.8", 'version: 1.8.2.8' in manifest or 'version: "1.8.2.8"' in manifest)
 
 print()
 if _failures:

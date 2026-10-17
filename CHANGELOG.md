@@ -1,5 +1,151 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.2.8 — Your next model when the provider is busy, everything automatic, the model of each reply on screen (2026-10-17)
+
+**In short:** the owner ran four fallback models with 14 keys each, the first model kept
+answering "the model is overloaded", and his agent waited instead of moving on. 1.8.2.8
+moves on, sizes its own numbers, and says which model answered.
+
+- **A busy provider moves to your next model at once.** Two keys in a row that get
+  "overloaded" (503) or time out means the model is busy, not the keys: the next model
+  of your list answers, and the busy model is left alone for 30 s (doubling while it
+  stays busy, at most 5 minutes) before it is tried again — the first model of your list
+  always comes back first. Until now a 503 rested its key one second, so "every key
+  resting longer than 60 s" never came and the list was never used.
+- **The switch counts your wait.** The time you have waited with nothing on screen,
+  every failed attempt included — not only the seconds every key was resting.
+- **Three choices instead of numbers to guess** (Settings and the KAME panel):
+  - *Move to your next model*: **Automatic** (the busy rule, otherwise about three times
+    your model's usual first-word time, 6–20 s, learned) / After my time / Never.
+  - *Wait for the first token*: **Automatic** (learned per model, far past its usual
+    first word: 20–120 s, 60–300 s for thinking models; never for a model on your own
+    machine) / My time / Off.
+  - *Show which model answered*: **Every reply** / Only another model / Never.
+  A number you set before 1.8.2.8 keeps working: a time you changed is "my time", 0 is
+  never / off. Each number is shown only under "my time".
+- **Which model answered, on every reply.** When a reply ends, one line in the chat log:
+  its time, its first word, and the model that answered each step — "gemini-3.7-flash
+  for gemini-3.8-flash" when a fallback model stood in. The KAME panel keeps the last
+  replies. The line is for you; it never enters what the model reads.
+- **Speed is Saver / Balanced / Fastest** (the stored values `off` / `adaptive` / `max`
+  are unchanged).
+
+**Not done, on purpose:** asking several keys at once when the provider is busy (tried
+and removed: an "overloaded" model is overloaded for every key, and parallel requests
+during recovery break a rule this plugin has kept since 1.7.0.7). The fast exit from a
+busy model is the switch above.
+
+**Evidence:** __A0_EVIDENCE_1828__
+
+**Upgrading from 1.8.2.7:** nothing to change; restart Agent Zero once. Defaults that
+differ: *Move to your next model* and *Wait for the first token* are Automatic, and a
+line naming the model ends each reply (Settings → *Show which model answered* → Never
+turns it off).
+
+---
+
+## 1.8.2.7 — Every provider learned, your own fallback models, faster when quota runs dry (2026-10-17)
+
+**In short:** everything the Hermes port learned in 1.8.2.3 – 1.8.2.7 that applies to
+Agent Zero, plus what Agent Zero lacks and KAME now brings itself: a fallback model list,
+a panel in the central menu with an Events view, and settings a new user can read.
+
+- **Every provider learned.** The 82 providers of the Hermes 1.8.2.7 registry (every
+  provider native to Agent Zero, 29, and to Hermes, 42, plus the free and
+  free-after-top-up ones), graded against the same independent answer keys: **774
+  documented error shapes**, now in `tests/provider_keys/`. On those keys this port
+  agrees with them at least as often as Hermes does on every field (family 674 vs 670,
+  action 675 vs 670), in both shapes it can receive an error: the SDK's and LiteLLM's.
+  Decisions read the response, never the provider's name.
+- **Your fallback models, used by themselves.** Agent Zero has no fallback chain, so
+  KAME keeps one (`fallback_models`, one `provider/model` per line). When your chat
+  model cannot answer — every key resting longer than `failover_after_seconds` (60),
+  the provider has no server for it, two timeouts in a row, every key refused it — and
+  nothing has been shown yet, the first model on your list that can answer does, built
+  by Agent Zero's own model factory with its own keys. The next reply starts on your
+  model again. Background jobs never switch model. Empty list: nothing ever switches.
+- **Faster when quota runs dry.** After two long refusals in a row, a chat reply asks
+  4, then 8, then 16 ready keys at once instead of one by one; first answer wins, the
+  rest are cut.
+- **Faster on a slow day.** A chat reply still silent after twice its model's usual
+  first-word time races a backup key, then a third; the first key that shows any work
+  wins and only its words reach the chat. Budgeted (~10% extra requests), never under
+  429 pressure, never for a prompt over ~32k tokens (`hedge_mode`: adaptive / max / off).
+- **A panel in Agent Zero's central menu** (menu → **KAME**): Overview with each pool,
+  counters and a "still waiting" line; **Events** for your conversation; **Background
+  jobs** apart (memory, titles, summaries, compression); **Fallback models**; and
+  **Settings**, editable in place. The chip beside the composer says when another
+  model answered and opens the panel.
+- **Settings rethought:** six on show (fallback models, switch after, stop waiting,
+  speed boost, the wait notice, log level), the rest under "Show advanced settings",
+  the off-switches folded under Troubleshooting. "Keys that share one quota" is not
+  here: one key = one account. New: `max_total_wait_seconds` (0 = wait for ever).
+
+**The same as Hermes, inside the call (parity):**
+
+- **Wait for the first token** (`stream_silence_timeout_seconds`, off by default). A
+  provider that accepts a request and then sends nothing: after that long the key is
+  dropped and the next one tried, a quarter of it from the third attempt on. Never for
+  a model running on this machine.
+- **A cut answer is continued, not restarted.** When text was already on screen and
+  the stream broke, the next key is sent what was shown and asked to go on; only the
+  new words reach the chat, and the final answer is exactly what you saw. A provider
+  that refuses that ("ending with a model turn") is learned once and gets a user turn
+  instead. Two continuations that add nothing start the answer clean.
+  `stream_resume_limit` (-1 = while it progresses, 0 = never) and
+  `stream_stitch_disabled`. A Responses-API call starts again, as before.
+- **The agent is told whether retrying helps.** An error KAME hands back to Agent Zero
+  ends with one line — a temporary API issue ("retrying the same tool call will very
+  likely succeed"), a spent daily quota ("do NOT keep retrying this model now"), or a
+  cause only you can fix ("retrying will not help"). Agent Zero's `_error_retry` shows
+  that text to the agent, so it neither abandons a good plan over an outage nor loops
+  on a dead key.
+- **Learned pacing** from real per-minute refusals (`pacing_rpm_overrides` to set
+  one), **the faster key first** between equally free keys (Peak-EWMA first-word
+  time), **region in the pool identity** for Vertex / Bedrock style endpoints
+  (`key_region_overrides`), **backups seeded after a restart** from `calls.jsonl`, the
+  hedge numbers editable, `hedging_disabled`, and a panel card showing what KAME found
+  in Agent Zero when it bound (each entry point's parameters, the model factory).
+
+**Refusals, rule by rule (1.8.2.7):** a 403 whose words say the key is bad is a
+credential, one that does not is a refused model; money in words is billing; a
+per-minute "quota" is a throttle; a bare 429 saying "overloaded" rests the key one
+second; 408/499/504/524 are timeouts (rest 0 s; a stated wait still wins); request
+faults dressed as other errors are handed back (context overflow, safety refusal,
+`invalid_request` on a 5xx, 416, a `promptFeedback.blockReason`); AWS Bedrock error
+names are read. A LiteLLM `APIConnectionError` that carries a provider's body (a 402,
+a mid-stream throttle) is read by that body instead of as a dropped socket — it used
+to rest a key 3 s as a "timeout".
+
+**Agent Zero, not Hermes:** on this host an error a model call raises ends the task
+(after Agent Zero's one `_error_retry`). So where Hermes hands a call back to its own
+recovery, this port uses your fallback list, or waits as 1.8.1.8 did: two timeouts
+keep rotating, a closed door (maintenance, no instance, model not loaded) rests the
+whole pool for 30 s instead of every key knocking once a second. Only what no wait
+can fix is handed back: every key refused the model, or no plan/country allows it.
+
+**Not ported, each for a reason:** quota groups (one key = one account, the owner's
+rule; hidden in Hermes too); `quota_id_disabled` (it works around Hermes' Gemini
+adapter dropping `quotaId`; LiteLLM keeps it); `resolver_disabled` and the Hermes
+bridge / seams (Hermes-only machinery; the Agent Zero equivalent is the bind check
+above); `pacing_interval_seconds` (dead code in Hermes); the 300 s default wait for
+scheduled jobs (Agent Zero has no cron timeout to beat, so a scheduled job keeps
+waiting); the "pool agrees it is the request" rule (its allow-list is empty in
+Hermes, so it never fires).
+
+**Evidence:** offline suites 27 / 27 suites green (88 new 1.8.2.7 tests) (88 new 1.8.2.7 tests, every prior
+suite kept), the 774-row answer-key gate with floors, upgrade check on Agent Zero
+v2.12 / v2.13 / v2.14 (15/15 patch points; 16/16 host facts, four new), remote native
+acceptance on v2.12 / v2.13 / v2.14 (16 / 16 CI jobs green, 23 + 27 native checks per host), and three adversarial reviews of the whole
+change (4 high and 8 medium findings, all fixed, each pinned by a test). No Agent Zero installation on the author's computer; no real-provider 1.8.2.7
+session yet. See [VALIDATION.md](VALIDATION.md).
+
+**Upgrading from 1.8.1.8:** nothing to change; restart Agent Zero once. Two defaults
+differ: the speed boost is on (`hedge_mode: adaptive`; `off` restores one key at a
+time) and a timeout no longer rests the key.
+
+---
+
 ## 1.8.1.8 — Clean lifecycle and native stops (2026-10-03)
 
 **In short:** better coexistence with host updates and other extensions, without
@@ -51,6 +197,7 @@ rather than as a wall of prose.
 
 | Version | Headline | What changed for you |
 |---|---|---|
+| **1.8.2.7** | Every provider learned, your own fallback models, faster when quota runs dry | 82 providers (774 documented error shapes); a fallback model list KAME uses by itself; 4 → 8 → 16 keys asked together when a pool runs dry; backup keys for a slow first word; a panel in the central menu with Events and Background jobs; six settings on show. |
 | **1.8.1.6** | Keys land where Agent Zero reads them | A stray first word is no longer taken for a provider; every Unicode key file imports. |
 | **1.8.1.5** | Only keys go in; the ceiling holds | `/kame-keys add`/`import` write only what looks like a key (the Hermes filter, ported); a rest can no longer outlast `max_hold_seconds` after a clock step back or a lowered ceiling. |
 | **1.8.1.4** | Same brain as Hermes, closer | Nine decisions aligned with Hermes after a cross-port replay of 877 refusal shapes: busy server vs spent key, a stated server wait, a token count containing 429, a flagged prompt, Codex's `usage_not_included`, Gemini's bare `RESOURCE_EXHAUSTED` in a parsed body. Key backups owner-only from birth; the debug error dump redacts keys. |
@@ -1505,7 +1652,7 @@ intensive Agent Zero usage on May 25, 2026. From the log:
 - **plugin.yaml description** rewritten as a marketing pitch ("the
   learning carousel for Agent Zero. Round-robin is dumb; KAME learns.").
 - **README.md fully rewritten** for GitHub:
-  - Donation/Bitcoin section at the top (BEFORE the banner)
+  - Support section at the top, before the banner (removed since)
   - Banner image
   - Hook tagline + "what KAME is" punch paragraph
   - Round-robin vs KAME comparison table

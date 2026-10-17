@@ -167,13 +167,17 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, contextvars, hashlib, json, math, os, secrets, threading, time, re
+import asyncio, collections, contextvars, hashlib, json, math, os, secrets, threading, time, re
 from typing import Any, List
 # v1.0.9: KAME no longer imports litellm, openai or logging. It used to call
 # `acompletion()` itself and silence litellm's loggers; now Agent Zero makes the
 # call, so those are A0's dependencies alone and a breaking change in any of them
 # can no longer stop this plugin from even importing.
 from langchain_core.messages import SystemMessage, HumanMessage
+try:  # v1.8.2.7: the continuation of a cut answer is sent as the model's own turn
+    from langchain_core.messages import AIMessage
+except Exception:  # pragma: no cover - a stubbed langchain without it
+    AIMessage = None
 from helpers.print_style import PrintStyle
 
 # --- v1.0.1: A0 control-flow exceptions that must PASS THROUGH the carousel ---
@@ -205,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.1.8"
+KAME_VERSION = "1.8.2.8"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -232,6 +236,12 @@ _KAME_LOCK = threading.Lock()
 _KAME_STATED_RL = {}  # { ("provider:model", key): float seconds } - learned per key (v1.8.1.0)
 _KAME_PATCHED = False
 _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
+#: v1.8.2.7: which job the running call is ("chat", "utility", "compress"), so
+#: the Events view can keep the conversation apart from background calls.
+_KAME_JOB = contextvars.ContextVar('kame_job', default='')
+#: v1.8.2.7: set while a call runs on a model of KAME's fallback list, so that
+#: call never walks the list itself (one walk, owned by the outer call).
+_KAME_FALLBACK_HOP = contextvars.ContextVar('kame_fallback_hop', default=None)
 # v1.0.2: the live A0 agent for the current async task, stashed by the activation
 # extension at monologue start. Lets the all-keys-cooling sleep honor a user
 # message / "nudge" (InterventionException) instead of sleeping through it.
@@ -841,9 +851,288 @@ def set_share_pool_health(enabled) -> None:
         _KJ.SHARE_HEALTH_ON = flag
 
 
+# --- v1.8.2.7: the model fallback list, speed and the wait bound ------------
+# Agent Zero has no model fallback chain of its own (read on v2.14), so the list
+# lives in KAME's settings: models the user picked, in order. Empty = nothing
+# ever switches (the 1.8.1.8 behaviour). Every call starts on the configured
+# model; the list is used only while that model cannot answer.
+_KAME_FALLBACK_MODELS: list = []      # [{"provider", "name", "api_base", "label"}]
+_KAME_FAILOVER_AFTER_S = 60.0         # every key resting longer than this -> next model; 0 = never
+_KAME_MAX_TOTAL_WAIT_S = 0.0          # stop waiting and show the error after this; 0 = never
+_KAME_HEDGE_MODE = "adaptive"         # off | adaptive | max ("speed boost")
+_KAME_HEDGE_MAX_LEGS = 3              # one call + at most two backups
+_KAME_PROBE_BURST_MAX = 16            # keys asked together when a pool runs dry; 0 = one by one
+
+try:
+    from usr.plugins.api_rotation_by_kame import kame_hedging as _KH
+except Exception:
+    try:
+        import kame_hedging as _KH  # running from the plugin directory, e.g. in tests
+    except Exception:
+        _KH = None
+
+
+def _kame_optional(name):
+    """One optional KAME module, installed path first (never raises)."""
+    import importlib as _importlib
+    for qualified in (f"usr.plugins.api_rotation_by_kame.{name}", name):
+        try:
+            return _importlib.import_module(qualified)
+        except Exception:
+            continue
+    return None
+
+
+# v1.8.2.7 (Hermes 1.8.2.3 - 1.8.2.7 parity): learned per-minute pacing, the
+# latency tiebreak, the region in the pool identity and the stitcher that
+# continues a cut answer. Each is optional like every other KAME module.
+_KP = _kame_optional("kame_pacing")
+_KL = _kame_optional("kame_latency")
+_KR = _kame_optional("kame_region")
+_KS = _kame_optional("kame_stitch")
+
+_KAME_STREAM_SILENCE_S = 0.0          # wait for the first token; 0 = off (Hermes default)
+_KAME_STREAM_RESUME_LIMIT = -1        # continuations of one cut answer; -1 = no limit, 0 = off
+_KAME_STREAM_STITCH_DISABLED = False
+_KAME_HEDGING_DISABLED = False        # the Hermes switch; same as hedge_mode off
+_KAME_PACING_RPM_OVERRIDES = ""
+_KAME_KEY_REGION_OVERRIDES = ""
+_KAME_NO_PREFILL = set()              # identities whose provider refused a trailing assistant turn
+_KAME_SEEDED = set()                  # (identity, reasoning) whose backup trigger was seeded
+_KAME_HEDGE_NUMBERS = {               # Hermes names, defaults and ranges
+    "hedge_budget_pct": (10.0, 0.0, 50.0),
+    "hedge_burst": (3.0, 1.0, 10.0),
+    "hedge_quantile": (90.0, 50.0, 99.0),
+    "hedge_cold_s": (6.0, 0.5, 120.0),
+    "hedge_cold_reasoning_s": (30.0, 2.0, 300.0),
+    "hedge_max_prompt_tokens": (32000.0, 1000.0, 1000000.0),
+}
+_KAME_HEDGE_VALUES = {k: v[0] for k, v in _KAME_HEDGE_NUMBERS.items()}
+
+
+def _kame_hedge_mode() -> str:
+    return "off" if _KAME_HEDGING_DISABLED else _KAME_HEDGE_MODE
+
+
+def _kame_sync_hedging():
+    if _KH is not None:
+        _KH.configure(hedge_mode=_kame_hedge_mode(), **_KAME_HEDGE_VALUES)
+
+
+def set_hedge_number(name, value) -> None:
+    """v1.8.2.7: one of the Hermes speed-boost numbers (budget, burst, quantile, cold, prompt)."""
+    row = _KAME_HEDGE_NUMBERS.get(name)
+    if row is None:
+        return
+    v = _kame_clamped(value, row[1], row[2])
+    if v is not None:
+        _KAME_HEDGE_VALUES[name] = v
+        _kame_sync_hedging()
+
+
+#: v1.8.2.8 (Hermes decisions/0028): three choices that replace a number a
+#: person had to guess. The numbers above are read only under "timed".
+_KAME_MODEL_SWITCH = "auto"      # auto | timed | never
+_KAME_FIRST_TOKEN_MODE = "auto"  # auto | timed | off
+_KAME_REPLY_NOTICE = "always"    # always | switches | never
+_KAME_CHOICES = {
+    "model_switch": ("auto", "timed", "never"),
+    "first_token_wait": ("auto", "timed", "off"),
+    "reply_notice": ("always", "switches", "never"),
+}
+
+
+def _kame_choice(name, value, current):
+    v = str(value or "").strip().lower()
+    return v if v in _KAME_CHOICES[name] else current
+
+
+def set_model_switch(value) -> None:
+    """v1.8.2.8: when the fallback list answers - auto / timed / never."""
+    global _KAME_MODEL_SWITCH
+    _KAME_MODEL_SWITCH = _kame_choice("model_switch", value, _KAME_MODEL_SWITCH)
+
+
+def set_first_token_wait(value) -> None:
+    """v1.8.2.8: how long a silent key is waited for - auto / timed / off."""
+    global _KAME_FIRST_TOKEN_MODE
+    _KAME_FIRST_TOKEN_MODE = _kame_choice("first_token_wait", value, _KAME_FIRST_TOKEN_MODE)
+
+
+def set_reply_notice(value) -> None:
+    """v1.8.2.8: the line naming the model of each reply - always / switches / never."""
+    global _KAME_REPLY_NOTICE
+    _KAME_REPLY_NOTICE = _kame_choice("reply_notice", value, _KAME_REPLY_NOTICE)
+
+
+def set_stream_silence_timeout(seconds) -> None:
+    """v1.8.2.7: wait for the first token - a key silent this long is dropped (0 = off).
+    v1.8.2.8: a number is a choice of its own - above 0 is "timed", 0 turns a
+    timed wait off (`first_token_wait`, set after it, still wins)."""
+    global _KAME_STREAM_SILENCE_S, _KAME_FIRST_TOKEN_MODE
+    v = _kame_clamped(seconds, 0.0, 3600.0)
+    if v is not None:
+        _KAME_STREAM_SILENCE_S = v
+        if v > 0:
+            _KAME_FIRST_TOKEN_MODE = "timed"
+        elif _KAME_FIRST_TOKEN_MODE == "timed":
+            _KAME_FIRST_TOKEN_MODE = "off"
+
+
+def set_stream_resume_limit(n) -> None:
+    """v1.8.2.7: how often one cut answer may be continued (-1 = no limit, 0 = never)."""
+    global _KAME_STREAM_RESUME_LIMIT
+    v = _kame_clamped(n, -1.0, 10.0)
+    if v is not None:
+        _KAME_STREAM_RESUME_LIMIT = int(v)
+
+
+def set_stream_stitch_disabled(enabled) -> None:
+    global _KAME_STREAM_STITCH_DISABLED
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_STREAM_STITCH_DISABLED = flag
+
+
+def set_hedging_disabled(enabled) -> None:
+    global _KAME_HEDGING_DISABLED
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_HEDGING_DISABLED = flag
+        _kame_sync_hedging()
+
+
+def set_pacing_rpm_overrides(raw) -> None:
+    """v1.8.2.7: ``provider:model-pattern=rpm`` entries (comma separated)."""
+    global _KAME_PACING_RPM_OVERRIDES
+    _KAME_PACING_RPM_OVERRIDES = str(raw or "").strip()[:4000]
+    if _KP is not None:
+        _KP.SETTINGS["pacing_rpm_overrides"] = _KAME_PACING_RPM_OVERRIDES
+        try:
+            _KP.PACER._synced_at.clear()
+        except Exception:
+            pass
+
+
+def set_key_region_overrides(raw) -> None:
+    """v1.8.2.7: ``key-fingerprint=region`` entries, for an endpoint that hides its region."""
+    global _KAME_KEY_REGION_OVERRIDES
+    _KAME_KEY_REGION_OVERRIDES = str(raw or "").strip()[:4000]
+
+
+def parse_fallback_models(raw) -> list:
+    """The fallback list from the setting: one ``provider/model`` per line (or
+    comma / semicolon separated), optionally ``provider/model @ https://api-base``.
+    The model part may itself contain slashes (``openrouter/meta-llama/x``).
+    Junk entries are dropped; duplicates keep their first place. Never raises."""
+    items = raw if isinstance(raw, (list, tuple)) else re.split(r"[\n,;]+", str(raw or ""))
+    out, seen = [], set()
+    for item in items:
+        if isinstance(item, dict):
+            provider = str(item.get("provider") or "").strip().lower()
+            name = str(item.get("name") or item.get("model") or "").strip()
+            base = str(item.get("api_base") or "").strip()
+        else:
+            text = str(item or "").strip()
+            if not text or text.startswith("#"):
+                continue
+            base = ""
+            # " @ base" or "@http(s)://": a bare "@" belongs to the model name
+            # (vertex_ai/claude-sonnet-4@20250514, review 2026-10-17).
+            parts = re.split(r"\s+@\s*|@(?=https?://)", text, maxsplit=1)
+            if len(parts) == 2:
+                text, base = parts[0].strip(), parts[1].strip()
+            if "/" not in text:
+                continue
+            provider, name = (part.strip() for part in text.split("/", 1))
+            provider = provider.lower()
+        if not provider or not name or not re.fullmatch(r"[a-z0-9_.\-]+", provider):
+            continue
+        ident = f"{provider}:{name.lower()}"
+        if ident in seen:
+            continue
+        seen.add(ident)
+        out.append({"provider": provider, "name": name, "api_base": base,
+                    "label": f"{provider}/{name}", "identity": ident})
+    return out[:12]
+
+
+def set_fallback_models(raw) -> None:
+    """v1.8.2.7: KAME's own model fallback list (see `parse_fallback_models`)."""
+    global _KAME_FALLBACK_MODELS
+    try:
+        _KAME_FALLBACK_MODELS = parse_fallback_models(raw)
+    except Exception:
+        pass
+
+
+def set_failover_after(seconds) -> None:
+    """v1.8.2.7: how long every key may rest before the next model answers (0-3600).
+    v1.8.2.8: a number is a choice of its own - 0 is "never", a time other than
+    the default is "timed" (`model_switch`, set after it, still wins)."""
+    global _KAME_FAILOVER_AFTER_S, _KAME_MODEL_SWITCH
+    v = _kame_clamped(seconds, 0.0, 3600.0)
+    if v is not None:
+        _KAME_FAILOVER_AFTER_S = v
+        if v <= 0:
+            _KAME_MODEL_SWITCH = "never"
+        elif v != 60.0:
+            _KAME_MODEL_SWITCH = "timed"
+
+
+def set_max_total_wait(seconds) -> None:
+    """v1.8.2.7: stop waiting and hand Agent Zero the last error after this (0 = never)."""
+    global _KAME_MAX_TOTAL_WAIT_S
+    v = _kame_clamped(seconds, 0.0, 604800.0)
+    if v is not None:
+        _KAME_MAX_TOTAL_WAIT_S = v
+
+
+def set_hedge_mode(mode) -> None:
+    """v1.8.2.7: speed boost - off, adaptive (default) or max."""
+    global _KAME_HEDGE_MODE
+    text = str(mode or "").strip().lower()
+    if text in ("off", "adaptive", "max"):
+        _KAME_HEDGE_MODE = text
+        _kame_sync_hedging()
+
+
+def set_hedge_max_legs(n) -> None:
+    """v1.8.2.7: one call plus at most n-1 backups (1-3)."""
+    global _KAME_HEDGE_MAX_LEGS
+    v = _kame_clamped(n, 1.0, 3.0)
+    if v is not None:
+        _KAME_HEDGE_MAX_LEGS = int(v)
+
+
+def set_probe_burst(n) -> None:
+    """v1.8.2.7: the most keys asked together when a pool runs dry (0-32)."""
+    global _KAME_PROBE_BURST_MAX
+    v = _kame_clamped(n, 0.0, 32.0)
+    if v is not None:
+        _KAME_PROBE_BURST_MAX = int(v)
+
+
 def current_settings() -> dict:
     """Every setting KAME understands, as it is in force right now."""
     return {
+        "fallback_models": "\n".join(e["label"] + (f" @ {e['api_base']}" if e.get("api_base") else "")
+                                     for e in _KAME_FALLBACK_MODELS),
+        "model_switch": _KAME_MODEL_SWITCH,
+        "failover_after_seconds": _KAME_FAILOVER_AFTER_S,
+        "max_total_wait_seconds": _KAME_MAX_TOTAL_WAIT_S,
+        "first_token_wait": _KAME_FIRST_TOKEN_MODE,
+        "reply_notice": _KAME_REPLY_NOTICE,
+        "hedge_mode": _KAME_HEDGE_MODE,
+        "hedge_max_legs": _KAME_HEDGE_MAX_LEGS,
+        "probe_burst_max_legs": _KAME_PROBE_BURST_MAX,
+        "stream_silence_timeout_seconds": _KAME_STREAM_SILENCE_S,
+        "stream_resume_limit": _KAME_STREAM_RESUME_LIMIT,
+        "stream_stitch_disabled": _KAME_STREAM_STITCH_DISABLED,
+        "hedging_disabled": _KAME_HEDGING_DISABLED,
+        "pacing_rpm_overrides": _KAME_PACING_RPM_OVERRIDES,
+        "key_region_overrides": _KAME_KEY_REGION_OVERRIDES,
+        **{name: _KAME_HEDGE_VALUES[name] for name in _KAME_HEDGE_NUMBERS},
         "kame_log_level": _KAME_LOG_LEVEL,
         "daily_quota_cooldown_seconds": _KAME_DAILY_COOLDOWN_S,
         "max_hold_seconds": _KAME_MAX_HOLD_S,
@@ -891,9 +1180,18 @@ def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
     if _KJ is None:
         return
     try:
-        _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
-                       reason=reason, code=code, seconds=seconds, detail=detail,
-                       sized_by=sized_by)
+        try:
+            job = _KAME_JOB.get()
+        except Exception:
+            job = ""
+        try:
+            _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
+                           reason=reason, code=code, seconds=seconds, detail=detail,
+                           sized_by=sized_by, job=job)
+        except TypeError:  # an older kame_journal.py beside this engine
+            _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
+                           reason=reason, code=code, seconds=seconds, detail=detail,
+                           sized_by=sized_by)
     except Exception:
         pass
 
@@ -1022,6 +1320,32 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_SHARE_POOL_HEALTH", set_share_pool_health),
         ("KAME_STORM_COLLAPSE_DISABLED", _inverse(set_collapse_storm_logs)),
         ("KAME_LIVE_STATUS_DISABLED", _inverse(set_wait_notice)),
+        # v1.8.2.7: the Hermes names where the two hosts share a meaning.
+        ("KAME_FAILOVER_AFTER", set_failover_after),
+        ("KAME_MAX_TOTAL_WAIT", set_max_total_wait),
+        ("KAME_HEDGE_MODE", set_hedge_mode),
+        ("KAME_PROBE_BURST", set_probe_burst),
+        ("KAME_FALLBACK_MODELS", set_fallback_models),
+        ("KAME_SILENT_STREAM_PATIENCE", set_stream_silence_timeout),   # Hermes' legacy names
+        ("KAME_FIRST_TOKEN_PATIENCE", set_stream_silence_timeout),
+        ("KAME_STREAM_SILENCE_TIMEOUT", set_stream_silence_timeout),
+        # v1.8.2.8: after the numbers - a number means "timed", an explicit
+        # choice set beside it still wins.
+        ("KAME_MODEL_SWITCH", set_model_switch),
+        ("KAME_FIRST_TOKEN_WAIT", set_first_token_wait),
+        ("KAME_REPLY_NOTICE", set_reply_notice),
+        ("KAME_STREAM_RESUME_LIMIT", set_stream_resume_limit),
+        ("KAME_STREAM_STITCH_DISABLED", set_stream_stitch_disabled),
+        ("KAME_HEDGING_DISABLED", set_hedging_disabled),
+        ("KAME_HEDGE_MAX_LEGS", set_hedge_max_legs),
+        ("KAME_PACING_RPM_OVERRIDES", set_pacing_rpm_overrides),
+        ("KAME_KEY_REGION_OVERRIDES", set_key_region_overrides),
+        ("KAME_HEDGE_BUDGET_PCT", lambda v: set_hedge_number("hedge_budget_pct", v)),
+        ("KAME_HEDGE_BURST", lambda v: set_hedge_number("hedge_burst", v)),
+        ("KAME_HEDGE_QUANTILE", lambda v: set_hedge_number("hedge_quantile", v)),
+        ("KAME_HEDGE_COLD_S", lambda v: set_hedge_number("hedge_cold_s", v)),
+        ("KAME_HEDGE_COLD_REASONING_S", lambda v: set_hedge_number("hedge_cold_reasoning_s", v)),
+        ("KAME_HEDGE_MAX_PROMPT_TOKENS", lambda v: set_hedge_number("hedge_max_prompt_tokens", v)),
     )
     for name, setter in readers:
         raw = os.environ.get(name)
@@ -1443,6 +1767,14 @@ def pool_report() -> dict:
         # is in force. Fingerprints and KAME's own phrases only.
         "events": _KJ.EVENTS.recent(50) if _KJ is not None else [],
         "settings": current_settings(),
+        # v1.8.2.7: backups, keys asked together, model switches, the list.
+        "speed": speed_report(),
+        # v1.8.2.7: calls running longer than a minute, and why.
+        "in_flight": _kame_in_flight_rows(now),
+        # v1.8.2.7: what KAME found in Agent Zero when it bound.
+        "host": host_seams(),
+        # v1.8.2.8: the last replies - which model wrote each, how long it took.
+        "replies": replies_report(),
         "data_dir": (str(_KJ.data_dir()) if (_KJ is not None and _KJ.data_dir() is not None) else ""),
         "generated_at": now,
     }
@@ -2334,6 +2666,59 @@ except Exception:
         _KE = None
 
 
+# v1.8.2.7: the Hermes port's provider quirks (`core/provider_quirks.py`, 82
+# providers learned from their own documentation and graded against independent
+# answer keys). Evidence only: no rule looks at the provider's name (R01).
+try:
+    from usr.plugins.api_rotation_by_kame import kame_quirks as _KQ
+except Exception:
+    try:
+        import kame_quirks as _KQ  # running from the plugin directory, e.g. in tests
+    except Exception:
+        _KQ = None
+
+#: v1.8.2.7 (Hermes decisions/0024): statuses that ARE a timeout, whatever the
+#: body says. The key is fine: rest 0 s, rotate once; the second in a row goes
+#: back to Agent Zero (or to the next model of the fallback list).
+_KAME_TIMEOUT_STATUSES = frozenset({408, 499, 504, 524})
+
+
+def _quirk_body(exc):
+    """The structured body a provider sent, for `kame_quirks` (never raises)."""
+    try:
+        body = getattr(exc, "body", None)
+        if body:
+            return body
+        response = getattr(exc, "response", None)
+        if response is not None:
+            raw = getattr(response, "text", None)
+            if isinstance(raw, (str, bytes)) and raw:
+                return raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    except Exception:
+        pass
+    return None
+
+
+def _kame_quirk(exc, kind=""):
+    """`kame_quirks.reinterpret` for one exception: a better kind, or None."""
+    if _KQ is None or exc is None:
+        return None
+    try:
+        return _KQ.reinterpret(_evidence_status(exc), kind or "other", str(exc), _quirk_body(exc))
+    except Exception:
+        return None
+
+
+def _kame_closed_door(exc):
+    """A 503 / no-instance / local-model-not-loaded: every key meets the same door."""
+    if _KQ is None or exc is None:
+        return False
+    try:
+        return bool(_KQ.names_maintenance(_evidence_status(exc), str(exc), _quirk_body(exc)))
+    except Exception:
+        return False
+
+
 def _kame_judgment(exc):
     """`kame_evidence.judge()` for one exception, or None. Never raises."""
     if _KE is None or exc is None:
@@ -2632,7 +3017,13 @@ def _classify_error(exc):
         return 0, "timeout", None
     err_msg = _evidence_text(exc)
     if "timeout" in err_msg or "timed out" in err_msg:
-        return 0, "timeout", None
+        # v1.8.2.7: the word only where no status contradicts it. A 403 that
+        # says "your IP has been put into timeout" is a refusal (row
+        # doc-ai-horde-403-timeout-ip-and-abuse-bans), and a 400 naming a
+        # "timeout" parameter is the request's fault.
+        _st_t = _evidence_status(exc)
+        if _st_t is None or _st_t >= 500 or _st_t in _KAME_TIMEOUT_STATUSES:
+            return 0, "timeout", None
 
     # v1.6.0.1: the class name, for the one failure that carries nothing else.
     # A transport error has no status code and no body, ever — the socket never
@@ -2647,7 +3038,15 @@ def _classify_error(exc):
     # PermissionDeniedError) are deliberately absent — see
     # `_DENIAL_EXCLUDED_ON_PURPOSE`. Reading a verdict off a class name would
     # shadow the status code and the body, which say the same thing better.
-    if type(exc).__name__ in _TRANSPORT_EXCEPTION_CLASSES:
+    # v1.8.2.7: only when the exception really carries nothing else. LiteLLM
+    # raises `APIConnectionError` (status 500 by default) for provider errors
+    # it could not map, with the provider's whole body in the message: a 402
+    # "insufficient balance" or a mid-stream throttle frame was read as a
+    # dropped socket and rested 3 s on every key (774-row gate, LiteLLM shape).
+    _st_c = _evidence_status(exc)
+    if type(exc).__name__ in _TRANSPORT_EXCEPTION_CLASSES and (_st_c is None or _st_c == 500) \
+            and _kame_judgment(exc) is None and _kame_quirk(exc, "other") is None \
+            and not _kame_closed_door(exc):
         # v1.8.0.0: a class that names a timeout has already spent its wait and
         # rotates at once. A connection that never opened fails instantly, so
         # it keeps three seconds: with the network down, a zero rest would turn
@@ -2661,9 +3060,29 @@ def _classify_error(exc):
     # does not always carry the status the inner one had.
     status_code = _evidence_status(exc)
 
+    # v1.8.2.7 (Hermes decisions/0024): 408 / 499 / 504 / 524 are timeouts. 504
+    # used to rest 1 s as a "server" error and 408/499/524 fell into `other` at
+    # 20 s - a healthy key benched for a slow provider.
+    if status_code in _KAME_TIMEOUT_STATUSES:
+        _stated_t = _stated_server_delay(exc)
+        if _stated_t:
+            # A wait the provider named itself still wins (its number rules).
+            return _stated_t, "server", status_code
+        return 0, "timeout", status_code
+
     # v1.8.1.0: the evidence reader speaks first, and only when a field or a
     # sentence it trusts named the failure. See `kame_evidence.judge`.
     judgment = _kame_judgment(exc)
+    if judgment is not None and judgment.family == "throttle" and not judgment.source \
+            and status_code == 429 and judgment.seconds is None and "overloaded" in err_msg \
+            and "rate_limit" not in err_msg:
+        # v1.8.2.7 (Hermes classify parity): a bare 429 whose words say the
+        # model or engine is overloaded is congestion, not a spent counter; the
+        # server rule below rests the key one second. Only when the reader had
+        # nothing but the status to go on, and no structured type says rate_limit
+        # (Kimi, tests/test_v1_8_1_4.py). Rows: doc-venice-429-model-overloaded-429,
+        # doc-naver-clova-429-overloaded-42902, doc-novita-429-engine-overloaded-relayed.
+        judgment = None
     if judgment is not None:
         family = judgment.family
         if family == "upstream":
@@ -2765,6 +3184,22 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
     rest, else "". Tests call this exact function, so what is tested is what runs.
     """
     delay, kind, sc = _classify_error(exc)
+    # v1.8.2.7: what a provider keeps in a status or a phrase the tables missed.
+    quirk = _kame_quirk(exc, "auth" if (kind == "other" and _is_auth_error(exc)) else kind)
+    if quirk in ("billing", "per_minute", "server") and (sc or _evidence_status(exc)) == 429 \
+            and _delay_source(exc, "per_minute") == "provider":
+        quirk = None  # a number the provider STATED outranks one a text rule would invent
+    if quirk == "denied":
+        delay, kind = _KAME_REFUSAL_REST_S, "denied"
+    elif quirk == "billing":
+        delay, kind = _KAME_DAILY_COOLDOWN_S, "insufficient_quota"
+    elif quirk == "per_minute":
+        delay, kind = _extract_retry_delay(exc), "per_minute"
+    elif quirk == "server":
+        _stated_q = _stated_server_delay(exc)
+        delay, kind = (_stated_q if _stated_q else _KAME_SERVER_BASE_S), "server"
+    if quirk in ("denied", "billing", "per_minute", "server") and sc is None:
+        sc = _evidence_status(exc)
     if kind == "timeout" and not delay and elapsed is not None and elapsed < _KAME_REAL_TIMEOUT_MIN_S:
         # A "timeout" that took no time did not wait for anything: never a
         # zero rest, or a fast-failing pool turns into a tight loop.
@@ -2798,13 +3233,39 @@ def _kame_decide_failure(identity, key, exc, elapsed=None):
     in one function the loop calls and the tests and the answer-key gate call
     too. Returns ``(applied, kind, status_code, label, sized_by)``.
     """
-    if _is_auth_error(exc):
-        kind = "revoked" if _is_revoked_key(exc) else "auth"
+    auth_like = _is_auth_error(exc)
+    if not auth_like and _KQ is not None and _evidence_status(exc) in (401, 403):
+        # v1.8.2.7: "Authentication failed", "API key not provided": the words
+        # say the KEY is bad, whatever a 403 would otherwise mean. Rows:
+        # doc-baseten-403-authentication-failed, doc-novita-403-invalid-api-key.
+        try:
+            auth_like = bool(_KQ.names_bad_key(str(exc), _quirk_body(exc)))
+        except Exception:
+            auth_like = False
+    kind = ("revoked" if _is_revoked_key(exc) else "auth") if auth_like else ""
+    # v1.8.2.7: a 403 that does not say the key is bad is a refused model, plan
+    # or policy (RFC 9110), and money in words is billing; neither retires a key.
+    quirk = _kame_quirk(exc, kind or "other")
+    if (auth_like and quirk not in ("denied", "billing", "per_minute", "server")) or (
+            not auth_like and quirk == "auth"):
+        kind = kind or "auth"
         applied = _mark_key_health(identity, key, False, _KAME_REFUSAL_REST_S, kind)
         # A credential refusal is always KAME's own number: no provider tells
         # you when a rejected key will start working.
-        return applied, kind, getattr(exc, "status_code", None), "", "kame"
-    return _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)
+        return applied, kind, getattr(exc, "status_code", None) or _evidence_status(exc), "", "kame"
+    result = _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)
+    if result[1] == "per_minute" and _KP is not None:
+        # v1.8.2.7 (Hermes 1.8.2.3): the one event that teaches this key's real RPM.
+        try:
+            _KP.PACER.on_minute_429(identity, key)
+        except Exception:
+            pass
+    if _KL is not None and elapsed:
+        try:
+            _KL.LATENCY.note_slow_failure(identity, key, float(elapsed))
+        except Exception:
+            pass
+    return result
 
 
 def _classify_error_delay(exc):
@@ -3067,6 +3528,25 @@ def _log_failure(call_type, model_short, key, exc, kind, applied, sc, identity, 
     # 'suppress' -> collapsed; print nothing
 
 
+def _kame_pacing_and_latency(identity):
+    """The two Hermes 1.8.2.3 selection terms for one pool (never raise)."""
+    mono = time.monotonic()
+    ready = lambda k: 0  # noqa: E731
+    speed = lambda k: 0.0  # noqa: E731
+    if _KP is not None:
+        try:
+            _KP.PACER.sync_identity_settings(identity)
+            ready = lambda k: 0 if _KP.PACER.is_ready(identity, k, now=mono) else 1  # noqa: E731
+        except Exception:
+            pass
+    if _KL is not None:
+        try:
+            speed = lambda k: _KL.LATENCY.get(identity, k, now=mono)  # noqa: E731
+        except Exception:
+            pass
+    return ready, speed
+
+
 def _get_best_key(identity, all_keys):
     """RPM-aware predictive selection: picks the key with most remaining capacity.
 
@@ -3152,10 +3632,18 @@ def _get_best_key(identity, all_keys):
             # them is given back.
             best_key = healthy[0]
         else:
+            # v1.8.2.7 (Hermes 1.8.2.3): a key whose learned per-minute limit
+            # is reached waits its turn behind one that is not, and between
+            # equally free keys the one that answered faster lately goes first.
+            # With nothing learned both terms are equal for every key and the
+            # order is exactly 1.8.1.8's.
+            _ready, _speed = _kame_pacing_and_latency(identity)
             best_key = min(healthy, key=lambda k: (
                 1 if (pool[k].get("consecutive_refusals") or pool[k].get("consecutive_denials")) else 0,
+                _ready(k),
                 len(pool[k]["request_log"]),
                 pool[k]["last_used"],
+                _speed(k),
             ))
 
         # 4. Anti-dogpile: mark as used NOW so concurrent calls pick different keys
@@ -3316,6 +3804,24 @@ def _is_terminal_error(exc: Exception) -> bool:
     # "enable billing" and Anthropic's spend limit both come as a 400 — and a
     # field naming the REQUEST as the problem (`context_length_exceeded`,
     # `model_not_found`, `invalid_prompt`) is terminal whatever status it has.
+    # v1.8.2.7: the provider quirks speak first - a request fault dressed as
+    # something else is raised; a refused model, a billing word, a busy server
+    # or a per-minute counter is never terminal.
+    if _kame_closed_door(exc):
+        # Maintenance, no instance, no provider for the model, a local model
+        # not loaded: every key meets the same closed door. Not terminal here:
+        # the carousel sends the call to KAME's fallback list, or rests the
+        # whole pool for the door (Agent Zero would end the task on a raise).
+        return False
+    _q = _kame_quirk(exc, "auth" if _is_auth_error(exc) else "other")
+    if _q == "request_fault":
+        return True
+    if "blockreason" in _evidence_text(exc).replace("_", ""):
+        return True  # Gemini `promptFeedback.blockReason`: the prompt was refused
+    if _q in ("denied", "billing", "per_minute", "server", "auth"):
+        return False
+    if _evidence_status(exc) == 416:
+        return True  # range not satisfiable: the request, never the key
     if _KE is not None:
         try:
             if _KE.catalog_terminal(exc):
@@ -3591,7 +4097,7 @@ async def _kame_attempt_delegated(self, key, ctx):
         self,
         system_message="",
         user_message="",
-        messages=list(ctx["messages"]),
+        messages=list(ctx.get("attempt_messages") or ctx["messages"]),
         response_callback=ctx["response_callback"],
         reasoning_callback=ctx["reasoning_callback"],
         tokens_callback=ctx["tokens_callback"],
@@ -3938,6 +4444,1210 @@ def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ct
         pass
 
 
+# --- v1.8.2.7: backups, keys asked together, and the model fallback list ------
+#
+# Three things Hermes 1.8.2.3-1.8.2.7 does that Agent Zero 1.8.1.8 never did,
+# built on Agent Zero's own model call (the attempt stays delegated):
+#
+# * **Backups for a slow first word.** A chat reply still silent after twice
+#   its model's usual first-word time gets a backup key, then a third. The
+#   first leg that shows any sign of work (text, a tool call, visible
+#   reasoning) wins; the other legs are cancelled, which closes their HTTP
+#   request. Nothing changes until a backup is needed: a lone call passes
+#   straight through. Budgeted (~10% extra requests), never under 429
+#   pressure, never for a prompt too large to send twice. A background call
+#   that does not stream may get one backup when slower than its usual time.
+# * **Keys asked together when a pool runs dry.** After two long refusals in a
+#   row (a rest of a minute or more), the next attempts of a chat call ask 4,
+#   then 8, then 16 ready keys at once instead of one by one. First answer
+#   wins. Off with `hedge_mode: off`. Background calls never do this.
+# * **The fallback list.** When the chat model cannot answer - every key
+#   resting longer than `failover_after_seconds`, the provider's door closed,
+#   two timeouts in a row, every key refused the model, or no wait can fix it
+#   - and nothing has been shown yet, KAME answers with the first model of
+#   its own list that has a usable key, through Agent Zero's own model class.
+#   The next call starts on the configured model again.
+#
+# Agent Zero ends the task on any error a model call raises
+# (`_90_handle_critical_exception`), so on this host "hand it back" is never
+# the gentle option it is on Hermes: without a list KAME keeps waiting, as
+# 1.8.1.8 did, except where waiting is known to fix nothing.
+
+_KAME_CLOSED_DOOR_REST_S = 30.0      # a closed door rests every key of the pool this long
+_KAME_HOP_BOUND_MIN_S = 30.0         # a call on a fallback model gives up after at least this long
+_KAME_BURST_LONG_REST_S = 60.0      # a rest at least this long counts toward a burst
+_KAME_BURST_SIZES = (4, 8, 16)
+_KAME_FALLBACK_RETRY_S = 30.0        # a list entry that could not answer is skipped this long
+_KAME_FALLBACK_SKIP = {}             # identity -> monotonic time until which it is skipped
+_KAME_FALLBACK_MODEL_CACHE = {}      # (provider, name, api_base) -> model instance
+_KAME_LAST_MODEL_SWITCH = {}         # what the chip shows: from, to, reason, at
+_KAME_SPEED_STATS = {"backups": 0, "backup_wins": 0, "probe_bursts": 0, "model_switches": 0}
+_KAME_PRESSURE_WINDOW_S = 60.0
+_KAME_NON_STREAM_MAX_LEGS = 2
+_KAME_UNLIMITED_PROMPT_TOKENS = 0
+
+
+class _KameSwitchModel(Exception):
+    """Raised inside a call that is running on a fallback model, to tell the outer
+    call this model cannot answer either. Never reaches Agent Zero."""
+
+    def __init__(self, reason, cause=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.cause = cause
+
+
+def _kame_est_prompt_tokens(messages) -> int:
+    try:
+        return int(sum(len(str(getattr(m, "content", m) or "")) for m in (messages or [])) / 4)
+    except Exception:
+        return 0
+
+
+def _kame_under_pressure(identity, all_keys) -> bool:
+    """A per-minute refusal in this pool in the last minute: backups would deepen it."""
+    now = time.time()
+    with _KAME_LOCK:
+        pool = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+        for k in all_keys:
+            kd = pool.get(k) or {}
+            if kd.get("last_hold_kind") == "per_minute" and \
+                    now - float(kd.get("last_sick_at") or 0) < _KAME_PRESSURE_WINDOW_S:
+                return True
+    return False
+
+
+def _kame_pick_more(identity, all_keys, used, n):
+    """Up to ``n`` more ready keys, best first, none of them in ``used``."""
+    picked = []
+    with _KAME_LOCK:
+        pool = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+        # A key out of rotation is never a backup. `_get_best_key` offers a
+        # retired key when EVERY key it is given is retired (its escape hatch
+        # for the call itself); asked about a subset, that hatch would fire on
+        # the subset (review 2026-10-17, M2).
+        live = [k for k in all_keys if not (pool.get(k) or {}).get("retired_at")]
+    for _ in range(max(0, int(n))):
+        rest = [k for k in live if k not in used and k not in picked]
+        if not rest:
+            break
+        key, status = _get_best_key(identity, rest)
+        if status == "EXHAUSTED_RETRY" or key is None or key not in rest:
+            break
+        picked.append(key)
+    return picked
+
+
+def _kame_burst_allowed(identity, all_keys, ctx) -> bool:
+    """The guards a backup has, for keys asked together: no 429 pressure in the
+    pool, no prompt too large to send several times, no backup cooldown."""
+    if _KH is None or _kame_under_pressure(identity, all_keys):
+        return False
+    try:
+        limit = float(_KH.SETTINGS.get("hedge_max_prompt_tokens", 32000))
+        if limit and _kame_est_prompt_tokens(ctx.get("messages")) > limit:
+            return False
+        cool = getattr(_KH.HEDGE_TRACKER, "_cool_until", {}).get(identity, 0.0)
+        return time.monotonic() >= cool
+    except Exception:
+        return False
+
+
+def _kame_reasoning_call(ctx) -> bool:
+    if _KH is None:
+        return False
+    try:
+        model = str(ctx["identity"]).split(":", 1)[-1]
+        return bool(_KH.reasoning_model(model, ctx.get("kwargs")))
+    except Exception:
+        return False
+
+
+class _KameRace:
+    """One raced attempt: legs on different keys, the first to show work wins."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.winner = None          # leg id that claimed the stream
+        self.tasks = {}             # leg id -> task
+        self.keys = {}              # leg id -> key
+        self.started = {}           # leg id -> monotonic start
+        self.progress = {}          # leg id -> that leg's progress dict
+        self.claimed = asyncio.Event()
+        self.claim_at = None        # monotonic time the winner showed its first sign
+        self.burst = False          # legs asked together, not backups
+        self.last_failure = None    # the last real failure judged inside the race
+
+    def _claim(self, leg):
+        if self.winner is None:
+            self.winner = leg
+            self.claim_at = time.monotonic()
+            self.claimed.set()
+            for other, task in self.tasks.items():
+                if other != leg and not task.done():
+                    task.cancel()
+        return self.winner == leg
+
+    def shims(self, leg, progress):
+        """Callbacks for one leg: the first chunk claims the race; only the
+        winner's chunks reach Agent Zero (through the call's own shims)."""
+        outer = self.ctx
+
+        def make(name, marks_answer):
+            target = outer.get(name)
+            if target is None:
+                return None
+
+            async def shim(a, b):
+                now = time.time()
+                if not progress.get("first_sign_at"):
+                    progress["first_sign_at"] = now
+                if marks_answer:
+                    progress["any"] = True
+                    if not progress.get("first_text_at"):
+                        progress["first_text_at"] = now
+                else:
+                    progress["reasoning"] = True
+                if not self._claim(leg):
+                    raise asyncio.CancelledError()  # a loser: its task is being cancelled
+                return await target(a, b)
+            return shim
+
+        return (make("response_callback", True), make("reasoning_callback", False),
+                make("tokens_callback", True))
+
+    def start(self, owner, leg, key):
+        progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
+        leg_ctx = dict(self.ctx)
+        leg_ctx["progress"] = progress
+        (leg_ctx["response_callback"], leg_ctx["reasoning_callback"],
+         leg_ctx["tokens_callback"]) = self.shims(leg, progress)
+        self.keys[leg] = key
+        self.progress[leg] = progress
+        self.started[leg] = time.monotonic()
+        self.tasks[leg] = asyncio.ensure_future(self.ctx["attempt"](owner, key, leg_ctx))
+        return self.tasks[leg]
+
+    def running(self):
+        return [leg for leg, t in self.tasks.items() if not t.done()]
+
+    async def cancel_all(self, except_leg=None):
+        pending = [t for leg, t in self.tasks.items() if leg != except_leg and not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
+def _kame_judge_leg(identity, key, exc, elapsed, ctx, attempt_no, call_id, started_wall,
+                    call_started_at, st):
+    """A backup leg that failed while another leg was still running: rest its key
+    with the same decision the carousel uses, put it on the timeline, keep going."""
+    try:
+        applied, kind, sc, rung, sized_by = _kame_decide_failure(identity, key, exc, elapsed=elapsed)
+        _tally_failure(identity, kind, sc, sized_by)
+        # Second review N1/N4: the carousel's "every key refused" rules must see
+        # the keys refused inside a race too, and an exception judged here is
+        # never judged a second time if it is the one the carousel receives.
+        try:
+            exc._kame_judged = (key, applied, kind, sc, rung, sized_by)
+        except Exception:
+            pass
+        ctx.setdefault("race_judged", []).append((key, kind, sc, exc))
+        if kind in ("auth", "revoked"):
+            PrintStyle.warning(
+                f"[KAME] {ctx.get('call_type', '')}|{ctx.get('model_short', '')} {_key_display_auth(key)} "
+                f"{_friendly_error_msg(kind, applied, sc, exc)}{_retirement_suffix(identity, key)}")
+        _kame_event(_kame_event_kind(kind), identity, key,
+                    reason=_KAME_EVENT_REASON.get(kind, kind) + " (backup)", code=sc,
+                    seconds=applied, detail=str(exc), sized_by=rung or sized_by)
+        _kame_timing(identity, key, attempt_no, "refused", kind, sc, started_wall, ctx,
+                     call_started_at, st, applied, rung or sized_by, call_id)
+        if _KJ is not None:
+            _KJ.record_refusal(identity=identity, key=key, exc=exc, status=sc, kind=kind,
+                               rest=applied, sized_by=rung or sized_by)
+        if kind == "per_minute" and _KH is not None:
+            _KH.HEDGE_TRACKER.note_hedge_429(identity)
+    except Exception:
+        pass
+
+
+
+# --- v1.8.2.7: Hermes parity helpers (retry hints, first token, continuation) ---
+
+#: Hermes 1.8.2.3 `_with_retry_hint`, ported with Agent Zero's kind words. An
+#: error KAME hands back reaches the agent itself (Agent Zero puts the error
+#: text in front of the model when it retries the turn, and a tool that called
+#: a model returns it as the tool's result), so the text says which of three
+#: things it is: passes on its own (retry), a spent quota (do not hammer it),
+#: or something only a person fixes. Unknown kinds get no hint: a confident
+#: wrong hint is worse than silence.
+_KAME_TRANSIENT_KINDS = frozenset({"timeout", "server", "per_minute", "rate_limit", "empty"})
+_KAME_QUOTA_WALL_KINDS = frozenset({"daily", "insufficient_quota", "quota"})
+_KAME_PERMANENT_KINDS = frozenset({"auth", "revoked", "denied", "billing", "permission"})
+_KAME_RETRY_HINT = (
+    "\n\n\u26a0\ufe0f This appears to be a temporary API issue.  "
+    "Retrying the same tool call will very likely succeed."
+)
+_KAME_QUOTA_HINT = (
+    "\n\n\u26d4 This is a spent daily/monthly quota, not a temporary failure.  "
+    "Do NOT keep retrying this model now \u2014 switch model or wait for the quota "
+    "to roll over."
+)
+_KAME_PERMANENT_HINT = (
+    "\n\n\u26d4 This failure will repeat until its cause is fixed (a bad or "
+    "unauthorised key, or a model this key may not use).  Retrying will not help."
+)
+_KAME_HINT_MARKERS = ("Retrying the same tool call", "Do NOT keep retrying", "Retrying will not help")
+
+
+def _kame_with_retry_hint(exc, kind="", quota_window=""):
+    """Append the hint that matches what the error is. Never a new exception:
+    ``args`` change in place, so type, status and traceback are kept. Idempotent."""
+    try:
+        msg = str(exc)
+        if any(marker in msg for marker in _KAME_HINT_MARKERS):
+            return exc
+        if kind in _KAME_QUOTA_WALL_KINDS or quota_window in ("per_day", "per_month"):
+            hint = _KAME_QUOTA_HINT
+        elif kind in _KAME_TRANSIENT_KINDS:
+            hint = _KAME_RETRY_HINT
+        elif kind in _KAME_PERMANENT_KINDS:
+            hint = _KAME_PERMANENT_HINT
+        else:
+            return exc
+        exc.args = (msg + hint,) + tuple(exc.args[1:])
+        # LiteLLM's exceptions build str() from `.message`, not `args`; Agent
+        # Zero's `_error_retry` hands the agent `format_error(exc)`, i.e. str().
+        if isinstance(getattr(exc, "message", None), str) and hint not in exc.message:
+            exc.message = exc.message + hint
+    except Exception:
+        pass
+    return exc
+
+
+def _kame_api_base(owner, ctx):
+    try:
+        base = (ctx.get("kwargs") or {}).get("api_base") or (getattr(owner, "kwargs", None) or {}).get("api_base")
+        if not base:
+            conf = getattr(owner, "a0_model_conf", None)
+            base = getattr(conf, "api_base", "") if conf is not None else ""
+        return str(base or "")
+    except Exception:
+        return ""
+
+
+def _kame_looks_local(base) -> bool:
+    base = str(base or "").lower()
+    return any(mark in base for mark in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "host.docker.internal"))
+
+
+#: v1.8.2.8 automatic first-token wait, per class: (floor, ceiling, cold) s.
+#: Review H2: a thinking model's silent thinking and a long prompt's reading
+#: are honest silences - generous floors, and one more second per 2,000
+#: prompt tokens. 1.8.2.7 had no limit at all here.
+_KAME_AUTO_SILENCE_S = {False: (30.0, 180.0, 180.0), True: (180.0, 600.0, 300.0)}
+_KAME_AUTO_SILENCE_TOKENS_PER_S = 2000.0
+
+
+def _kame_first_word_stats(identity, reasoning):
+    try:
+        if _KH is None:
+            return None
+        return _KH.HEDGE_TRACKER.first_word_stats(identity, reasoning=bool(reasoning))
+    except Exception:
+        return None
+
+
+def _kame_auto_silence(identity, reasoning, prompt_tokens=0) -> float:
+    """'Automatic': far past this model's usual first word - max(4 x median,
+    1.5 x p95), clamped per class. The backup race (2 x median) does the
+    speeding up; this only ends a dead connection."""
+    floor, ceiling, cold = _KAME_AUTO_SILENCE_S[bool(reasoning)]
+    floor = floor + max(0, int(prompt_tokens or 0)) / _KAME_AUTO_SILENCE_TOKENS_PER_S
+    stats = _kame_first_word_stats(identity, reasoning)
+    if not stats:
+        return float(min(ceiling, max(cold, floor)))
+    median, p95 = stats
+    return float(min(ceiling, max(floor, 4.0 * median, 1.5 * p95)))
+
+
+def _kame_silence_for(owner, ctx, attempt_no) -> float:
+    """Hermes 1.8.2.8 `attempt_read_timeout`: the wait for a first token, or 0.
+    Only for a stream, never for a model running on this machine (a large prompt
+    can take minutes to prefill there). `first_token_wait` decides: off; timed =
+    the number, a quarter of it from the third attempt on (the provider is
+    proven slow); auto (default) = learned, halved from the third attempt but
+    never under its floor."""
+    if _KAME_FIRST_TOKEN_MODE == "off" or ctx.get("call_type") != "Chat":
+        return 0.0
+    if _kame_looks_local(_kame_api_base(owner, ctx)):
+        return 0.0
+    if _KAME_FIRST_TOKEN_MODE == "auto":
+        # Review H1: a utility call or the chat compactor streams too, over a
+        # long history; only the conversation's own reply is cut automatically.
+        if not _kame_main(ctx):
+            return 0.0
+        reasoning = _kame_reasoning_call(ctx)
+        seconds = _kame_auto_silence(ctx.get("identity", ""), reasoning,
+                                     _kame_est_prompt_tokens(ctx.get("messages")))
+        if attempt_no >= 3:
+            seconds = max(_KAME_AUTO_SILENCE_S[bool(reasoning)][0], seconds * 0.5)
+        return seconds
+    seconds = float(_KAME_STREAM_SILENCE_S or 0)
+    if seconds <= 0:
+        return 0.0
+    if attempt_no >= 3:
+        seconds = max(5.0, seconds * 0.25)
+    return seconds
+
+
+def _kame_identity_with_region(identity, owner, kwargs, model, keys):
+    """Hermes 1.8.2.3 PC-01: a regional provider (Vertex, Bedrock, Azure) meters a
+    key per region, so the region is the identity's third segment. ``global``
+    adds nothing: a flat provider keeps the two-part identity 1.8.1.8 wrote."""
+    if _KR is None:
+        return identity
+    try:
+        base = (kwargs or {}).get("api_base") or (getattr(owner, "kwargs", None) or {}).get("api_base")
+        if not base:
+            conf = getattr(owner, "a0_model_conf", None)
+            base = getattr(conf, "api_base", "") if conf is not None else ""
+        region, source = _KR.parse_region(str(base or ""), str(model or ""))
+        if _KAME_KEY_REGION_OVERRIDES:
+            for k in keys or []:
+                override = _KR.region_from_overrides(_KAME_KEY_REGION_OVERRIDES, _key_short_id(k))
+                if override:
+                    region, source = _KR.parse_region("", "", override=override)
+                    break
+        segment = _KR.identity_segment(region, source)
+        return f"{identity}:{segment}" if segment else identity
+    except Exception:
+        return identity
+
+
+def _kame_seed_triggers(identity, reasoning):
+    """Hermes 1.8.2.5: once per model per process, the backup trigger learns the
+    first-word times this machine already recorded (calls.jsonl), so it is tuned
+    from the first call after a restart instead of after twenty."""
+    if _KH is None or _KJ is None or (identity, reasoning) in _KAME_SEEDED:
+        return
+    _KAME_SEEDED.add((identity, reasoning))
+    try:
+        history = getattr(_KJ, "first_word_history", None)
+        samples = (history() or {}).get(identity) if history is not None else None
+        if samples:
+            _KH.HEDGE_TRACKER.seed_stream(identity, samples, reasoning=reasoning)
+    except Exception:
+        pass
+
+
+#: v1.8.2.8 (Hermes decisions/0028 D6): the last replies of the conversation
+#: for the panel, and per Agent Zero context the steps of the turn in flight,
+#: for the one line shown when the turn ends.
+_KAME_REPLIES = collections.deque(maxlen=30)
+_KAME_TURNS = {}
+_KAME_TURNS_KEEP = 64
+
+
+def _kame_model_label(identity) -> str:
+    s = str(identity or "")
+    return s.split(":", 1)[1] if ":" in s else s
+
+
+def _kame_after_answer(identity, ctx, call_started_perf) -> None:
+    """An answer: the provider is not busy any more, and the reply is named."""
+    with _KAME_LOCK:
+        _KAME_BUSY_UNTIL.pop(identity, None)
+        _KAME_BUSY_WINDOW.pop(identity, None)
+    if not _kame_main(ctx):
+        return
+    try:
+        now_perf = time.perf_counter()
+        total = now_perf - float(call_started_perf)
+        progress = ctx.get("progress") or {}
+        first = progress.get("first_text_at") or progress.get("first_sign_at")
+        started_wall = time.time() - total
+        first_s = (float(first) - started_wall) if first else None
+        hop = _KAME_FALLBACK_HOP.get()
+        row = {"at": time.time(), "model": _kame_model_label(identity),
+               "for": _kame_model_label(hop.get("origin")) if hop else "",
+               "first_s": first_s if (first_s is None or first_s >= 0) else None,
+               "total_s": total}
+        with _KAME_LOCK:
+            _KAME_REPLIES.append(row)
+        agent = _KAME_CURRENT_AGENT.get()
+        context = getattr(agent, "context", None)
+        if context is not None:
+            with _KAME_LOCK:
+                turn = _KAME_TURNS.get(id(context))
+                if turn is not None:
+                    turn["steps"].append(row)
+    except Exception:
+        pass
+
+
+def turn_started(agent) -> None:
+    """Agent Zero's ``monologue_start`` for the top agent: a new turn begins."""
+    try:
+        if agent is None or int(getattr(agent, "number", 0) or 0) != 0:
+            return
+        context = getattr(agent, "context", None)
+        if context is None:
+            return
+        with _KAME_LOCK:
+            _KAME_TURNS[id(context)] = {"started": time.time(), "steps": []}
+            while len(_KAME_TURNS) > _KAME_TURNS_KEEP:
+                _KAME_TURNS.pop(next(iter(_KAME_TURNS)))
+    except Exception:
+        pass
+
+
+def _kame_secs(seconds) -> str:
+    if seconds is None:
+        return "-"
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    m, s = divmod(int(round(seconds)), 60)
+    return f"{m} min {s:02d} s"
+
+
+def reply_line(agent):
+    """The one line shown when the top agent's turn ends, or ``None``:
+    the model(s) that answered, how many steps each, and the turn's time.
+    `reply_notice`: always / switches (only when a fallback model answered) /
+    never. Shown in Agent Zero's log, never in the model's history."""
+    try:
+        if agent is None or int(getattr(agent, "number", 0) or 0) != 0:
+            return None
+        context = getattr(agent, "context", None)
+        with _KAME_LOCK:
+            turn = _KAME_TURNS.pop(id(context), None) if context is not None else None
+        if not turn or not turn["steps"] or _KAME_REPLY_NOTICE == "never":
+            return None
+        steps = turn["steps"]
+        stand_in = any(s.get("for") for s in steps)
+        if _KAME_REPLY_NOTICE == "switches" and not stand_in:
+            return None
+        order, counts = [], {}
+        for s in steps:
+            name = s["model"] + (f" for {s['for']}" if s.get("for") else "")
+            if name not in counts:
+                order.append(name)
+                counts[name] = 0
+            counts[name] += 1
+        parts = [f"{name}" + (f" ({counts[name]} steps)" if counts[name] > 1 else "") for name in order]
+        first = steps[0].get("first_s")
+        took = time.time() - float(turn["started"])
+        line = " · ".join(parts)
+        tail = f"{_kame_secs(took)}" + (f" · first word {_kame_secs(first)}" if first is not None else "")
+        return f"⏱ {tail} · {line}"
+    except Exception:
+        return None
+
+
+def replies_report() -> list:
+    with _KAME_LOCK:
+        rows = list(_KAME_REPLIES)
+    return [dict(r) for r in reversed(rows[-12:])]
+
+
+def _kame_learn_key(identity, key, ctx, started_wall):
+    """An answered attempt teaches the pacer (one dispatch in this key's window)
+    and the latency tiebreak (time to the first sign for a stream, the whole
+    call otherwise) - Hermes `_learn_latency` / `PACER.stamp`."""
+    try:
+        if _KP is not None:
+            _KP.PACER.stamp(identity, key)
+    except Exception:
+        pass
+    try:
+        if _KL is None:
+            return
+        progress = ctx.get("progress") or {}
+        if ctx.get("call_type") == "Chat":
+            first = progress.get("first_text_at") or progress.get("first_sign_at")
+            if not first:
+                return
+            sample = float(first) - float(started_wall)
+        else:
+            sample = time.time() - float(started_wall)
+        _KL.LATENCY.record(identity, key, sample)
+    except Exception:
+        pass
+
+
+def _kame_can_continue(owner, ctx) -> bool:
+    """Hermes 1.1.1 / 1.8.2.7 stitching, where Agent Zero allows it: a chat
+    stream on the Chat Completions transport (Agent Zero's default; a
+    Responses-API call keeps provider state that a continuation would break),
+    the stitcher and an assistant message type available, the switch on, and
+    the continuation budget not spent. Otherwise the answer starts again, as
+    in 1.8.1.8."""
+    if _KS is None or AIMessage is None or _KAME_STREAM_STITCH_DISABLED or _KAME_STREAM_RESUME_LIMIT == 0:
+        return False
+    if ctx.get("call_type") != "Chat":
+        return False
+    if 0 < _KAME_STREAM_RESUME_LIMIT <= int(ctx.get("resumes") or 0):
+        return False
+    kwargs = ctx.get("kwargs") or {}
+    mode = kwargs.get("a0_api_mode") or (getattr(owner, "kwargs", None) or {}).get("a0_api_mode") or ""
+    if str(mode).lower().strip() in ("response", "responses", "responses_api"):
+        return False
+    if kwargs.get("a0_responses_function_tools") or kwargs.get("previous_response_id"):
+        return False
+    return True
+
+
+def _kame_prepare_continuation(owner, ctx, identity):
+    """Before an attempt: continue the answer the user already saw, or start clean."""
+    ctx.pop("stitcher", None)
+    ctx.pop("attempt_messages", None)
+    seen = ctx.get("stitch_seen") or ""
+    if not seen.strip() or not _kame_can_continue(owner, ctx):
+        return
+    try:
+        messages = list(ctx["messages"]) + [AIMessage(content=seen.rstrip())]
+        if identity in _KAME_NO_PREFILL:
+            messages.append(HumanMessage(content=_KS.CONTINUE_INSTRUCTION))
+        ctx["attempt_messages"] = messages
+        ctx["stitcher"] = _KS.Stitcher(seen)
+        ctx["resumes"] = int(ctx.get("resumes") or 0) + 1
+    except Exception:
+        ctx.pop("stitcher", None)
+        ctx.pop("attempt_messages", None)
+
+
+def _kame_stitched_result(result, text):
+    """Agent Zero's own result with the whole answer the user saw."""
+    try:
+        if isinstance(result, tuple):
+            return (text,) + tuple(result[1:]) if result else (text, "")
+        cls = type(result)
+        if getattr(result, "mode", "") == "chat_completions" and hasattr(cls, "from_chat") \
+                and not getattr(result, "function_calls", None):
+            rebuilt = cls.from_chat(
+                response=text, reasoning=getattr(result, "reasoning", "") or "",
+                usage=getattr(result, "usage", None), input_items=getattr(result, "input_items", None),
+                provider_model_key=getattr(result, "provider_model_key", "") or "",
+                capability=getattr(result, "capability", None))
+            if getattr(result, "history_extras", ""):
+                rebuilt.history_extras = result.history_extras
+            return rebuilt
+        result.response = text
+    except Exception:
+        pass
+    return result
+
+
+async def _kame_finish_continuation(ctx, result):
+    """A continued answer ended: show what the stitcher still held, and hand
+    Agent Zero one whole answer."""
+    stitcher = ctx.pop("stitcher", None)
+    ctx.pop("attempt_messages", None)
+    if stitcher is None:
+        return result
+    seen = ctx.pop("stitch_seen", "") or ""
+    try:
+        tail = stitcher.flush()
+        callback = ctx.get("a0_response_callback")
+        if tail and callback is not None:
+            await callback(tail, seen + stitcher.forwarded)
+        _kame_event("recovery", ctx.get("identity", ""),
+                    reason=f"cut answer continued ({stitcher.mode or 'new'}), shown once")
+        return _kame_stitched_result(result, seen + stitcher.forwarded)
+    except Exception:
+        return result
+
+async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0, call_id="",
+                              call_started_at=0.0, st=None):
+    """One attempt that may grow backup legs. Returns ``(result, winning_key)``.
+
+    Raises the exception of the LAST leg to fail, with ``_kame_leg_key`` and
+    ``_kame_leg_elapsed`` set on it, so the carousel judges exactly one failure
+    the way it always has; the other failed legs were judged here.
+
+    With no backup due and no burst, this is ``await ctx["attempt"](...)`` and
+    nothing else: the lone call is not wrapped, shimmed or timed differently.
+    """
+    identity = ctx["identity"]
+    all_keys = ctx["all_keys"]
+    stream = ctx["call_type"] == "Chat"
+    reasoning = _kame_reasoning_call(ctx)
+    hedging_on = (_KH is not None and _kame_hedge_mode() != "off" and not _KAME_CAROUSEL_DISABLED
+                  and len(all_keys) >= 2)
+    silence = _kame_silence_for(owner, ctx, attempt_no)
+    if hedging_on and stream:
+        _kame_seed_triggers(identity, reasoning)
+    if not hedging_on and not burst_keys and not silence:
+        t0 = time.monotonic()
+        try:
+            result = await ctx["attempt"](owner, key, ctx)
+        except BaseException as exc:
+            _kame_tag(exc, key, time.monotonic() - t0)
+            raise
+        _kame_learn_lone(ctx, t0, stream)
+        return result, key
+
+    race = _KameRace(ctx)
+    race.burst = bool(burst_keys)
+    race_wall = time.time()
+
+    def sweep(skip=None):
+        """Judge every leg that ended and was not looked at yet (second review N2)."""
+        for leg in sorted(race.tasks):
+            task = race.tasks[leg]
+            if leg == skip or not task.done() or getattr(task, "_kame_seen", False):
+                continue
+            task._kame_seen = True
+            if task.cancelled():
+                continue
+            exc = task.exception()
+            if exc is None or (_KAME_PASSTHROUGH_EXC and isinstance(exc, _KAME_PASSTHROUGH_EXC)) \
+                    or isinstance(exc, (asyncio.CancelledError, _KameSwitchModel)) \
+                    or _is_terminal_error(exc):
+                continue   # a request fault on a loser rests no key (third review P3)
+            elapsed = time.monotonic() - race.started[leg]
+            _kame_judge_leg(identity, race.keys[leg], exc, elapsed, ctx, attempt_no,
+                            call_id, race_wall, call_started_at, st)
+            _kame_tag(exc, race.keys[leg], elapsed)
+            race.last_failure = exc
+
+    legs = [key] + list(burst_keys or [])
+    for i, k in enumerate(legs):
+        race.start(owner, i, k)
+    if burst_keys:
+        with _KAME_LOCK:
+            _KAME_SPEED_STATS["probe_bursts"] += 1
+        _kame_event("backup", identity, reason=f"pool running dry: {len(legs)} keys asked together",
+                    seconds=None)
+    max_legs = 1 if (burst_keys or not hedging_on) else (
+        _KAME_HEDGE_MAX_LEGS if stream else min(_KAME_HEDGE_MAX_LEGS, _KAME_NON_STREAM_MAX_LEGS))
+    est_tokens = _kame_est_prompt_tokens(ctx.get("messages"))
+    if not hedging_on:
+        triggers = []
+    elif stream and not burst_keys:
+        first_t, second_t = _KH.HEDGE_TRACKER.stream_triggers(identity, reasoning=reasoning)
+        triggers = [first_t, second_t]
+    elif not burst_keys:
+        threshold = _KH.HEDGE_TRACKER.threshold(identity, stream=False, reasoning=reasoning)
+        triggers = [threshold] if threshold is not None else []
+    else:
+        triggers = []
+    empties = []   # legs that answered with nothing, kept in case nobody does better
+    try:
+        while True:
+            running = race.running()
+            if race.winner is not None:
+                win = race.tasks[race.winner]
+                sweep(skip=race.winner)
+                await race.cancel_all(except_leg=race.winner)
+                try:
+                    result = await win
+                except BaseException as exc:
+                    _kame_tag(exc, race.keys[race.winner], time.monotonic() - race.started[race.winner])
+                    raise
+                _kame_race_learn(ctx, race, race.winner, stream, reasoning)
+                if race.winner > 0 and not race.burst:
+                    with _KAME_LOCK:
+                        _KAME_SPEED_STATS["backup_wins"] += 1
+                return result, race.keys[race.winner]
+            # Every leg that ended since the last look, read together (several
+            # can end in one tick: a burst of eight refused at once). Each
+            # exception is retrieved, an answer is preferred, and every failure
+            # is judged on its own key - except the one handed to the carousel.
+            ended = []
+            for leg in sorted(race.tasks):
+                task = race.tasks[leg]
+                if not task.done() or getattr(task, "_kame_seen", False):
+                    continue
+                task._kame_seen = True
+                if task.cancelled():
+                    continue
+                ended.append((leg, task.exception(), time.monotonic() - race.started[leg]))
+            for leg, exc, _e in ended:
+                if exc is not None and (
+                        (_KAME_PASSTHROUGH_EXC and isinstance(exc, _KAME_PASSTHROUGH_EXC))
+                        or isinstance(exc, (asyncio.CancelledError, _KameSwitchModel))):
+                    _kame_race_judge_rest(race, ended, leg, identity, ctx, attempt_no, call_id,
+                                          race_wall, call_started_at, st)
+                    await race.cancel_all()
+                    raise exc
+            answers = [(leg, race.tasks[leg].result()) for leg, exc, _e in ended if exc is None]
+            useful = [(leg, r) for leg, r in answers
+                      if race.progress[leg]["any"] or not _kame_result_is_empty(r)]
+            failures = [(leg, exc, el) for leg, exc, el in ended if exc is not None]
+            if useful:
+                leg, result = useful[0]
+                race.winner = leg
+                for f_leg, f_exc, f_el in failures:
+                    if _is_terminal_error(f_exc):
+                        continue   # the request's fault, not the key's (third review P3)
+                    _kame_judge_leg(identity, race.keys[f_leg], f_exc, f_el, ctx, attempt_no,
+                                    call_id, race_wall, call_started_at, st)
+                await race.cancel_all(except_leg=leg)
+                _kame_race_learn(ctx, race, leg, stream, reasoning)
+                if leg > 0 and not race.burst:
+                    with _KAME_LOCK:
+                        _KAME_SPEED_STATS["backup_wins"] += 1
+                return result, race.keys[leg]
+            empties.extend(answers)  # an empty leg waits for the others (Hermes 1.8.2.4)
+            terminal = next(((l, x, e) for l, x, e in failures if _is_terminal_error(x)), None)
+            running = race.running()
+            if terminal is not None or (failures and not running and not empties):
+                # This failure goes to the carousel; the others are judged here.
+                last = terminal or failures[-1]
+                for f_leg, f_exc, f_el in failures:
+                    if f_leg != last[0]:
+                        _kame_judge_leg(identity, race.keys[f_leg], f_exc, f_el, ctx, attempt_no,
+                                        call_id, race_wall, call_started_at, st)
+                await race.cancel_all(except_leg=last[0])
+                _kame_tag(last[1], race.keys[last[0]], last[2])
+                raise last[1]
+            for f_leg, f_exc, f_el in failures:
+                _kame_judge_leg(identity, race.keys[f_leg], f_exc, f_el, ctx, attempt_no,
+                                call_id, race_wall, call_started_at, st)
+                _kame_tag(f_exc, race.keys[f_leg], f_el)
+                race.last_failure = f_exc
+            if not running:
+                if empties:
+                    # Every leg that answered answered empty: hand back the first.
+                    leg, result = empties[0]
+                    return result, race.keys[leg]
+                # Only cancelled legs are left. A real failure seen on the way is
+                # what this attempt ended with (already judged: second review N4).
+                if race.last_failure is not None:
+                    raise race.last_failure
+                raise asyncio.CancelledError()
+            # Wait for the next event: a leg ends, the race is claimed, or a trigger.
+            wait_for = None
+            if triggers and len(race.tasks) < max_legs:
+                due = race.started[0] + triggers[0]
+                wait_for = max(0.0, due - time.monotonic())
+            if silence and race.winner is None:
+                s_left = max(0.0, race.started[0] + silence - time.monotonic())
+                wait_for = s_left if wait_for is None else min(wait_for, s_left)
+            claim_waiter = asyncio.ensure_future(race.claimed.wait())
+            try:
+                done, _ = await asyncio.wait([race.tasks[l] for l in running] + [claim_waiter],
+                                             timeout=wait_for, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                if not claim_waiter.done():
+                    claim_waiter.cancel()
+            if done or race.winner is not None:
+                continue
+            # v1.8.2.7 (Hermes `stream_silence_timeout_seconds`, "wait for the
+            # first token"): every leg silent that long - the key accepted the
+            # request and sends nothing. Drop it as a timeout; the next key is tried.
+            if silence and time.monotonic() >= race.started[0] + silence and \
+                    not any(p.get("first_sign_at") for p in race.progress.values()):
+                await race.cancel_all()
+                exc = TimeoutError(
+                    f"KAME: no first token within {silence:.0f}s on this key "
+                    "(stream_silence_timeout_seconds)")
+                _kame_tag(exc, race.keys[0], time.monotonic() - race.started[0])
+                raise exc
+            if not triggers:
+                continue
+            # A trigger passed with no sign of work: maybe start a backup.
+            triggers.pop(0)
+            healthy, _total = _kame_pool_counts(identity, all_keys)
+            if not _KH.HEDGE_TRACKER.may_start_backup(
+                    identity, healthy_count=healthy,
+                    under_pressure=_kame_under_pressure(identity, all_keys),
+                    stream=stream, reasoning=reasoning, est_prompt_tokens=est_tokens):
+                continue
+            more = _kame_pick_more(identity, all_keys, set(race.keys.values()), 1)
+            if not more:
+                continue
+            leg = len(race.tasks)
+            race.start(owner, leg, more[0])
+            _KH.HEDGE_TRACKER.note_hedge(identity)
+            with _KAME_LOCK:
+                _KAME_SPEED_STATS["backups"] += 1
+            _kame_event("backup", identity, more[0],
+                        reason=("no first word after %.0fs: backup key started" % (time.monotonic() - race.started[0]))
+                        if stream else ("slower than usual after %.0fs: backup key started" % (time.monotonic() - race.started[0])))
+    except BaseException:
+        await race.cancel_all(except_leg=None if race.winner is None else race.winner)
+        raise
+
+
+def _kame_race_judge_rest(race, ended, raising_leg, identity, ctx, attempt_no, call_id,
+                          race_wall, call_started_at, st):
+    """Before a stop/intervention leaves the race: judge the other legs that failed."""
+    for leg, exc, elapsed in ended:
+        if leg == raising_leg or exc is None:
+            continue
+        if (_KAME_PASSTHROUGH_EXC and isinstance(exc, _KAME_PASSTHROUGH_EXC)) or \
+                isinstance(exc, (asyncio.CancelledError, _KameSwitchModel)):
+            continue
+        _kame_judge_leg(identity, race.keys[leg], exc, elapsed, ctx, attempt_no, call_id,
+                        race_wall, call_started_at, st)
+
+
+def _kame_tag(exc, key, elapsed):
+    try:
+        exc._kame_leg_key = key
+        exc._kame_leg_elapsed = elapsed
+    except Exception:
+        pass
+
+
+def _kame_race_learn(ctx, race, winner, stream, reasoning):
+    """Teach the latency tracker: the winner's time to first sign (stream) or to
+    the answer, and every cut leg as a lower bound (censored)."""
+    if _KH is None:
+        return
+    try:
+        identity = ctx["identity"]
+        now = time.monotonic()
+        w_started = race.started[winner]
+        first = race.progress[winner].get("first_sign_at")
+        if stream and first:
+            took = max(0.0, first - (time.time() - (now - w_started)))
+        else:
+            took = now - w_started
+        _KH.HEDGE_TRACKER.record_latency(identity, took, stream=stream, reasoning=reasoning)
+        if race.burst:
+            return  # legs asked together started at once: a loser says nothing new
+        for leg, started in race.started.items():
+            if leg == winner:
+                continue
+            else:
+                # A cut leg was slower than the winner's FIRST SIGN, not than
+                # its whole answer: the lower bound is taken at the cut.
+                cut_at = race.claim_at if race.claim_at is not None else now
+                bound = max(0.0, cut_at - started)
+                # Only a real lower bound: a backup cut 0.1 s after it started
+                # says nothing about a model the winner needed 0.3 s for, and
+                # stored as a sample it would pull the trigger down (second review N3).
+                if bound >= took * 0.95:   # started with the winner (clock noise aside)
+                    _KH.HEDGE_TRACKER.record_latency(identity, bound, stream=stream,
+                                                     reasoning=reasoning, censored=True)
+    except Exception:
+        pass
+
+
+def _kame_learn_lone(ctx, started_mono, stream):
+    """A call that ran alone still teaches its model's usual time."""
+    if _KH is None:
+        return
+    try:
+        reasoning = _kame_reasoning_call(ctx)
+        if stream:
+            first = (ctx.get("progress") or {}).get("first_sign_at")
+            if not first:
+                return
+            took = max(0.0, first - (time.time() - (time.monotonic() - started_mono)))
+        else:
+            took = time.monotonic() - started_mono
+        _KH.HEDGE_TRACKER.record_latency(ctx["identity"], took, stream=stream, reasoning=reasoning)
+    except Exception:
+        pass
+
+
+def _kame_fallback_model(owner, entry):
+    """A model instance for one list entry, built by Agent Zero's own factory."""
+    cache_key = (entry["provider"], entry["name"], entry.get("api_base", ""))
+    model = _KAME_FALLBACK_MODEL_CACHE.get(cache_key)
+    if model is not None:
+        return model
+    import models as _models  # Agent Zero's module; never imported at load time
+    base_conf = getattr(owner, "a0_model_conf", None)
+    mc = _models.ModelConfig(
+        type=_models.ModelType.CHAT, provider=entry["provider"], name=entry["name"],
+        api_base=entry.get("api_base", "") or "",
+        ctx_length=int(getattr(base_conf, "ctx_length", 0) or 0),
+        vision=bool(getattr(base_conf, "vision", False)),
+    )
+    model = _models.get_chat_model(entry["provider"], entry["name"], model_config=mc, **mc.build_kwargs())
+    _KAME_FALLBACK_MODEL_CACHE[cache_key] = model
+    return model
+
+
+def _kame_rest_pool_for_door(identity, keys, seconds):
+    """A closed door rests every key of the pool until it may open, and nothing
+    else: no strike, no ladder, no counter of any key is touched, and the last
+    refusal each key recorded stays its own (review 2026-10-17, M3)."""
+    now = time.time()
+    until = now + min(float(seconds), _KAME_MAX_HOLD_S)
+    with _KAME_LOCK:
+        state = _get_identity_state(identity, keys)
+        for k in keys:
+            kd = state["keys"].get(k)
+            if kd is None:
+                continue
+            if float(kd.get("model_until", 0) or 0) < until:
+                kd["model_until"] = until
+                kd["model_kind"] = "server"
+                kd["model_scope"] = ""
+                if _KJ is not None:
+                    try:
+                        _KJ.note_hold(identity, k, until, "server", "")
+                    except Exception:
+                        pass
+            _effective_hold_until(identity, k, kd)
+
+
+def _kame_identity_of(model) -> str:
+    """The pool identity KAME's wrapper gives this model (``provider:model_name``)."""
+    conf = getattr(model, "a0_model_conf", None)
+    provider = (getattr(conf, "provider", "") if conf is not None else "") or "unknown"
+    return f"{str(provider).lower()}:{(getattr(model, 'model_name', '') or 'unknown').lower()}"
+
+
+#: v1.8.2.8 (Hermes decisions/0028). A busy provider: failures of these kinds
+#: on two different keys in one call, or a throttle resting its key this short.
+_KAME_PROVIDER_TIMEOUT_STATUSES = frozenset({408, 499, 504, 524})
+_KAME_BUSY_FIRST_S = 30.0
+_KAME_BUSY_MAX_S = 300.0
+_KAME_BUSY_UNTIL = {}
+_KAME_BUSY_WINDOW = {}
+#: "Automatic" switch: about three times the usual first word, within these.
+_KAME_AUTO_SWITCH_MIN_S = 6.0
+_KAME_AUTO_SWITCH_MAX_S = 20.0
+_KAME_AUTO_SWITCH_COLD_S = 10.0
+
+
+def _kame_switch_on() -> bool:
+    if _KAME_MODEL_SWITCH == "never":
+        return False
+    return _KAME_MODEL_SWITCH == "auto" or _KAME_FAILOVER_AFTER_S > 0
+
+
+def _kame_switch_threshold(identity, ctx=None) -> float:
+    """Seconds of the user's wait after which the next model answers; 0 = never."""
+    if _KAME_MODEL_SWITCH == "never":
+        return 0.0
+    if _KAME_MODEL_SWITCH == "timed":
+        return float(_KAME_FAILOVER_AFTER_S)
+    if ctx:
+        reasoning = _kame_reasoning_call(ctx)
+    else:
+        try:
+            reasoning = bool(_KH and _KH.reasoning_model(str(identity).split(":", 1)[-1], None))
+        except Exception:
+            reasoning = False
+    stats = _kame_first_word_stats(identity, reasoning)
+    if not stats:
+        return _KAME_AUTO_SWITCH_COLD_S
+    return float(min(_KAME_AUTO_SWITCH_MAX_S, max(_KAME_AUTO_SWITCH_MIN_S, 3.0 * stats[0])))
+
+
+def _kame_busy_failure(identity, key, kind, status=None) -> bool:
+    """The PROVIDER says it is busy: a 5xx / "overloaded", or a timeout it
+    answered with itself (408 / 499 / 504 / 524). Not a cut on our side (KAME's
+    first-token wait, a client timeout - review H2) and not a throttle, which
+    can be one key's own quota (review M5)."""
+    if kind == "server":
+        return True
+    if kind == "timeout":
+        try:
+            return int(status) in _KAME_PROVIDER_TIMEOUT_STATUSES
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _kame_note_busy(identity) -> None:
+    now = time.time()
+    with _KAME_LOCK:
+        until = _KAME_BUSY_UNTIL.get(identity, 0.0)
+        window = _KAME_BUSY_WINDOW.get(identity, 0.0)
+        window = min(_KAME_BUSY_MAX_S, window * 2.0) if (window and now < until + _KAME_BUSY_FIRST_S) \
+            else _KAME_BUSY_FIRST_S
+        _KAME_BUSY_WINDOW[identity] = window
+        _KAME_BUSY_UNTIL[identity] = now + window
+
+
+def _kame_is_busy(identity, busy_keys) -> bool:
+    if len(busy_keys) >= 2:
+        return True
+    return bool(busy_keys) and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0)
+
+
+def _kame_entry_usable(identity, keys) -> bool:
+    if not keys:
+        return True  # one key or none: Agent Zero calls it as it is
+    if _pool_has_ready_key(identity, keys):
+        return True
+    eta = _next_recovery_seconds(identity, keys)
+    if eta is None:
+        # never tried: every key is ready
+        with _KAME_LOCK:
+            known = identity in _KAME_KEY_HEALTH
+        return not known
+    return eta <= max(_KAME_HOP_BOUND_MIN_S, _kame_switch_threshold(identity))
+
+
+#: The Agent Zero methods a conversation turn is made from, and the ones a
+#: background job is. A utility call or the chat compactor may stream too
+#: (`call_utility_model(callback=...)`, `_chat_compaction`), so streaming alone
+#: does not make a call the conversation (review 2026-10-17, M4).
+_KAME_CHAT_FRAMES = frozenset({"call_chat_model", "call_chat_model_turn"})
+_KAME_BACKGROUND_FRAMES = frozenset({"call_utility_model", "summarize_messages", "summarize",
+                                     "compact_chat", "_compact_single_pass", "_compact_large_history"})
+
+
+def _kame_is_main_chat(stream) -> bool:
+    """Whether the running call is the conversation itself (Agent Zero's
+    `call_chat_model` / `call_chat_model_turn` on the stack, nearest wins)."""
+    if not stream or "Compress" in (_KAME_CALL_CONTEXT.get() or ""):
+        return False
+    try:
+        import sys as _sys
+        frame = _sys._getframe(1)
+    except Exception:
+        return bool(stream)
+    depth = 0
+    while frame is not None and depth < 60:
+        name = frame.f_code.co_name
+        if name in _KAME_CHAT_FRAMES:
+            return True
+        if name in _KAME_BACKGROUND_FRAMES:
+            return False
+        frame = frame.f_back
+        depth += 1
+    return False
+
+
+def _kame_main(ctx) -> bool:
+    return bool(ctx.get("main_chat", ctx.get("call_type") == "Chat"))
+
+
+def _kame_nothing_shown(ctx) -> bool:
+    """Nothing of this CALL has reached the screen, on any attempt so far."""
+    progress = ctx.get("progress") or {}
+    return not (ctx.get("shown") or progress.get("any") or progress.get("reasoning"))
+
+
+def _kame_can_switch(ctx) -> bool:
+    return bool(_KAME_FALLBACK_MODELS) and _kame_switch_on() \
+        and _kame_main(ctx) and not _KAME_CAROUSEL_DISABLED \
+        and _kame_nothing_shown(ctx) \
+        and ctx.get("entry_name")
+
+
+_KAME_NO_SWITCH = object()
+
+
+async def _kame_switch_model(owner, ctx, reason, cause=None):
+    """Answer this call with the next model of the list, or ``_KAME_NO_SWITCH``.
+
+    Inside a call that already runs on a list model, raises ``_KameSwitchModel``
+    so the outer call moves on to the entry after it.
+    """
+    if _KAME_FALLBACK_HOP.get() is not None:
+        if _kame_main(ctx) and _kame_nothing_shown(ctx):
+            raise _KameSwitchModel(reason, cause)
+        return _KAME_NO_SWITCH
+    if not _kame_can_switch(ctx):
+        return _KAME_NO_SWITCH
+    now_m = time.monotonic()
+    if now_m < ctx.get("fallback_next_walk", 0.0):
+        return _KAME_NO_SWITCH
+    origin = ctx["identity"]
+    tried_any = False
+    for entry in list(_KAME_FALLBACK_MODELS):
+        ident = entry["identity"]
+        if now_m < _KAME_FALLBACK_SKIP.get(ident, 0.0):
+            continue
+        try:
+            model = _kame_fallback_model(owner, entry)
+        except Exception as exc:
+            _kame_event("surfaced", ident, reason="fallback model could not be built: skipped",
+                        detail=f"{type(exc).__name__}: {exc}")
+            _KAME_FALLBACK_SKIP[ident] = now_m + 300.0
+            continue
+        ident = _kame_identity_of(model)
+        if ident == origin or now_m < _KAME_FALLBACK_SKIP.get(ident, 0.0):
+            continue
+        try:
+            keys = _get_all_api_keys(model)
+        except Exception:
+            keys = []
+        if not _kame_entry_usable(ident, keys):
+            continue
+        method = getattr(model, ctx["entry_name"], None)
+        if method is None:
+            continue
+        tried_any = True
+        kwargs = dict(ctx.get("kwargs") or {})
+        # The previous answer's provider-side state belongs to the configured
+        # model; the fallback model reads the whole conversation instead.
+        kwargs.pop("previous_response_id", None)
+        kwargs.pop("responses_input_items", None)
+        _kame_event("model_switch", origin, reason=f"{reason}: answering with {entry['label']}")
+        token = _KAME_FALLBACK_HOP.set({"origin": origin, "to": ident})
+        try:
+            result = await method(
+                system_message="", user_message="", messages=list(ctx["messages"]),
+                response_callback=ctx.get("response_callback"),
+                reasoning_callback=ctx.get("reasoning_callback"),
+                tokens_callback=ctx.get("tokens_callback"),
+                rate_limiter_callback=ctx.get("rate_limiter_callback"),
+                **kwargs)
+        except _KameSwitchModel as exc:
+            _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
+            _kame_event("model_switch", ident, reason=f"{entry['label']} cannot answer either ({exc.reason}): next")
+            continue
+        except Exception as exc:
+            if _KAME_PASSTHROUGH_EXC and isinstance(exc, _KAME_PASSTHROUGH_EXC):
+                raise
+            if (ctx.get("progress") or {}).get("any") or (ctx.get("progress") or {}).get("reasoning"):
+                raise  # it started answering, then failed: that error is the answer
+            _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
+            _kame_event("surfaced", ident, reason=f"{entry['label']} failed: next model",
+                        code=_evidence_status(exc), detail=str(exc))
+            continue
+        finally:
+            _KAME_FALLBACK_HOP.reset(token)
+        with _KAME_LOCK:
+            _KAME_SPEED_STATS["model_switches"] += 1
+            _KAME_LAST_MODEL_SWITCH.clear()
+            _KAME_LAST_MODEL_SWITCH.update({"from": origin, "to": entry["label"], "reason": reason,
+                                            "at": time.time()})
+        if _lvl_normal():
+            PrintStyle.warning(f"[KAME] Chat|{ctx.get('model_short', '')} ↪ answered by "
+                               f"{entry['label']} ({reason})")
+        return result
+    ctx["fallback_next_walk"] = time.monotonic() + (_KAME_FALLBACK_RETRY_S if tried_any else 5.0)
+    return _KAME_NO_SWITCH
+
+
+#: v1.8.2.7 (Hermes 1.8.2.6 "still waiting"): every call KAME is running, so
+#: the panel can say which job has been waiting, on which model, for how long,
+#: and after how many refusals. Counts and KAME's own words only.
+_KAME_IN_FLIGHT = {}
+_KAME_IN_FLIGHT_SHOW_AFTER_S = 60.0
+
+
+def _kame_in_flight_rows(now=None, min_age=_KAME_IN_FLIGHT_SHOW_AFTER_S) -> list:
+    now = time.time() if now is None else now
+    rows = []
+    with _KAME_LOCK:
+        flights = [dict(v) for v in _KAME_IN_FLIGHT.values()]
+    for f in flights:
+        age = now - float(f.get("started") or now)
+        if age >= min_age:
+            f["seconds"] = round(age, 1)
+            rows.append(f)
+    rows.sort(key=lambda r: -r["seconds"])
+    return rows[:20]
+
+
+def speed_report() -> dict:
+    """For the panel: backups, bursts, model switches and the last switch."""
+    with _KAME_LOCK:
+        out = dict(_KAME_SPEED_STATS)
+        out["last_model_switch"] = dict(_KAME_LAST_MODEL_SWITCH)
+    out["hedge_mode"] = _KAME_HEDGE_MODE
+    out["fallback_models"] = [dict(e) for e in _KAME_FALLBACK_MODELS]
+    out["failover_after_seconds"] = _KAME_FAILOVER_AFTER_S
+    return out
+
+
 async def _kame_carousel(self, ctx):
     """The eternal carousel: pick the healthiest key, let A0 make the call, learn.
 
@@ -3971,8 +5681,47 @@ async def _kame_carousel(self, ctx):
     _call_id = secrets.token_hex(8)   # collision-resistant id tying calls.jsonl rows together
     _no_clock_fix = set()   # v1.8.1.2: keys whose refusal this call no wait can fix
     _last_failed_key = None
+    # v1.8.2.7: what the fallback list, the burst and the wait bound read.
+    _last_exc = None        # the last refusal, for "stop waiting" and the fallback walk
+    _last_kind = ""
+    _timeouts = 0           # timeouts in a row on this call
+    _long_rests = 0         # refusals in a row that rested a key a minute or more
+    _burst_round = 0
+    _denied = {}            # key -> status, for keys that refused this model on this call
+    _busy_keys = set()      # v1.8.2.8: keys that failed on the provider's side (busy)
+
+    def _absorb_race(skip=None):
+        """The refusals a race judged on its own legs feed the 'every key refused'
+        rules and the in-flight counter, whatever the attempt ended with (an
+        error, or an empty answer: third review P1/P4)."""
+        judged = ctx.pop("race_judged", None) or []
+        for _rk, _rkind, _rsc, _rexc in judged:
+            if _rk == skip:
+                continue
+            if _rkind == "denied":
+                _denied[_rk] = _rsc
+            else:
+                _denied.pop(_rk, None)
+            if _rkind == "insufficient_quota" and _no_clock_fixes(_rexc):
+                _no_clock_fix.add(_rk)
+            else:
+                _no_clock_fix.discard(_rk)
+        _fl = ctx.get("flight")
+        if judged and isinstance(_fl, dict):
+            _fl["refusals"] = int(_fl.get("refusals") or 0) + len([j for j in judged if j[0] != skip])
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
+
+        # v1.8.2.7: a call running on a model of the fallback list is bounded.
+        # Without this, a storm of short refusals there (busy server, 1 s each)
+        # rotated for ever and the configured model was never tried again in
+        # this call (review 2026-10-17, M1). Back to the outer call, which tries
+        # the next entry or waits for the configured model.
+        if (_KAME_FALLBACK_HOP.get() is not None and _kame_main(ctx) and _kame_nothing_shown(ctx)
+                and time.perf_counter() - _call_started_at > max(_kame_switch_threshold(identity, ctx),
+                                                                 _KAME_HOP_BOUND_MIN_S)):
+            _kame_wait_notice_finish(st, "stopped")
+            raise _KameSwitchModel("no answer in time on this fallback model", _last_exc)
 
         # v1.0.2: once past the clean first attempt (i.e. we are rotating or
         # cooling), honor a queued user message / "nudge" so KAME never sleeps
@@ -3985,6 +5734,34 @@ async def _kame_carousel(self, ctx):
         _select_ms = (time.perf_counter() - _select_t0) * 1000.0
 
         if status == "EXHAUSTED_RETRY" and not _KAME_CAROUSEL_DISABLED:
+            # v1.8.2.7: every key resting longer than `failover_after_seconds`
+            # (or resting that long already): the next model of KAME's list
+            # answers, if the list has one that can.
+            # v1.8.2.8: the clock is the user's wait (a 503 rests a key 1 s,
+            # so "every key resting long" never came in an overload storm).
+            _eta_fo = _next_recovery_seconds(identity, all_keys)
+            _thr = _kame_switch_threshold(identity, ctx)
+            _waited = time.perf_counter() - _call_started_at
+            _busy_now = _KAME_MODEL_SWITCH != "never" and _kame_is_busy(identity, _busy_keys)
+            if _thr > 0 and (_busy_now or _eta_fo is None or _eta_fo > _thr or _waited + (_eta_fo or 0) > _thr):
+                _switched = await _kame_switch_model(
+                    self, ctx, "your provider is busy" if _busy_now else "every key resting", _last_exc)
+                if _switched is not _KAME_NO_SWITCH:
+                    _kame_wait_notice_finish(st, "resumed")
+                    return _switched
+            # v1.8.2.7: the bound the user set on waiting (0 = wait for ever).
+            if _KAME_MAX_TOTAL_WAIT_S > 0 and st.cold_since and \
+                    time.time() - st.cold_since >= _KAME_MAX_TOTAL_WAIT_S:
+                _kame_wait_notice_finish(st, "stopped")
+                _kame_event("surfaced", identity,
+                            reason=f"stopped waiting after {_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} "
+                                   "(max_total_wait_seconds)")
+                if _last_exc is not None:
+                    raise _kame_with_retry_hint(_last_exc, _last_kind)
+                raise RuntimeError(
+                    f"KAME: every key of {identity} is resting; stopped waiting after "
+                    f"{_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} (max_total_wait_seconds). "
+                    "The keys come back on their own; retrying later will very likely succeed.")
             if st.sleep_count == 0:
                 _eta_now = _next_recovery_seconds(identity, all_keys)
                 _kame_event("wait", identity,
@@ -4023,15 +5800,34 @@ async def _kame_carousel(self, ctx):
         # v1.6.0.4: "anything" means the ANSWER. Reasoning is reset alongside it
         # and recorded apart, because a model that thinks and then says nothing is
         # the empty answer this loop is here to rotate around.
+        if ctx["progress"].get("any") or ctx["progress"].get("reasoning"):
+            ctx["shown"] = True   # v1.8.2.7: never switch model after anything reached the screen
         ctx["progress"]["any"] = False
         ctx["progress"]["reasoning"] = False
         ctx["progress"]["first_sign_at"] = None
         ctx["progress"]["first_text_at"] = None
 
+        # v1.8.2.7: two long rests in a row means the pool is running dry: ask
+        # 4, then 8, then 16 ready keys at once (chat only; off with
+        # hedge_mode off). First answer wins; the rest are cancelled.
+        _burst = []
+        if (_long_rests >= 2 and _kame_main(ctx) and _KAME_PROBE_BURST_MAX > 0
+                and _kame_hedge_mode() != "off" and not _KAME_CAROUSEL_DISABLED
+                and _kame_burst_allowed(identity, all_keys, ctx)):
+            _size = min(_KAME_BURST_SIZES[min(_burst_round, len(_KAME_BURST_SIZES) - 1)],
+                        _KAME_PROBE_BURST_MAX)
+            _burst = _kame_pick_more(identity, all_keys, {key}, _size - 1)
+            if _burst:
+                _burst_round += 1
+
         _attempt_t0 = time.perf_counter()
         _attempt_wall = time.time()
+        _absorb_race()   # nothing judged before this attempt may be lost
+        _kame_prepare_continuation(self, ctx, identity)
         try:
-            result = await ctx["attempt"](self, key, ctx)
+            result, key = await _kame_raced_attempt(
+                self, ctx, key, burst_keys=_burst, attempt_no=attempt_no, call_id=_call_id,
+                call_started_at=_call_started_at, st=st)
 
             # v1.0.6 / v1.0.9: an answer with no content at all. Usually a transient
             # provider hiccup or a safety-filtered completion - the KEY is fine - so
@@ -4045,8 +5841,12 @@ async def _kame_carousel(self, ctx):
             # deliberately returned a blank result (a blank early stop). That is a
             # valid answer from a HEALTHY key - never rotate on it. Only a call
             # where literally nothing streamed can be a dead-key symptom.
+            if ctx.get("stitcher") is not None:
+                # v1.8.2.7: a continued answer is the whole answer the user saw.
+                result = await _kame_finish_continuation(ctx, result)
             if (_empty_budget > 0 and not ctx["progress"]["any"]
                     and _kame_result_is_empty(result)):
+                _absorb_race()
                 _empty_budget -= 1
                 _empty_counts[key] = _empty_counts.get(key, 0) + 1
                 _kame_timing(identity, key, attempt_no, "empty", "", None, _attempt_wall,
@@ -4067,6 +5867,8 @@ async def _kame_carousel(self, ctx):
                 continue
 
             _mark_key_health(identity, key, True)
+            _kame_learn_key(identity, key, ctx, _attempt_wall)
+            _kame_after_answer(identity, ctx, _call_started_at)
             _kame_timing(identity, key, attempt_no, "ok", "", None, _attempt_wall,
                          ctx, _call_started_at, st, None, "", _call_id)
             if _last_failed_key is not None:
@@ -4121,6 +5923,11 @@ async def _kame_carousel(self, ctx):
             # silent: print nothing on a successful call.
             return result
 
+        except asyncio.CancelledError:
+            # v1.8.2.7 (second review N10): the user stopped the call; a waiting
+            # notice from an earlier sleep must not stay on screen.
+            _kame_wait_notice_finish(st, "stopped")
+            raise
         except Exception as e:
             # Fix A (v1.0.1): A0 control-flow exceptions must propagate, never be
             # retried as a failed API call (restores native nudge handling). With
@@ -4129,24 +5936,59 @@ async def _kame_carousel(self, ctx):
             if _KAME_PASSTHROUGH_EXC and isinstance(e, _KAME_PASSTHROUGH_EXC):
                 _kame_wait_notice_finish(st, "stopped")
                 raise
+            if isinstance(e, _KameSwitchModel):
+                _kame_wait_notice_finish(st, "stopped")
+                raise
+            # v1.8.2.7 (Hermes stitching): a provider that will not continue
+            # from the model's own turn says so in a 400. That is the shape of
+            # the continuation, not the key and not the request: learn it once
+            # and continue with a trailing user turn instead.
+            if (ctx.get("stitcher") is not None and _KS is not None and identity not in _KAME_NO_PREFILL
+                    and _KS.refuses_prefill(_evidence_text(e))):
+                _KAME_NO_PREFILL.add(identity)
+                _kame_event("recovery", identity, getattr(e, "_kame_leg_key", key),
+                            reason="provider refuses a prefill: continuing with a user turn")
+                await asyncio.sleep(0)
+                continue
+            # v1.8.2.7: with backups, the leg that failed last is the one judged.
+            key = getattr(e, "_kame_leg_key", key)
+            _leg_elapsed = getattr(e, "_kame_leg_elapsed", None)
             # Only a genuinely TERMINAL error surfaces — everything else (incl. a
             # transient mid-stream drop) is cooled + rotated, never re-raised
             # (the v1.0.4 eternal-carousel promise).
             if _is_terminal_error(e):
                 _kame_wait_notice_finish(st, "stopped")
                 _sc_t = _evidence_status(e)
-                _kame_event("surfaced", identity, key, reason="not a key problem: handed to Agent Zero",
+                _kame_event("surfaced", identity, key, reason="the provider rejected the request itself; another key would get the same answer",
                             code=_sc_t, detail=str(e))
                 _kame_timing(identity, key, attempt_no, "terminal", "", _sc_t, _attempt_wall,
                              ctx, _call_started_at, st, None, "", _call_id)
                 if _KJ is not None:
                     _KJ.record_refusal(identity=identity, key=key, exc=e, status=_sc_t,
                                        kind="terminal")
+                try:
+                    _kame_with_retry_hint(e, _classify_error(e)[1])
+                except Exception:
+                    pass
                 raise e
             # v1.6.0.4: "partial output" has to mean output. Until now this line
             # was printed for any turn where the model had merely thought, which
             # on a reasoning model is every turn, and it told the reader their
             # answer had been cut when nothing had been shown at all.
+            if ctx["progress"]["any"]:
+                # v1.8.2.7: what the user saw is continued on the next key.
+                ctx["stitch_seen"] = ctx["progress"].get("full_text") or ctx.get("stitch_seen", "")
+            _prev_stitch = ctx.get("stitcher")
+            if _prev_stitch is not None:
+                # Hermes: "continues while the answer makes progress; no-progress
+                # repetition still stops on evidence". A continuation that
+                # streamed and added nothing, twice: start the answer again.
+                if ctx["progress"].get("first_sign_at") and not _prev_stitch.forwarded:
+                    ctx["resume_noprogress"] = int(ctx.get("resume_noprogress") or 0) + 1
+                    if ctx["resume_noprogress"] >= 2:
+                        ctx.pop("stitch_seen", None)
+                elif _prev_stitch.forwarded:
+                    ctx["resume_noprogress"] = 0
             if ctx["progress"]["any"] and _lvl_normal():
                 PrintStyle.warning(
                     f"[KAME] {call_type}|{model_short} {_key_display(key)} "
@@ -4168,10 +6010,39 @@ async def _kame_carousel(self, ctx):
             # never allowed to retire anything.
             # v1.8.1.0: one function decides, rests and names the rung — the
             # same one the tests and the answer-key gate drive.
-            applied, kind, sc, _rung, _sized_by = _kame_decide_failure(
-                identity, key, e, elapsed=time.perf_counter() - _attempt_t0
-            )
-            _tally_failure(identity, kind, sc, _sized_by)
+            _pre = getattr(e, "_kame_judged", None)
+            if _pre and _pre[0] != key:
+                _pre = None   # the same exception object on another key: judge this one (third review P2)
+            if _pre:
+                # Judged inside the race (a leg's own verdict): not twice.
+                _k0, applied, kind, sc, _rung, _sized_by = _pre
+            else:
+                applied, kind, sc, _rung, _sized_by = _kame_decide_failure(
+                    identity, key, e,
+                    elapsed=_leg_elapsed if _leg_elapsed is not None else time.perf_counter() - _attempt_t0
+                )
+                _tally_failure(identity, kind, sc, _sized_by)
+            # Second review N1: keys refused inside a race count for the "every
+            # key refused" rules exactly as keys refused one by one.
+            _absorb_race(skip=key)
+            _last_exc = e
+            _flight = ctx.get("flight")
+            if isinstance(_flight, dict):
+                _flight["refusals"] = int(_flight.get("refusals") or 0) + 1
+                _flight["last"] = _KAME_EVENT_REASON.get(kind, kind)
+            _timeouts = _timeouts + 1 if kind == "timeout" else 0
+            try:
+                # A spent daily / account quota, not a per-minute counter: a
+                # 65 s per-minute rest is pressure, and asking more keys at
+                # once would deepen it (review 2026-10-17, H2).
+                _long_rests = _long_rests + 1 if (float(applied or 0) >= _KAME_BURST_LONG_REST_S
+                                                  and kind != "per_minute") else 0
+            except (TypeError, ValueError):
+                _long_rests = 0
+            if kind == "denied":
+                _denied[key] = sc
+            else:
+                _denied.pop(key, None)
             # v1.8.1.2 (owner decision, same rule as Hermes): a billing refusal
             # naming a missing entitlement -- `usage_not_included`, or Google's
             # FAILED_PRECONDITION "location not supported without billing" --
@@ -4182,14 +6053,15 @@ async def _kame_carousel(self, ctx):
                 _no_clock_fix.add(key)
             else:
                 _no_clock_fix.discard(key)
-            _kame_event(_kame_event_kind(kind), identity, key,
-                        reason=_KAME_EVENT_REASON.get(kind, kind), code=sc,
-                        seconds=applied, detail=str(e), sized_by=_rung or _sized_by)
-            _kame_timing(identity, key, attempt_no, "refused", kind, sc, _attempt_wall,
-                         ctx, _call_started_at, st, applied, _rung or _sized_by, _call_id)
-            if _KJ is not None:
-                _KJ.record_refusal(identity=identity, key=key, exc=e, status=sc, kind=kind,
-                                   rest=applied, sized_by=_rung or _sized_by)
+            if not _pre:
+                _kame_event(_kame_event_kind(kind), identity, key,
+                            reason=_KAME_EVENT_REASON.get(kind, kind), code=sc,
+                            seconds=applied, detail=str(e), sized_by=_rung or _sized_by)
+                _kame_timing(identity, key, attempt_no, "refused", kind, sc, _attempt_wall,
+                             ctx, _call_started_at, st, applied, _rung or _sized_by, _call_id)
+                if _KJ is not None:
+                    _KJ.record_refusal(identity=identity, key=key, exc=e, status=sc, kind=kind,
+                                       rest=applied, sized_by=_rung or _sized_by)
             _last_failed_key = key
             if kind in ("auth", "revoked"):
                 # v1.0.6: a refused credential is an actionable problem — always
@@ -4211,17 +6083,53 @@ async def _kame_carousel(self, ctx):
             # iteration picks a DIFFERENT key, and once all keys are sick
             # _get_best_key returns EXHAUSTED_RETRY and the ETA-driven sleep takes
             # over. Net effect: near-instant failover.
+            _last_kind = kind
+            if _kame_busy_failure(identity, key, kind, sc):
+                _busy_keys.add(key)
+                if len(_busy_keys) == 2:
+                    _kame_note_busy(identity)
             if _KAME_CAROUSEL_DISABLED:
                 # v1.8.1.0: the key is sized and rested above; what happens
                 # next is Agent Zero's own retry, exactly as without KAME.
                 _kame_wait_notice_finish(st, "stopped")
-                raise e
-            if _no_clock_fix and set(all_keys) <= _no_clock_fix:
+                raise _kame_with_retry_hint(e, kind)
+            # v1.8.2.7: the four states where this model cannot answer now.
+            # The fallback list answers when it can; without one, Agent Zero
+            # would end the task on a raised error, so only what no wait can fix
+            # is handed back - everything else keeps rotating as in 1.8.1.8.
+            _all = set(all_keys)
+            _no_fix = bool(_no_clock_fix) and _all <= _no_clock_fix
+            _all_denied = bool(_denied) and _all <= set(_denied) and len(set(_denied.values())) == 1
+            _door = _kame_closed_door(e)
+            _why = ("the provider has no server for this model right now" if _door
+                    else "every key: plan or country does not allow this" if _no_fix
+                    else "every key refused this model" if _all_denied
+                    else "no answer in time, twice in a row" if (_timeouts >= 2 and _kame_main(ctx))
+                    # v1.8.2.8: a busy provider moves at once ("auto"); otherwise
+                    # once the user has waited past the switch time.
+                    else "your provider is busy" if (_KAME_MODEL_SWITCH != "never"
+                                                    and _kame_is_busy(identity, _busy_keys))
+                    else "no answer in time" if (0 < _kame_switch_threshold(identity, ctx)
+                                                 < time.perf_counter() - _call_started_at)
+                    else "")
+            if _why:
+                _switched = await _kame_switch_model(self, ctx, _why, e)
+                if _switched is not _KAME_NO_SWITCH:
+                    _kame_wait_notice_finish(st, "resumed")
+                    return _switched
+            if _no_fix or _all_denied:
                 _kame_wait_notice_finish(st, "stopped")
                 _kame_event("surfaced", identity, key,
-                            reason="every key: plan or country does not allow this; handed to Agent Zero",
+                            reason=f"{_why}; handed to Agent Zero",
                             code=sc, detail=str(e))
-                raise e
+                raise _kame_with_retry_hint(e, "denied" if _all_denied else kind)
+            if _door:
+                # One closed door for every key: the whole pool waits for it
+                # (the provider's own number when it gave one), instead of each
+                # key knocking once a second.
+                _door_wait = max(_KAME_CLOSED_DOOR_REST_S, float(_stated_server_delay(e) or 0))
+                _kame_rest_pool_for_door(identity, all_keys, _door_wait)
+                _kame_event("wait", identity, reason=f"{_why}: every key waits", seconds=_door_wait)
             await asyncio.sleep(0)
             continue
 
@@ -4248,12 +6156,24 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
     and fixed it in the same release.
     """
     progress = ctx["progress"]
+    ctx["a0_response_callback"] = response_callback
 
     if response_callback is None:
         wrapped_response = None
     else:
         async def wrapped_response(delta, full):
+            stitcher = ctx.get("stitcher")
+            if stitcher is not None:
+                # v1.8.2.7: a continuation. The stitcher drops what repeats the
+                # answer already on screen; Agent Zero sees one growing answer.
+                if not progress.get("first_sign_at"):
+                    progress["first_sign_at"] = time.time()
+                shown = stitcher.feed(delta or "")
+                if not shown:
+                    return None
+                delta, full = shown, (ctx.get("stitch_seen") or "") + stitcher.forwarded
             progress["any"] = True
+            progress["full_text"] = full
             if not progress.get("first_text_at"):
                 progress["first_text_at"] = time.time()
             if not progress.get("first_sign_at"):
@@ -4318,6 +6238,7 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
         identity = f"{provider}:{model}"
 
         all_keys = _get_all_api_keys(self)
+        identity = _kame_identity_with_region(identity, self, kwargs, model, all_keys)
 
         # v1.8.1.0: `rotation_disabled` hands every call back exactly as if
         # KAME were not installed — the same door as a single-key config.
@@ -4373,6 +6294,9 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
             "rate_limiter_callback": rate_limiter_callback,
             "retry_knobs": _kame_retry_knobs(original),
             "progress": {"any": False, "reasoning": False},
+            # v1.8.2.7: which entry point this is, so a fallback model is
+            # called through the same one (unified_call / unified_turn).
+            "entry_name": entry_name,
         }
         (ctx["response_callback"],
          ctx["reasoning_callback"],
@@ -4380,7 +6304,21 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
             ctx, response_callback, reasoning_callback, tokens_callback
         )
 
-        return await _kame_carousel(self, ctx)
+        ctx["main_chat"] = _kame_is_main_chat(stream)
+        _job = "chat" if ctx["main_chat"] else (
+            "compress" if "Compress" in (_KAME_CALL_CONTEXT.get() or "") else "utility")
+        _job_token = _KAME_JOB.set(_job)
+        _flight_id = secrets.token_hex(6)
+        ctx["flight"] = {"job": _job, "identity": identity, "started": time.time(),
+                         "refusals": 0, "last": "", "fallback": bool(_KAME_FALLBACK_HOP.get())}
+        with _KAME_LOCK:
+            _KAME_IN_FLIGHT[_flight_id] = ctx["flight"]
+        try:
+            return await _kame_carousel(self, ctx)
+        finally:
+            with _KAME_LOCK:
+                _KAME_IN_FLIGHT.pop(_flight_id, None)
+            _KAME_JOB.reset(_job_token)
 
     _kame_entry.__name__ = f"_kame_{entry_name}"
     _kame_entry.__qualname__ = f"_kame_{entry_name}"
@@ -4639,7 +6577,47 @@ def _kame_bind_entry_points(cls) -> int:
             continue
 
     _KAME_BOUND_ENTRY_POINTS = bound
+    _kame_check_host_seams(cls, bound, layer)
     return layer if bound else 3
+
+
+#: v1.8.2.7 (Hermes 1.8.2.3 `check_host_seams`): what KAME found when it bound,
+#: named on the panel. The parameters it calls Agent Zero's model method with;
+#: one gone means a change upstream the upgrade checker would also flag.
+_KAME_SEAM_PARAMS = ("messages", "response_callback", "reasoning_callback", "tokens_callback",
+                     "rate_limiter_callback", "explicit_caching")
+_KAME_HOST_SEAMS = {}
+
+
+def _kame_check_host_seams(cls, bound, layer) -> None:
+    import inspect as _inspect
+    _KAME_HOST_SEAMS.clear()
+    _KAME_HOST_SEAMS["layer"] = layer
+    _KAME_HOST_SEAMS["entry_points"] = {}
+    for name in bound:
+        try:
+            original = getattr(cls, f"_kame_original_{name}", None) or getattr(cls, name)
+            params = _inspect.signature(_inspect.unwrap(original)).parameters
+            names = set(params)
+            missing = [p for p in _KAME_SEAM_PARAMS if p not in names]
+            takes_kwargs = any(p.kind is _inspect.Parameter.VAR_KEYWORD for p in params.values())
+            if not takes_kwargs:
+                missing.append("**kwargs (api_key)")
+            _KAME_HOST_SEAMS["entry_points"][name] = {"ok": not missing, "missing": missing}
+        except Exception as exc:
+            _KAME_HOST_SEAMS["entry_points"][name] = {"ok": False, "missing": [f"unreadable: {type(exc).__name__}"]}
+    try:
+        import models as _models  # the fallback list's factory
+        _KAME_HOST_SEAMS["fallback_factory"] = bool(getattr(_models, "get_chat_model", None)
+                                                    and getattr(_models, "ModelConfig", None))
+    except Exception:
+        _KAME_HOST_SEAMS["fallback_factory"] = False
+
+
+def host_seams() -> dict:
+    out = dict(_KAME_HOST_SEAMS)
+    out["entry_points"] = {k: dict(v) for k, v in (_KAME_HOST_SEAMS.get("entry_points") or {}).items()}
+    return out
 
 
 def _kame_unbind_entry_points(cls) -> None:
@@ -4837,5 +6815,5 @@ def _print_shield_status():
         PrintStyle(font_color="#96E").print(
             "  Note: keys are shown as anonymized ids (e.g. 'k3f9a1') — NOT your real keys."
         )
-    PrintStyle(font_color="#96E").print("  API Rotation — Want to donate? BTC: 36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ")
+    PrintStyle(font_color="#96E").print("  KAME API Rotation, made by KAME — https://github.com/Kame696")
     PrintStyle(font_color="#96E").print("=" * 55)

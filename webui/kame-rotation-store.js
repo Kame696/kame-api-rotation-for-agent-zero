@@ -123,7 +123,7 @@ function buildView(data) {
 
   // v1.8.1.0: the last few decisions, newest first — the same timeline
   // `/kame events` prints. KAME's own phrases and fingerprints only.
-  const GOOD = new Set(["switch", "recovery", "wait", "setting"]);
+  const GOOD = new Set(["switch", "recovery", "wait", "setting", "model_switch", "backup"]);
   const events = (Array.isArray(d.events) ? d.events : []).slice(0, 6).map((row) => {
     const when = new Date((Number(row?.at) || 0) * 1000);
     return {
@@ -137,9 +137,18 @@ function buildView(data) {
     };
   });
 
+  // v1.8.2.7: the model that answered, when KAME's fallback list did (shown
+  // for ten minutes after the switch).
+  const sw = (d.speed && d.speed.last_model_switch) || {};
+  const swAge = Date.now() / 1000 - (Number(sw.at) || 0);
+  const modelSwitch = sw.to && swAge >= 0 && swAge < 600
+    ? `Answered by ${sw.to} (${sw.reason || "your model could not answer"})`
+    : "";
+
   return {
     events,
     hasEvents: events.length > 0,
+    modelSwitch,
     available: !!d.available,
     active: !!d.active,
     version: String(d.version || ""),

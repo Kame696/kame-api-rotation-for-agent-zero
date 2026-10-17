@@ -6,15 +6,19 @@
 
 **Paste several API keys. KAME picks the healthiest one for every call, reads every refusal, and never lets a rate limit end your run.**
 
+> **1.8.2.8 — your next model the moment your provider is busy, everything automatic, the model of each reply on screen.** Two keys answering "overloaded" (or timing out) move the reply to your next fallback model at once; *Move to your next model* and *Wait for the first token* size themselves from what KAME learns about each model; every reply ends with one line naming the model that answered and how long it took. The same as Hermes inside the call, too: a cut answer continued on the next key, a silent key dropped, the agent told whether retrying helps. __A0_EVIDENCE_SHORT__
+
+> **1.8.2.7 — every provider learned, your own fallback models, faster when quota runs dry.** 82 providers learned from their own documentation (774 error shapes), a fallback model list KAME uses by itself (Agent Zero has none), keys asked together when a pool runs dry, backup keys for a slow first word, and a panel in Agent Zero's central menu with Events. Offline suites 27 / 27 suites green (88 new 1.8.2.7 tests); remote native acceptance on Agent Zero v2.12 / v2.13 / v2.14 (16 / 16 CI jobs green, 23 + 27 native checks per host). See [validation and limits](VALIDATION.md).
+
 > **1.8.1.8 — clean lifecycle and native interruption handling.** Uninstall/reload preserves other extensions, limiter patches no longer stack, and compression respects native stop/intervention exceptions. All 24 offline suites and remote native Agent Zero v2.12/v2.13 acceptance passed: [14 green CI jobs](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/37091291526). See [validation and limits](VALIDATION.md). No Agent Zero installation on the author's computer or real-provider 1.8.1.8 performance claim.
 
 > **Historical real-provider evidence (1.8.1.6).** 1.8.1.6 ran in a real Agent Zero v2.12 session with 14 real Gemini keys: 12/12 calls answered (6 sequential, 6 concurrent), 48 provider 503s rotated at 1s each, all 14 keys used. It also passed all 23 offline suites, the v2.13 compatibility harness, and a cross-port check that gives the same decision as Hermes on all 2,679 recorded refusals.
 
 Smart API key rotation, 429 / `RESOURCE_EXHAUSTED` recovery and rate-limit failover for [Agent Zero](https://github.com/agent0ai/agent-zero) — Gemini, OpenAI, OpenRouter, Anthropic, or any provider LiteLLM speaks to.
 
-[![Version](https://img.shields.io/badge/version-1.8.1.8-blue.svg)](CHANGELOG.md)
-[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.13-purple.svg)](#verified)
-[![Native host tests](https://img.shields.io/badge/remote_native_hosts-2%2F2_passed-brightgreen.svg)](#verified)
+[![Version](https://img.shields.io/badge/version-1.8.2.8-blue.svg)](CHANGELOG.md)
+[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.14-purple.svg)](#verified)
+[![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-rotation-for-agent-zero?style=social)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/stargazers)
@@ -32,7 +36,9 @@ Smart API key rotation, 429 / `RESOURCE_EXHAUSTED` recovery and rate-limit failo
 - **The healthiest key, every call** — not only after a failure. Fewest requests in the last 60 seconds wins, least recently used breaks the tie, and a key is marked busy the moment it is handed out, so parallel agents spread across the pool instead of piling on one key.
 - **It reads the error instead of guessing.** A per-minute throttle, a daily quota, an outage and a dead key are four different problems, and each gets its own wait — the provider's own number whenever it states one.
 - **No key sits out longer than an hour.**
-- **When every key is resting, it waits** for the first one back and says so in the chat, instead of failing the run. Agent Zero makes the call itself; KAME only chooses the key.
+- **When every key is resting, it waits** for the first one back and says so in the chat, instead of failing the run — or, if you listed **fallback models**, the next one answers. Agent Zero makes the call itself; KAME only chooses the key (and, from your list only, the model).
+- **Faster when it matters.** A reply still silent after twice its usual wait races a backup key; a pool running dry asks 4, then 8, then 16 keys at once.
+- **82 providers learned** from their own documentation — every provider native to Agent Zero among them.
 
 <a id="vs"></a>
 ## 🆚 KAME vs round-robin
@@ -112,10 +118,14 @@ Every refusal is sized from what the provider actually sent. Decisions are made 
 | **"This key is invalid / revoked"** | out of rotation at once — replace it and it comes back by itself |
 | **403 for one model only** | that key skips that model and keeps working on the others |
 | **Anything it cannot size** | a short rest and the next key; the error is never swallowed silently |
+| **A reply cut mid-stream** after words were shown | the next key is sent what you saw and goes on from there; only new words reach the chat |
+| **Accepted, then silence** (with `stream_silence_timeout_seconds` set) | that key is dropped after the wait and the next one tried |
+| **An error that has to go back to Agent Zero** | ends with one line telling the agent whether retrying helps: a temporary issue, a spent daily quota, or a cause only you can fix |
 
 <a id="screens"></a>
 ## 🖥️ What you see
 
+- **The KAME panel** in Agent Zero's central menu (menu → **KAME**): each pool, the counters (switched model, backup keys, keys asked together), a "still waiting" line, **Events** for your conversation, **Background jobs** apart, your **Fallback models**, and the **Settings** — editable in place.
 - **A rotation chip beside the composer** — how many keys are ready right now; a click shows every pool.
 - **A notice in the chat** when every key is resting for more than ~90 seconds: how many are resting, when the earliest is back, and that **stop still works**. Counts only — never a key — and it never enters the model's history.
 - **`/kame`** — build, pools, what is ready. **`/kame doctor`** — every kind of refusal beside the rest it got, how often it happened, and anything only a person can fix.
@@ -160,13 +170,26 @@ Every refusal is sized from what the provider actually sent. Decisions are made 
 <a id="settings"></a>
 ## ⚙️ Settings
 
-Nothing needs changing. Every setting is on the plugin's settings page and in `/kame get` / `/kame set`; most also read an environment variable with the **same name as on the Hermes port** (the environment wins).
+Nothing needs changing. Six settings are on show; the rest sit under **Show advanced settings**, and the switches that turn a part of KAME off are folded under **Troubleshooting**. Every setting is also in the KAME panel and in `/kame get` / `/kame set`; most read an environment variable with the **same name as on the Hermes port** (the environment wins).
 
 <details>
 <summary><b>The ones worth knowing</b></summary>
 
 | Setting | Default | What it does |
 |---|---|---|
+| `fallback_models` | empty | Your fallback models, one `provider/model` per line (optional `@ api_base`). When your chat model cannot answer and nothing has been shown yet, the first that can answers. Empty = never switch (`KAME_FALLBACK_MODELS`) |
+| `model_switch` | `auto` | Move to your next model: `auto` at once when your provider is busy, otherwise after about three times your model's usual first-word time (6–20 s, learned); `timed` after the number below; `never` (`KAME_MODEL_SWITCH`) |
+| `failover_after_seconds` | `60` | With `model_switch: timed`: seconds you wait with nothing on screen before the next model answers (`KAME_FAILOVER_AFTER`) |
+| `reply_notice` | `always` | One line when a reply ends: its time and the model of each step; `switches` = only when a fallback model answered; `never` (`KAME_REPLY_NOTICE`) |
+| `max_total_wait_seconds` | `0` | Stop waiting and show the error after this; `0` = wait as long as it takes (`KAME_MAX_TOTAL_WAIT`) |
+| `hedge_mode` | `adaptive` | Speed: Balanced (`adaptive`) races a backup key for a slow first word and asks keys together when quota runs dry; Fastest (`max`) races every reply; Saver (`off`) one key at a time (`KAME_HEDGE_MODE`) |
+| `probe_burst_max_legs` | `16` | Most keys asked together when quota runs dry; `0` = one by one (`KAME_PROBE_BURST`) |
+| `first_token_wait` | `auto` | Wait for the first token: `auto` drops a key silent far past its model's usual first word (20–120 s, 60–300 s for thinking models; never a local model); `timed` the number below; `off` (`KAME_FIRST_TOKEN_WAIT`) |
+| `stream_silence_timeout_seconds` | `0` | With `first_token_wait: timed`: seconds a key may stay silent (`KAME_STREAM_SILENCE_TIMEOUT`) |
+| `stream_resume_limit` | `-1` | A reply cut mid-stream is continued on the next key from where it stopped, shown once; `-1` = while it progresses, `0` = start again (`KAME_STREAM_RESUME_LIMIT`) |
+| `pacing_rpm_overrides` | empty | Requests per minute per model, e.g. `google:gemini/gemini-2.5-flash=10`; KAME also learns them from real 429s (`KAME_PACING_RPM_OVERRIDES`) |
+| `key_region_overrides` | empty | Region per key for Vertex / Bedrock behind an endpoint that hides it, `k3f9a1=us-central1` (`KAME_KEY_REGION_OVERRIDES`) |
+| `hedge_budget_pct` · `hedge_burst` · `hedge_quantile` · `hedge_cold_s` · `hedge_cold_reasoning_s` · `hedge_max_prompt_tokens` | `10` · `3` · `90` · `6` · `30` · `32000` | The speed boost's numbers, same as Hermes (`KAME_HEDGE_*`) |
 | `max_hold_seconds` | `3600` | No key sits out longer than this (`KAME_MAX_HOLD`) |
 | `unsized_throttle_backoff` | on | The 1-2-4-8s ladder for Gemini's bare `RESOURCE_EXHAUSTED` (`KAME_UNSIZED_BACKOFF`) |
 | `unsized_backoff_max_seconds` | `64` | Where that ladder stops growing (`KAME_UNSIZED_BACKOFF_MAX`) |
@@ -182,6 +205,8 @@ Nothing needs changing. Every setting is on the plugin's settings page and in `/
 | `rotation_disabled` | off | Turn KAME off without uninstalling it (`KAME_ROTATION_DISABLED`) |
 | `spread_disabled` | off | First ready key in the order written, not the least loaded (`KAME_SPREAD_DISABLED`) |
 | `carousel_disabled` | off | One attempt per call; the error goes back to Agent Zero (`KAME_CAROUSEL_DISABLED`) |
+| `hedging_disabled` | off | No backups and no keys asked together: one key at a time (`KAME_HEDGING_DISABLED`) |
+| `stream_stitch_disabled` | off | A cut reply starts again instead of continuing (`KAME_STREAM_STITCH_DISABLED`) |
 
 </details>
 
@@ -198,6 +223,11 @@ Nothing needs changing. Every setting is on the plugin's settings page and in `/
 
 | Check | Result |
 |---|---|
+| **1.8.2.7** — remote native acceptance, real Agent Zero v2.12 / v2.13 / v2.14, real LiteLLM/OpenAI SDK over local TCP | 16 / 16 CI jobs green, 23 + 27 native checks per host: a backup key answered before a slow key's 4 s; the fallback list answered through Agent Zero's own model factory when every key rested and on a closed door, and the next call went back to the configured model; the panel's API answered in the host's real plugin layout, no key in any report |
+| **1.8.2.7** — provider answer keys, 82 providers, 774 documented error shapes | family 674 · action 675 (Hermes 1.8.2.7: 670 · 670); same floors in the LiteLLM shape (670 · 674) |
+| **1.8.2.7** — upgrade check | **15 / 15** patch points and **16 / 16** host facts on v2.12, v2.13 and v2.14 |
+| **1.8.2.7** — offline suites | 27 / 27 suites green (88 new 1.8.2.7 tests) |
+| **1.8.2.7** — three adversarial reviews | 4 high and 8 medium findings, all fixed, each pinned by a test that fails on the build the review read |
 | Two real sessions — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | **26 / 26 answered**, 16 of them concurrent; 13 real `503`s absorbed at 1s each; all 14 keys carried traffic |
 | A third real session, after the parity work — Agent Zero v2.12, real LiteLLM, NVIDIA NIM, 2 real keys | **12 / 12 answered**, 6 of them concurrent, the two keys sharing the load evenly; every refusal, hold and timing written to disk with **no key fragment** in any file. The same day's Gemini pool (14 keys) was out of its daily quota: every key got a `PerDay` refusal, a 5-minute re-probe, and the holds survived a restart of the process; a retired model (`410 Gone`) was handed back to Agent Zero instead of rotated |
 | A fourth real session, on 1.8.1.6 — Agent Zero v2.12 code, real LiteLLM, 14 real Gemini keys | **12 / 12 answered**, 6 of them concurrent; 48 real `503`s absorbed at 1s each; all 14 keys carried traffic |
@@ -229,6 +259,8 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.2.8** | Busy providers, automatic waits, who answered | Two keys "overloaded" or timing out move the reply to your next fallback model at once (the busy model left alone for a while); the switch counts your wait; *Move to your next model* and *Wait for the first token* are Automatic, learned per model; a line naming the model and time ends every reply. Hermes parity inside the call: cut answers continued, silent keys dropped, retry hints the agent reads, learned pacing, the faster key first, region in the pool. |
+| **v1.8.2.7** | Every provider learned, your own fallback models, faster when quota runs dry | 82 providers learned from their own documentation (774 error shapes, A0 ≥ Hermes on every field). A fallback model list KAME uses by itself — Agent Zero has none. Backup keys for a slow first word; 4 → 8 → 16 keys asked together when a pool runs dry. A panel in the central menu: Overview, Events, Background jobs, Fallback models, Settings. Six settings on show, `max_total_wait_seconds` new. Remote native acceptance on v2.12 / v2.13 / v2.14. |
 | **v1.8.1.8** | Clean lifecycle, native stops, remote acceptance | Owned bindings preserve foreign extensions and updated host methods on reload; rate limiter methods/locks restore cleanly; compression propagates stop/intervention. 18 targeted regressions, 24 suites, 14 CI jobs; native v2.12/v2.13 with actual SDK/TCP interruption tests. Classifier, selector and native execution preserved. |
 | **v1.8.1.6** | Keys land where Agent Zero reads them | `/kame-keys add` no longer takes the first word of a sentence for a provider (`add my keys sk-…` wrote into `API_KEY_MY`, which nothing reads): the word must be a provider Agent Zero knows, or one your `.env` already has keys for, otherwise KAME asks. `/kame-keys import` reads UTF-16 and UTF-32 files of either byte order. |
 | **v1.8.1.5** | Only keys go in; the ceiling holds *(inside the v1.8.1.6 release)* | `/kame-keys add` and `import` write only what looks like a key: the words around a paste ("my keys: …"), a whole `OPENAI_API_KEY=…` line or a key mangled by the copy (a zero-width space, smart quotes) no longer land in the `.env` as keys — the rejected ones are listed, masked. A rest can no longer outlast `max_hold_seconds` when the computer's clock steps back (a 30s rest had become two hours) or when the ceiling is lowered mid-rest. |
@@ -294,13 +326,11 @@ Yes: the right wait for each error, the one-hour ceiling, the chat notice and th
 
 The same engine, ported to the [Hermes agent](https://github.com/NousResearch/hermes-agent): **[kame-api-rotation-for-hermes](https://github.com/Kame696/kame-api-rotation-for-hermes)**.
 
-## ❤️ Support
+## 🐢 Author
 
-KAME is free, MIT, and built by one person against real quotas. No company, no telemetry, nothing to upsell. If it saved you a run, a tip keeps it going:
+KAME API Rotation is designed and built by **KAME** — [github.com/Kame696](https://github.com/Kame696). Free, MIT, built against real quotas: no company, no telemetry, nothing to upsell.
 
-**Bitcoin** — `36BGYhMEVFgY8PLGMVux93pjGt92KVM6dJ`
-
-And a ⭐ costs nothing and helps other people find it.
+If it saved you a run, a ⭐ on [the repository](https://github.com/Kame696/kame-api-rotation-for-agent-zero) costs nothing and helps other people find it.
 
 ## 📜 License
 

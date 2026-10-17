@@ -213,7 +213,7 @@ _src = open(os.path.join(os.path.dirname(__file__), "..", "kame_engine.py"), enc
 # (one function the loop, the tests and the answer-key gate share); the loop
 # only prints what it decided. Same promise, checked where it now lives.
 check("there is exactly ONE carousel auth-error call site left (stream handler is gone)",
-      _src.count("_is_auth_error(") == 3)  # def + _is_terminal_error + _kame_decide_failure
+      _src.count("_is_auth_error(") == 5)  # def + _is_terminal_error (x2) + _kame_decide_failure + _kame_rest_for_failure (v1.8.2.7 quirks)
 check("no 'if _lvl_normal():' gate right after the outer auth check",
       "if _lvl_normal():" not in _src.split('if kind in ("auth", "revoked"):')[1][:400])
 

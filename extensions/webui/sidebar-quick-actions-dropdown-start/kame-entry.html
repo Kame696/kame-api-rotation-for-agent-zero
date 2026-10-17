@@ -1,0 +1,12 @@
+<!-- KAME (1.8.2.7): the plugin's panel from Agent Zero's central menu, like Memory and Time Travel. -->
+<div x-data>
+  <button
+    x-move-after="#sidebar-files-dropdown"
+    class="dropdown-item"
+    id="kame-rotation-dropdown"
+    title="KAME - API key rotation"
+    @click="ensureModalOpen('/plugins/api_rotation_by_kame/webui/main.html'); $store.sidebar?.menuClose?.()">
+    <x-icon name="key"></x-icon>
+    <span>KAME</span>
+  </button>
+</div>

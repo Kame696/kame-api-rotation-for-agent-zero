@@ -275,6 +275,42 @@ HOST_FACTS = (
                "rendering its last good view for ever.",
     },
     {
+        "id": "Agent Zero still builds a chat model from a provider and a name",
+        "file": "models.py",
+        "needle": ["def get_chat_model(", "class ModelConfig", "def build_kwargs"],
+        "severity": "degraded",
+        "why": "1.8.2.7. KAME's fallback list builds each fallback model through "
+               "Agent Zero's own factory. If it moves, the list is skipped (an "
+               "event says so) and KAME waits for the configured model as before.",
+    },
+    {
+        "id": "the central menu still has the slot the KAME panel entry lives in",
+        "file": "webui/components/sidebar/top-section/quick-actions.html",
+        "needle": "sidebar-quick-actions-dropdown-start",
+        "severity": "degraded",
+        "why": "1.8.2.7. The KAME entry in the central menu (like Memory and Time "
+               "Travel). Without it the panel is still reachable from the chip's "
+               "'Open the KAME panel' button.",
+    },
+    {
+        "id": "modals can still be opened by path",
+        "file": "webui/js/modals.js",
+        "needle": "globalThis.ensureModalOpen",
+        "severity": "degraded",
+        "why": "1.8.2.7. Both doors into the KAME panel call ensureModalOpen.",
+    },
+    {
+        "id": "a raised model error still ends the task",
+        "file": "extensions/python/_functions/agent/Agent/handle_exception/end/"
+                "_90_handle_critical_exception.py",
+        "needle": "HandledException(exception)",
+        "severity": "note",
+        "why": "1.8.2.7. Why Agent Zero's port never 'hands back' the way Hermes "
+               "does: here a raise ends the user's task (after _error_retry's one "
+               "retry). So timeouts keep rotating and a closed door rests the "
+               "pool, unless the fallback list can answer.",
+    },
+    {
         "id": "the state snapshot is still schema-strict",
         "file": "helpers/state_snapshot.py",
         "needle": "unexpected=",

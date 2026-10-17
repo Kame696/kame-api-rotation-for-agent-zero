@@ -42,6 +42,104 @@ unsized_throttle_backoff: true
 # Environment override: KAME_UNSIZED_BACKOFF_MAX.
 unsized_backoff_max_seconds: 64
 
+# ---------------------------------------------------------------------------
+# v1.8.2.7. Your model fallback list. Agent Zero has no fallback chain of its
+# own, so KAME keeps one: when your chat model cannot answer (every key resting
+# longer than failover_after_seconds, the provider has no server for it, two
+# timeouts in a row, every key refused it, or no wait can fix it) and nothing
+# has been shown yet, KAME answers with the first of these that can. The next
+# call starts on your model again. One provider/model per line, Agent Zero's
+# provider ids (the same as in the model settings), keys from the same .env:
+#   fallback_models: |
+#     openrouter/meta-llama/llama-4-maverick
+#     groq/llama-3.3-70b-versatile
+#     ollama/qwen3 @ http://host.docker.internal:11434
+# Empty (default): nothing ever switches. Chat only; background calls never
+# switch model. Environment override: KAME_FALLBACK_MODELS.
+fallback_models: ""
+
+# v1.8.2.8. When the next model of your list answers. auto (default): at once
+# when your provider is busy (two keys in a row overloaded or timing out),
+# otherwise once you have waited about three times your model's usual
+# first-word time (6-20 s, learned). timed: after failover_after_seconds.
+# never: always wait for your keys. Environment override: KAME_MODEL_SWITCH.
+model_switch: auto
+
+# With model_switch: timed - seconds you wait with nothing on screen before the
+# next model answers. Default 60. Range 0-3600. Environment: KAME_FAILOVER_AFTER.
+failover_after_seconds: 60
+
+# When every key rests, KAME waits for the first one back - as long as it
+# takes (0, the default). A number stops the wait after that many seconds and
+# hands Agent Zero the last error, which ends the task. Range 0-86400.
+# Environment override: KAME_MAX_TOTAL_WAIT.
+max_total_wait_seconds: 0
+
+# Speed: Balanced = adaptive (default): a reply still silent after twice its model's
+# usual first-word time races a backup key, then a third; the first key that
+# starts working wins and the others are cut (about 10% extra requests, never
+# under 429 pressure, never for a prompt over ~32k tokens). max: every reply
+# races from the start. off: one key at a time, and no keys asked together.
+# Environment override: KAME_HEDGE_MODE.
+hedge_mode: adaptive
+
+# One reply plus at most this many minus one backups. Default 3. Range 1-3.
+hedge_max_legs: 3
+
+# When quota runs dry (two refusals in a row that rest a key a minute or
+# more), the next attempts of a chat reply ask 4, then 8, then up to this many
+# ready keys at once instead of one by one. First answer wins. Background calls
+# never do this. Default 16. Range 0-32 (0 = one by one).
+# Environment override: KAME_PROBE_BURST.
+probe_burst_max_legs: 16
+
+# v1.8.2.8. Wait for the first token: how long a key may stay silent before the
+# next one is asked. auto (default): learned per model, far past its usual first
+# word (20-120 s; 60-300 s for thinking models); never for a model on this
+# machine. timed: stream_silence_timeout_seconds. off: no limit.
+# Environment: KAME_FIRST_TOKEN_WAIT.
+first_token_wait: auto
+
+# With first_token_wait: timed - seconds without a first token before the key
+# is dropped (a quarter of it from the third try on). Range 0-3600.
+# Environment: KAME_STREAM_SILENCE_TIMEOUT.
+stream_silence_timeout_seconds: 0
+
+# v1.8.2.8. When a reply ends, one line in the chat log: its time and the model
+# that answered each step. always (default) / switches (only when a model of
+# your fallback list answered) / never. Never part of what the model reads.
+# Environment: KAME_REPLY_NOTICE.
+reply_notice: always
+
+# An answer cut mid-stream is continued on the next key from where it stopped
+# and shown once (Chat Completions transport, Agent Zero's default). -1 (default)
+# continues while it makes progress; 0 starts the answer again instead. Range
+# -1-10. Environment: KAME_STREAM_RESUME_LIMIT.
+stream_resume_limit: -1
+
+# The speed boost's numbers, as on Hermes. Rarely worth changing.
+hedge_budget_pct: 10
+hedge_burst: 3
+hedge_quantile: 90
+hedge_cold_s: 6
+hedge_cold_reasoning_s: 30
+hedge_max_prompt_tokens: 32000
+
+# Per-model requests-per-minute limits for the pacer, e.g.
+# "google:gemini/gemini-2.5-flash=10, groq:*=30". KAME also learns them from
+# real 429s. Environment: KAME_PACING_RPM_OVERRIDES.
+pacing_rpm_overrides: ""
+
+# Region per key, for Vertex / Bedrock behind an endpoint that hides it:
+# "k3f9a1=us-central1" (the key as the panel shows it).
+# Environment: KAME_KEY_REGION_OVERRIDES.
+key_region_overrides: ""
+
+# Troubleshooting: stop backups and keys asked together (KAME_HEDGING_DISABLED),
+# stop continuing cut answers (KAME_STREAM_STITCH_DISABLED).
+hedging_disabled: false
+stream_stitch_disabled: false
+
 # How API keys appear in logs:
 #   fingerprint — anonymized stable id like "k3f9a1" (default; never leaks)
 #   prefix8     — first 8 chars of the key (mild partial leak)
