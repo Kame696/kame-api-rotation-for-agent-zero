@@ -87,9 +87,21 @@ def test_after_my_time_counts_the_users_wait_not_only_the_resting(fake_models, m
     assert result[0] == "fallback answer from google/gemini-3.7-flash"
 
 
-def test_the_busy_memory_moves_the_next_call_after_one_knock(fake_models):
+def test_inside_the_busy_window_the_next_call_moves_without_a_request(fake_models):
+    # Owner, live test on Hermes: every reply starts on the best model; one KAME
+    # knows busy is passed down the list at once, without asking a key.
     K.set_fallback_models("google/gemini-3.7-flash")
     K._kame_note_busy(ID)
+    log = []
+    ctx, _ = make_ctx(streaming({}, fail={k: overloaded for k in KEYS}, log=log))
+    assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
+    assert log == []
+
+
+def test_after_the_busy_window_one_knock_is_enough(fake_models):
+    K.set_fallback_models("google/gemini-3.7-flash")
+    K._kame_note_busy(ID)
+    K._KAME_BUSY_UNTIL[ID] = time.time() - 1   # the window ran out just now
     log = []
     ctx, _ = make_ctx(streaming({}, fail={k: overloaded for k in KEYS}, log=log))
     assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
@@ -316,3 +328,172 @@ def test_the_settings_page_keeps_a_time_saved_before_the_choice_existed():
     page = open(os.path.join(root, "webui", "config.html"), encoding="utf-8").read()
     assert "Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed'" in page
     assert "Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'" in page
+
+
+# --- a model that is slow right now (Hermes decisions/0028 D11) ----------------
+# Owner's live test on Hermes, 2026-10-18: gemini-3.8-flash took about two minutes
+# to a one-word answer on every key while gemini-3.7-flash answered in seconds.
+
+QUICK_SLOW = {False: (0.3, 0.3, 0.3), True: (0.3, 0.3, 0.3)}
+
+
+def test_a_silent_model_falls_back_at_its_slow_bound(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", QUICK_SLOW)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    log = []
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}, log=log))
+    started = time.monotonic()
+    assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
+    assert time.monotonic() - started < 1.5
+    assert any(entry.startswith("cancelled:") for entry in log)     # the slow request was cut
+    assert K._KAME_BUSY_UNTIL[ID] > time.time() + 20                # and the model left alone
+
+
+def test_without_a_list_a_slow_model_is_waited_for(monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", QUICK_SLOW)
+    ctx, _ = make_ctx(streaming({k: 0.6 for k in KEYS}))
+    assert run(ctx)[0].startswith("answer from")
+
+
+def test_never_waits_for_a_slow_model(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", QUICK_SLOW)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    K.set_model_switch("never")
+    ctx, _ = make_ctx(streaming({k: 0.6 for k in KEYS}))
+    assert run(ctx)[0].startswith("answer from")
+
+
+def test_when_the_next_model_is_known_slow_too_the_first_is_waited_for(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", QUICK_SLOW)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    K._kame_note_busy("google:gemini/gemini-3.7-flash")   # as LiteLLM names the running model
+    ctx, _ = make_ctx(streaming({k: 0.6 for k in KEYS}))
+    assert K._kame_slow_after(ctx, ID, False) == 0.0
+    assert run(ctx)[0].startswith("answer from")
+
+
+def test_set_time_is_the_users_number_and_automatic_learns(fake_models):
+    K.set_fallback_models("google/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({}))
+    assert K._kame_slow_after(ctx, ID, False) == pytest.approx(30.0, abs=0.01)   # nothing learned yet
+    K.set_model_switch("timed")
+    K.set_failover_after(45)
+    assert K._kame_slow_after(ctx, ID, False) == 45.0
+    K.set_model_switch("auto")
+    for _ in range(40):
+        H.HEDGE_TRACKER.record_latency(ID, 30.0, stream=True, reasoning=False)
+    assert K._kame_slow_after(ctx, ID, False) == pytest.approx(45.0, abs=0.01)   # the ceiling
+
+
+def test_a_background_call_never_falls_back_for_slowness(fake_models):
+    K.set_fallback_models("google/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({}), call_type="Utility")
+    assert K._kame_slow_after(ctx, ID, False) == 0.0
+
+
+def test_a_slow_model_is_left_alone_for_minutes(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", QUICK_SLOW)
+    K.set_hedge_mode("off")     # Saver: no race with the next model, the slow cut alone
+    K.set_fallback_models("google/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}))
+    run(ctx)
+    assert K._KAME_BUSY_WINDOW[ID] == K._KAME_SLOW_FIRST_S
+    K._KAME_BUSY_UNTIL[ID] = time.time() - 60          # caught again a minute after it ended
+    K._kame_note_busy(ID, first=K._KAME_SLOW_FIRST_S, ceiling=K._KAME_SLOW_MAX_S)
+    assert K._KAME_BUSY_WINDOW[ID] == 2 * K._KAME_SLOW_FIRST_S
+
+
+# --- D12: the next model races a silent reply -------------------------------------
+
+def test_the_next_model_races_a_silent_reply_and_answers_it(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", {False: (5.0, 5.0, 5.0), True: (5.0, 5.0, 5.0)})
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.2)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    log = []
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}, log=log))
+    started = time.monotonic()
+    assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
+    assert time.monotonic() - started < 1.5               # no slow bound waited, no restart
+    assert any(entry.startswith("cancelled:") for entry in log)
+    assert ctx.get("answered_by") == "google:gemini-3.7-flash"
+    assert K._KAME_BUSY_UNTIL[ID] > time.time()          # the next replies go straight on
+
+
+def test_a_first_model_in_time_is_never_raced(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.5)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({k: 0.05 for k in KEYS}))
+    assert run(ctx)[0].startswith("answer from")
+    assert fake_models == []
+
+
+def test_saver_never_races_another_model(fake_models):
+    K.set_fallback_models("google/gemini-3.7-flash")
+    K.set_hedge_mode("off")
+    ctx, _ = make_ctx(streaming({}))
+    assert K._kame_cross_entry(ctx, ID, False, 30.0) is None
+    K.set_hedge_mode("adaptive")
+    [(entry, after)] = K._kame_cross_entry(ctx, ID, False, 30.0)
+    assert entry["label"] == "google/gemini-3.7-flash" and after == 12.0
+
+
+def test_when_the_raced_model_is_silent_too_the_one_after_it_joins(fake_models, monkeypatch):
+    K.set_fallback_models("google/gemini-3.7-flash\ngoogle/gemini-3.6-flash")
+    ctx, _ = make_ctx(streaming({}))
+    assert [at for _e, at in K._kame_cross_entry(ctx, ID, False, 30.0)] == [12.0, 18.0]
+    monkeypatch.setattr(K, "_KAME_SLOW_S", {False: (5.0, 5.0, 5.0), True: (5.0, 5.0, 5.0)})
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.2)
+    monkeypatch.setattr(K, "_KAME_CROSS_STEP_S", 0.2)
+    FALLBACK_BEHAVIOUR["google/gemini-3.7-flash"] = "slow"
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}))
+    started = time.monotonic()
+    assert run(ctx)[0] == "fallback answer from google/gemini-3.6-flash"
+    assert time.monotonic() - started < 2.0
+    assert ctx.get("answered_by") == "google:gemini-3.6-flash"
+
+
+def test_a_next_model_that_fails_never_rests_the_first_models_keys(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", {False: (5.0, 5.0, 5.0), True: (5.0, 5.0, 5.0)})
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.1)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    FALLBACK_BEHAVIOUR["google/gemini-3.7-flash"] = "error"
+    ctx, _ = make_ctx(streaming({k: 0.6 for k in KEYS}))
+    assert run(ctx)[0].startswith("answer from")         # the first model still answers
+    assert K._pool_has_ready_key(ID, KEYS)
+
+
+# --- review fixes (2026-10-18) ----------------------------------------------------
+
+def test_the_chat_model_listed_again_is_never_raced_against_itself(fake_models):
+    K.set_fallback_models("google/gemini-3.8-flash\ngoogle/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({}))
+    [(entry, _at)] = K._kame_cross_entry(ctx, ID, False, 30.0)
+    assert entry["label"] == "google/gemini-3.7-flash"
+
+
+def test_an_answer_ends_the_busy_window_under_either_spelling():
+    K._kame_note_busy("google:gemini-3.8-flash")
+    K._kame_clear_busy(ID)
+    assert "google:gemini-3.8-flash" not in K._KAME_BUSY_UNTIL
+
+
+def test_a_next_model_win_is_not_recorded_on_the_first_pool(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_SLOW_S", {False: (5.0, 5.0, 5.0), True: (5.0, 5.0, 5.0)})
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.2)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}))
+    before = len(K._KAME_REPLIES)
+    run(ctx)
+    assert len(K._KAME_REPLIES) == before        # the nested call names it, not the outer one twice
+
+
+def test_a_raced_model_keeps_its_own_whole_bound(fake_models, monkeypatch):
+    # the slow bound fires 0.4 s after the request; the next model joined at 0.2 s
+    # and answers at 0.55 s - it is not cut at 0.4 s.
+    monkeypatch.setattr(K, "_KAME_SLOW_S", {False: (0.4, 0.4, 0.4), True: (0.4, 0.4, 0.4)})
+    monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.2)
+    K.set_fallback_models("google/gemini-3.7-flash")
+    FALLBACK_BEHAVIOUR["google/gemini-3.7-flash"] = "late"
+    ctx, _ = make_ctx(streaming({k: 3.0 for k in KEYS}))
+    assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
+    assert ctx.get("answered_by") == "google:gemini-3.7-flash"

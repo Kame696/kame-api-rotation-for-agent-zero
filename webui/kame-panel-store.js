@@ -27,7 +27,7 @@ const KIND_WORDS = {
   recovery: "Answered on retry",
   surfaced: "Passed to Agent Zero",
   setting: "Setting changed",
-  model_switch: "Next model",
+  model_switch: "Fallback",
   backup: "Backup key",
 };
 
@@ -55,7 +55,7 @@ const KIND_NEXT = {
   stream_drop: "continuing on another key from where it stopped",
   wait: "no request is sent until a key is back",
   surfaced: "Agent Zero gets the error",
-  model_switch: "your next model answers",
+  model_switch: "the next model of your list answers this reply",
 };
 
 // 1.8.2.8: one sentence per kind, for the legend under the list.
@@ -72,7 +72,7 @@ const KIND_MEANING = {
   recovery: "A key answered after KAME had already rotated: the rotation worked.",
   surfaced: "Something no other key or wait can fix; Agent Zero gets the error, with a line telling the agent whether retrying helps.",
   setting: "You changed a KAME setting.",
-  model_switch: "Your model could not answer now (its provider busy, or you had waited past the switch time), so the next model of your list answered. Your model is tried first again on the next reply.",
+  model_switch: "Your model could not answer now (its provider busy, far slower than usual, every key resting, or no answer in time), so this reply fell back to the next model of your list. The next reply starts on your best model again.",
 };
 
 const JOB_WORDS = {

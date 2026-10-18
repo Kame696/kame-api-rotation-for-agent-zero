@@ -38,13 +38,13 @@
         </template>
 
         <div class="kame-counters">
-          <div><b x-text="$store.kamePanel.speed.model_switches || 0"></b> Switched model</div>
+          <div><b x-text="$store.kamePanel.speed.model_switches || 0"></b> Fallbacks</div>
           <div><b x-text="$store.kamePanel.speed.backups || 0"></b> Backup keys started
             (<span x-text="$store.kamePanel.speed.backup_wins || 0"></span> won)</div>
           <div><b x-text="$store.kamePanel.speed.probe_bursts || 0"></b> Keys asked together</div>
         </div>
         <div class="kame-card" x-show="$store.kamePanel.speed.last_model_switch?.to">
-          Last switch: <b x-text="$store.kamePanel.speed.last_model_switch?.to"></b>
+          Last fallback: <b x-text="$store.kamePanel.speed.last_model_switch?.to"></b>
           answered for <span x-text="$store.kamePanel.speed.last_model_switch?.from"></span>
           (<span x-text="$store.kamePanel.speed.last_model_switch?.reason"></span>,
           <span x-text="$store.kamePanel.clock($store.kamePanel.speed.last_model_switch?.at)"></span>).

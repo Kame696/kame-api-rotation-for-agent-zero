@@ -7,20 +7,19 @@ rows = [
      "When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these "
      "that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional "
      "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.", ""),
-    ("model_switch", "choice", "'auto'", "Move to your next model",
-     "<b>Automatic</b>: when your provider is busy (two keys in a row overloaded or timing out) the next model "
-     "answers at once; otherwise once you have waited about three times your model's usual first-word time "
-     "(6 to 20 s, learned). <b>After my time</b>: the seconds below. <b>Never</b>: always wait for your keys.",
-     [("auto", "Automatic"), ("timed", "After my time"), ("never", "Never")],
+    ("model_switch", "choice", "'auto'", "Fallback",
+     "One big pool where your best model comes first: every reply starts on your chat model and goes to the "
+     "next model of the list only when the provider says it is busy (at once), every key is resting, or "
+     "nothing comes back in time. <b>Automatic</b>: in time is about three times the model's usual first word "
+     "(6 to 20 s, learned). <b>Set time</b>: the seconds below. <b>Never</b>: always wait for your keys.",
+     [("auto", "Automatic"), ("timed", "Set time"), ("never", "Never")],
      "", "(config.failover_after_seconds === undefined || config.failover_after_seconds === null "
          "|| Number(config.failover_after_seconds) === 60) ? 'auto' : "
          "(Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')"),
-    ("failover_after_seconds", "number", "60", "My time to move to the next model (seconds)",
-     "Once you have waited this long with nothing on screen, the next model of your list answers.",
+    ("failover_after_seconds", "number", "60", "Fallback after (seconds)",
+     "When a reply has waited this long with nothing on screen (keys resting, failing or slow), the next "
+     "model of your list answers it. A busy provider moves at once, whatever this number.",
      'min="0" max="3600"', "config.model_switch === 'timed'"),
-    ("max_total_wait_seconds", "number", "0", "Stop waiting and show an error after (seconds)",
-     "When every key rests, KAME waits for the first one back. 0 = as long as it takes. A number hands "
-     "Agent Zero the error after that long, which ends the task.", 'min="0" max="604800"'),
     ("hedge_mode", "choice", "'adaptive'", "Speed",
      "<b>Balanced</b>: a reply still silent after twice its usual wait races a backup key; the first key "
      "that starts working wins (about 10% extra requests). <b>Fastest</b>: every reply races. <b>Saver</b>: "
@@ -28,11 +27,11 @@ rows = [
     ("first_token_wait", "choice", "'auto'", "Wait for the first token",
      "How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's "
      "usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never "
-     "for a model on this computer). <b>My time</b>: the seconds below. <b>Off</b>: no limit.",
-     [("auto", "Automatic"), ("timed", "My time"), ("off", "Off")],
+     "for a model on this computer). <b>Set time</b>: the seconds below. <b>Off</b>: no limit.",
+     [("auto", "Automatic"), ("timed", "Set time"), ("off", "Off")],
      "", "(config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null "
          "|| Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"),
-    ("stream_silence_timeout_seconds", "number", "0", "My first-token wait (seconds)",
+    ("stream_silence_timeout_seconds", "number", "0", "First-token wait (seconds)",
      "Seconds a key may stay silent before the next one is tried (a quarter of it from the third try on).",
      'min="0" max="3600"', "config.first_token_wait === 'timed'"),
     ("reply_notice", "choice", "'always'", "Show which model answered",
@@ -46,6 +45,9 @@ rows = [
      ["silent", "normal", "verbose", "verbose+errors"]),
 ]
 adv = [
+    ("max_total_wait_seconds", "number", "0", "Give up after (seconds)",
+     "0 (default): never give up; KAME waits for a key or uses your fallback list. A number makes it give up "
+     "with an error after that long, which ends Agent Zero's task.", 'min="0" max="604800"'),
     ("probe_burst_max_legs", "number", "16", "Keys asked together when quota runs dry",
      "After two long refusals in a row, ask 4, then 8, then up to this many keys at once instead of one by "
      "one. 0 = one by one.", 'min="0" max="32"'),
@@ -147,7 +149,7 @@ def field(r):
 head = """<!--
   Settings screen for the api_rotation_by_kame plugin (Agent Zero's plugin settings modal).
 
-  1.8.2.8: the choices on show, a number only under 'my time'; 1.8.2.7 rethought it: settings on show, the rest behind "Show advanced
+  1.8.2.8: the choices on show, a number only under 'Set time'; 1.8.2.7 rethought it: settings on show, the rest behind "Show advanced
   settings", the switches that turn a part of KAME off folded away. The same
   settings can be edited in the KAME panel (central menu -> KAME).
 

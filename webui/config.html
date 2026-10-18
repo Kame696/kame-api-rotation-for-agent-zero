@@ -1,7 +1,7 @@
 <!--
   Settings screen for the api_rotation_by_kame plugin (Agent Zero's plugin settings modal).
 
-  1.8.2.8: the choices on show, a number only under 'my time'; 1.8.2.7 rethought it: settings on show, the rest behind "Show advanced
+  1.8.2.8: the choices on show, a number only under 'Set time'; 1.8.2.7 rethought it: settings on show, the rest behind "Show advanced
   settings", the switches that turn a part of KAME off folded away. The same
   settings can be edited in the KAME panel (central menu -> KAME).
 
@@ -38,24 +38,17 @@
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Move to your next model</div>
-          <div class="field-description"><b>Automatic</b>: when your provider is busy (two keys in a row overloaded or timing out) the next model answers at once; otherwise once you have waited about three times your model's usual first-word time (6 to 20 s, learned). <b>After my time</b>: the seconds below. <b>Never</b>: always wait for your keys.</div>
+          <div class="field-title">Fallback</div>
+          <div class="field-description">One big pool where your best model comes first: every reply starts on your chat model and goes to the next model of the list only when the provider says it is busy (at once), every key is resting, or nothing comes back in time. <b>Automatic</b>: in time is about three times the model's usual first word (6 to 20 s, learned). <b>Set time</b>: the seconds below. <b>Never</b>: always wait for your keys.</div>
         </div>
-        <div class="field-control"><select x-model="config.model_switch" x-init="if (config.model_switch === undefined || config.model_switch === null) config.model_switch = (config.failover_after_seconds === undefined || config.failover_after_seconds === null || Number(config.failover_after_seconds) === 60) ? 'auto' : (Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')"><option value="auto">Automatic</option><option value="timed">After my time</option><option value="never">Never</option></select></div>
+        <div class="field-control"><select x-model="config.model_switch" x-init="if (config.model_switch === undefined || config.model_switch === null) config.model_switch = (config.failover_after_seconds === undefined || config.failover_after_seconds === null || Number(config.failover_after_seconds) === 60) ? 'auto' : (Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')"><option value="auto">Automatic</option><option value="timed">Set time</option><option value="never">Never</option></select></div>
       </div>
       <div class="field" x-show="config.model_switch === 'timed'">
         <div class="field-label">
-          <div class="field-title">My time to move to the next model (seconds)</div>
-          <div class="field-description">Once you have waited this long with nothing on screen, the next model of your list answers.</div>
+          <div class="field-title">Fallback after (seconds)</div>
+          <div class="field-description">When a reply has waited this long with nothing on screen (keys resting, failing or slow), the next model of your list answers it. A busy provider moves at once, whatever this number.</div>
         </div>
         <div class="field-control"><input type="number" step="1" min="0" max="3600" x-model.number="config.failover_after_seconds" x-init="if (config.failover_after_seconds === undefined || config.failover_after_seconds === null) config.failover_after_seconds = 60" /></div>
-      </div>
-      <div class="field">
-        <div class="field-label">
-          <div class="field-title">Stop waiting and show an error after (seconds)</div>
-          <div class="field-description">When every key rests, KAME waits for the first one back. 0 = as long as it takes. A number hands Agent Zero the error after that long, which ends the task.</div>
-        </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="604800" x-model.number="config.max_total_wait_seconds" x-init="if (config.max_total_wait_seconds === undefined || config.max_total_wait_seconds === null) config.max_total_wait_seconds = 0" /></div>
       </div>
       <div class="field">
         <div class="field-label">
@@ -67,13 +60,13 @@
       <div class="field">
         <div class="field-label">
           <div class="field-title">Wait for the first token</div>
-          <div class="field-description">How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never for a model on this computer). <b>My time</b>: the seconds below. <b>Off</b>: no limit.</div>
+          <div class="field-description">How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never for a model on this computer). <b>Set time</b>: the seconds below. <b>Off</b>: no limit.</div>
         </div>
-        <div class="field-control"><select x-model="config.first_token_wait" x-init="if (config.first_token_wait === undefined || config.first_token_wait === null) config.first_token_wait = (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null || Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"><option value="auto">Automatic</option><option value="timed">My time</option><option value="off">Off</option></select></div>
+        <div class="field-control"><select x-model="config.first_token_wait" x-init="if (config.first_token_wait === undefined || config.first_token_wait === null) config.first_token_wait = (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null || Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"><option value="auto">Automatic</option><option value="timed">Set time</option><option value="off">Off</option></select></div>
       </div>
       <div class="field" x-show="config.first_token_wait === 'timed'">
         <div class="field-label">
-          <div class="field-title">My first-token wait (seconds)</div>
+          <div class="field-title">First-token wait (seconds)</div>
           <div class="field-description">Seconds a key may stay silent before the next one is tried (a quarter of it from the third try on).</div>
         </div>
         <div class="field-control"><input type="number" step="1" min="0" max="3600" x-model.number="config.stream_silence_timeout_seconds" x-init="if (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null) config.stream_silence_timeout_seconds = 0" /></div>
@@ -106,6 +99,13 @@
         <div class="section-title">Advanced</div>
         <div class="section-description">Numbers KAME already sizes from the evidence. Change one only for a measured reason.</div>
 
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Give up after (seconds)</div>
+          <div class="field-description">0 (default): never give up; KAME waits for a key or uses your fallback list. A number makes it give up with an error after that long, which ends Agent Zero's task.</div>
+        </div>
+        <div class="field-control"><input type="number" step="1" min="0" max="604800" x-model.number="config.max_total_wait_seconds" x-init="if (config.max_total_wait_seconds === undefined || config.max_total_wait_seconds === null) config.max_total_wait_seconds = 0" /></div>
+      </div>
       <div class="field">
         <div class="field-label">
           <div class="field-title">Keys asked together when quota runs dry</div>

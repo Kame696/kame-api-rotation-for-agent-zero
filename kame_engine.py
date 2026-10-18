@@ -4497,6 +4497,133 @@ class _KameSwitchModel(Exception):
         self.cause = cause
 
 
+class _KameSlowModel(Exception):
+    """v1.8.2.8 (Hermes decisions/0028 D11): no leg of this attempt showed any sign
+    of work by the model's slow bound - the model is slow right now, not the key.
+    Caught by the carousel, which answers with the next model of the list."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+#: v1.8.2.8 (D11): "Automatic" slow-model watch, (floor, ceiling, cold) seconds,
+#: per class (plain, thinking) - Hermes' `_SLOW_S`.
+_KAME_SLOW_S = {False: (20.0, 45.0, 30.0), True: (25.0, 60.0, 45.0)}
+
+
+def _kame_names_match(a, b) -> bool:
+    """v1.8.2.8 (review R5): the same model whether the list wrote it
+    ("google:gemini-3.7-flash") or LiteLLM named it ("google:gemini/gemini-3.7-flash")."""
+    a, b = str(a or "").lower(), str(b or "").lower()
+    if a == b:
+        return True
+    if ":" not in a or ":" not in b:
+        return False
+    (pa, ma), (pb, mb) = a.split(":", 1), b.split(":", 1)
+    return pa == pb and ma.split("/")[-1] == mb.split("/")[-1]
+
+
+def _kame_clear_busy(identity) -> None:
+    """An answer ends the busy window of this model under either spelling."""
+    with _KAME_LOCK:
+        for ident in [i for i in _KAME_BUSY_UNTIL if _kame_names_match(i, identity)]:
+            _KAME_BUSY_UNTIL.pop(ident, None)
+            _KAME_BUSY_WINDOW.pop(ident, None)
+
+
+def _kame_entry_busy(entry, now=None) -> bool:
+    """Whether KAME knows this list entry busy or slow right now. The running model
+    is named by LiteLLM ("google:gemini/gemini-3.7-flash"), the list by the user
+    ("google/gemini-3.7-flash"): the provider and the model's last name decide."""
+    now = time.time() if now is None else now
+    provider, name = entry["provider"].lower(), entry["name"].lower()
+    for ident, until in list(_KAME_BUSY_UNTIL.items()):
+        if until <= now or ":" not in ident:
+            continue
+        p, m = ident.split(":", 1)
+        if p == provider and (m == name or m.endswith("/" + name.split("/")[-1])):
+            return True
+    return False
+
+
+def _kame_slow_after(ctx, identity, reasoning) -> float:
+    """Seconds without a first sign of work after which the reply falls back to the
+    next model of the list; 0 = wait as before. Only the conversation's own reply,
+    only when it could fall back (a list entry not known busy), "Set time" = the
+    user's number, "Automatic" = 3 x the median of this model's own first-word
+    times, clamped (not the p95: a model slow today fills its tail with it)."""
+    try:
+        if ctx.get("call_type") != "Chat" or not _kame_main(ctx) or not _kame_nothing_shown(ctx):
+            return 0.0
+        if not _KAME_FALLBACK_MODELS or not _kame_switch_on() or _KAME_CAROUSEL_DISABLED:
+            return 0.0
+        now_t, now_m = time.time(), time.monotonic()
+        hop = _KAME_FALLBACK_HOP.get()
+        usable = [e for e in _KAME_FALLBACK_MODELS
+                  if not _kame_names_match(e["identity"], identity)
+                  and now_m >= _KAME_FALLBACK_SKIP.get(e["identity"], 0.0)
+                  and not _kame_entry_busy(e, now_t)
+                  and not (hop and e["identity"] == hop.get("origin"))]
+        if not usable:
+            return 0.0
+        if _KAME_MODEL_SWITCH == "timed":
+            return float(_KAME_FAILOVER_AFTER_S) if _KAME_FAILOVER_AFTER_S > 0 else 0.0
+        floor, ceiling, cold = _KAME_SLOW_S[bool(reasoning)]
+        extra = _kame_est_prompt_tokens(ctx.get("messages")) / _KAME_SLOW_TOKENS_PER_S  # review R9
+        stats = _kame_first_word_stats(identity, reasoning)
+        if not stats:
+            return cold + extra
+        return float(min(ceiling, max(floor, 3.0 * stats[0])) + extra)
+    except Exception:
+        return 0.0
+
+
+#: v1.8.2.8 (D12): when the next model of the list joins a silent reply.
+_KAME_CROSS_MIN_S = 8.0
+_KAME_CROSS_COLD_S = 12.0
+_KAME_CROSS_STEP_S = 6.0
+_KAME_SLOW_TOKENS_PER_S = 4000.0   # one more second of slow bound per this many prompt tokens
+_KAME_CROSS_MAX_LEGS = 2
+
+
+def _kame_cross_entry(ctx, identity, reasoning, slow):
+    """``[(entry, at_s), ...]``: the next models of the list to race a silent reply, or None.
+    The first joins at ``after_s``; if it is silent too, the one after it joins half
+    that later (6 s at least, before the slow bound) - live on Hermes, gemini-3.7 was
+    as slow as 3.8 while 3.6 answered in 2 s.
+    Speed before the first model's priority (owner, 2026-10-18): racing the next
+    model once the first is clearly late costs one extra request and no wait.
+    Only at the top of a reply (not inside a fallback hop), not in Saver mode,
+    an entry neither skipped nor known busy; 3 x this model's usual first word,
+    after a backup key of the SAME model had its chance (2 x),
+    8 s at least, 12 s before anything is learned, well before the slow bound."""
+    try:
+        if not slow or _KAME_FALLBACK_HOP.get() is not None or _kame_hedge_mode() == "off":
+            return None
+        now_m = time.monotonic()
+        stats = _kame_first_word_stats(identity, reasoning)
+        after = float(min(_KAME_CROSS_COLD_S if not stats else max(_KAME_CROSS_MIN_S, 3.0 * stats[0]),
+                          0.5 * slow))
+        step = max(_KAME_CROSS_STEP_S, 0.5 * after)
+        out = []
+        for entry in _KAME_FALLBACK_MODELS:
+            if _kame_names_match(entry["identity"], identity) \
+                    or now_m < _KAME_FALLBACK_SKIP.get(entry["identity"], 0.0):
+                continue
+            if _kame_entry_busy(entry):
+                continue
+            at = after + step * len(out)
+            if out and at >= 0.85 * slow:
+                break
+            out.append((entry, float(at)))
+            if len(out) == _KAME_CROSS_MAX_LEGS:
+                break
+        return out or None
+    except Exception:
+        return None
+
+
 def _kame_est_prompt_tokens(messages) -> int:
     try:
         return int(sum(len(str(getattr(m, "content", m) or "")) for m in (messages or [])) / 4)
@@ -4577,6 +4704,7 @@ class _KameRace:
         self.claim_at = None        # monotonic time the winner showed its first sign
         self.burst = False          # legs asked together, not backups
         self.last_failure = None    # the last real failure judged inside the race
+        self.cross_legs = {}        # v1.8.2.8 (D12): leg id -> the list entry it runs
 
     def _claim(self, leg):
         if self.winner is None:
@@ -4626,6 +4754,37 @@ class _KameRace:
         self.progress[leg] = progress
         self.started[leg] = time.monotonic()
         self.tasks[leg] = asyncio.ensure_future(self.ctx["attempt"](owner, key, leg_ctx))
+        return self.tasks[leg]
+
+    def start_cross(self, owner, leg, entry):
+        """v1.8.2.8 (Hermes D12): a leg that asks the NEXT MODEL of the list - a whole
+        KAME call on that model, inside a fallback hop, its words shown only if it
+        shows work first. Its failure is its own: never judged on this pool's keys."""
+        ctx = self.ctx
+        progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
+        rc, rsc, tc = self.shims(leg, progress)
+
+        async def run():
+            token = _KAME_FALLBACK_HOP.set({"origin": ctx["identity"], "to": entry["identity"]})
+            main_token = _KAME_RACED_MAIN.set(True)
+            try:
+                model = _kame_fallback_model(owner, entry)
+                method = getattr(model, ctx["entry_name"])
+                kwargs = dict(ctx.get("kwargs") or {})
+                kwargs.pop("previous_response_id", None)
+                kwargs.pop("responses_input_items", None)
+                return await method(system_message="", user_message="", messages=list(ctx["messages"]),
+                                    response_callback=rc, reasoning_callback=rsc, tokens_callback=tc,
+                                    rate_limiter_callback=ctx.get("rate_limiter_callback"), **kwargs)
+            finally:
+                _KAME_RACED_MAIN.reset(main_token)
+                _KAME_FALLBACK_HOP.reset(token)
+
+        self.keys[leg] = self.keys.get(0)
+        self.progress[leg] = progress
+        self.started[leg] = time.monotonic()
+        self.cross_legs[leg] = entry
+        self.tasks[leg] = asyncio.ensure_future(run())
         return self.tasks[leg]
 
     def running(self):
@@ -4857,9 +5016,11 @@ def _kame_model_label(identity) -> str:
 
 def _kame_after_answer(identity, ctx, call_started_perf) -> None:
     """An answer: the provider is not busy any more, and the reply is named."""
-    with _KAME_LOCK:
-        _KAME_BUSY_UNTIL.pop(identity, None)
-        _KAME_BUSY_WINDOW.pop(identity, None)
+    if ctx.get("answered_by"):
+        # D12: the next model won the race; its own call (inside the hop) already
+        # named the reply "for" this model, and this model stays left alone.
+        return
+    _kame_clear_busy(identity)
     if not _kame_main(ctx):
         return
     try:
@@ -5077,9 +5238,11 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     hedging_on = (_KH is not None and _kame_hedge_mode() != "off" and not _KAME_CAROUSEL_DISABLED
                   and len(all_keys) >= 2)
     silence = _kame_silence_for(owner, ctx, attempt_no)
+    slow = _kame_slow_after(ctx, identity, reasoning) if stream else 0.0
+    cross = list(_kame_cross_entry(ctx, identity, reasoning, slow) or []) if slow else []
     if hedging_on and stream:
         _kame_seed_triggers(identity, reasoning)
-    if not hedging_on and not burst_keys and not silence:
+    if not hedging_on and not burst_keys and not silence and not slow:
         t0 = time.monotonic()
         try:
             result = await ctx["attempt"](owner, key, ctx)
@@ -5098,6 +5261,11 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         for leg in sorted(race.tasks):
             task = race.tasks[leg]
             if leg == skip or not task.done() or getattr(task, "_kame_seen", False):
+                continue
+            if leg in race.cross_legs:   # the next model's failure is its own (D12)
+                task._kame_seen = True
+                if not task.cancelled():
+                    task.exception()
                 continue
             task._kame_seen = True
             if task.cancelled():
@@ -5135,6 +5303,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     else:
         triggers = []
     empties = []   # legs that answered with nothing, kept in case nobody does better
+    slow_at = None    # monotonic time of the slow bound (review R3: may move for a raced model)
+    slow_extended = False
     try:
         while True:
             running = race.running()
@@ -5147,6 +5317,9 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 except BaseException as exc:
                     _kame_tag(exc, race.keys[race.winner], time.monotonic() - race.started[race.winner])
                     raise
+                if race.winner in race.cross_legs:
+                    _kame_cross_won(ctx, identity, race)
+                    return result, race.keys[race.winner]
                 _kame_race_learn(ctx, race, race.winner, stream, reasoning)
                 if race.winner > 0 and not race.burst:
                     with _KAME_LOCK:
@@ -5164,7 +5337,14 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 task._kame_seen = True
                 if task.cancelled():
                     continue
+                if leg in race.cross_legs:
+                    exc = task.exception()
+                    if exc is None and (race.progress[leg]["any"] or not _kame_result_is_empty(task.result())):
+                        race.winner = leg       # it answered without streaming: still the answer
+                    continue                    # its failure is its own (D12)
                 ended.append((leg, task.exception(), time.monotonic() - race.started[leg]))
+            if race.winner is not None and race.winner in race.cross_legs:
+                continue
             for leg, exc, _e in ended:
                 if exc is not None and (
                         (_KAME_PASSTHROUGH_EXC and isinstance(exc, _KAME_PASSTHROUGH_EXC))
@@ -5227,6 +5407,14 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
             if silence and race.winner is None:
                 s_left = max(0.0, race.started[0] + silence - time.monotonic())
                 wait_for = s_left if wait_for is None else min(wait_for, s_left)
+            if slow and slow_at is None:
+                slow_at = race.started[0] + slow
+            if slow and race.winner is None:
+                s_left = max(0.0, slow_at - time.monotonic())
+                wait_for = s_left if wait_for is None else min(wait_for, s_left)
+            if cross and race.winner is None:
+                c_left = max(0.0, race.started[0] + cross[0][1] - time.monotonic())
+                wait_for = c_left if wait_for is None else min(wait_for, c_left)
             claim_waiter = asyncio.ensure_future(race.claimed.wait())
             try:
                 done, _ = await asyncio.wait([race.tasks[l] for l in running] + [claim_waiter],
@@ -5236,6 +5424,32 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     claim_waiter.cancel()
             if done or race.winner is not None:
                 continue
+            # v1.8.2.8 (Hermes D12): the next model of the list races a silent reply.
+            if cross and time.monotonic() >= race.started[0] + cross[0][1] and \
+                    not any(p.get("first_sign_at") for p in race.progress.values()):
+                entry, _at = cross.pop(0)
+                race.start_cross(owner, len(race.tasks), entry)
+                _kame_event("model_switch", identity,
+                            reason=f"no first word after {_fmt_duration(time.monotonic() - race.started[0])}: "
+                                   f"{entry['label']} (a next model of your list) races it")
+                continue
+            # v1.8.2.8 (Hermes D11): the model is slow right now - no leg shows
+            # any sign of work by its slow bound. The next model answers.
+            if slow and not slow_extended and time.monotonic() >= slow_at:
+                live = [l for l in race.cross_legs if not race.tasks[l].done()]
+                if live:
+                    slow_extended = True
+                    slow_at = max(race.started[l] for l in live) + slow
+                    continue
+            if slow and time.monotonic() >= slow_at and \
+                    not any(p.get("first_sign_at") for p in race.progress.values()):
+                waited = time.monotonic() - race.started[0]
+                await race.cancel_all()
+                _kame_note_busy(identity, first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S)
+                for entry in race.cross_legs.values():   # the models raced in were silent too
+                    _kame_note_busy(entry["identity"], first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S)
+                raise _KameSlowModel(f"{identity.split(':', 1)[-1]} is slow right now "
+                                     f"(no first word after {_fmt_duration(waited)})")
             # v1.8.2.7 (Hermes `stream_silence_timeout_seconds`, "wait for the
             # first token"): every leg silent that long - the key accepted the
             # request and sends nothing. Drop it as a timeout; the next key is tried.
@@ -5271,6 +5485,24 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     except BaseException:
         await race.cancel_all(except_leg=None if race.winner is None else race.winner)
         raise
+
+
+def _kame_cross_won(ctx, identity, race):
+    """The next model of the list answered first (D12): name it, leave the slow
+    model alone like a busy one so the next replies go straight on."""
+    entry = race.cross_legs.get(race.winner) or {}
+    ctx["answered_by"] = entry.get("identity")
+    _kame_note_busy(identity)
+    for leg, other in race.cross_legs.items():   # raced in before the winner and still silent
+        if leg != race.winner and not race.progress.get(leg, {}).get("first_sign_at"):
+            _kame_note_busy(other["identity"])
+    with _KAME_LOCK:
+        _KAME_SPEED_STATS["model_switches"] = _KAME_SPEED_STATS.get("model_switches", 0) + 1
+        _KAME_LAST_MODEL_SWITCH.update({"from": identity, "to": entry.get("label", ""),
+                                        "reason": "slower than usual: raced", "at": time.time()})
+    _kame_event("model_switch", identity,
+                reason=f"slower than usual: {entry.get('label', 'the next model')} answered first, "
+                       f"{_fmt_duration(time.monotonic() - race.started[0])} after the request")
 
 
 def _kame_race_judge_rest(race, ended, raising_leg, identity, ctx, attempt_no, call_id,
@@ -5402,6 +5634,10 @@ def _kame_identity_of(model) -> str:
 _KAME_PROVIDER_TIMEOUT_STATUSES = frozenset({408, 499, 504, 524})
 _KAME_BUSY_FIRST_S = 30.0
 _KAME_BUSY_MAX_S = 300.0
+#: v1.8.2.8 (D11): a slow model stays slow for minutes and each re-check costs its
+#: whole slow bound - 2 minutes, doubling while it stays slow, at most 10.
+_KAME_SLOW_FIRST_S = 120.0
+_KAME_SLOW_MAX_S = 600.0
 _KAME_BUSY_UNTIL = {}
 _KAME_BUSY_WINDOW = {}
 #: "Automatic" switch: about three times the usual first word, within these.
@@ -5450,21 +5686,28 @@ def _kame_busy_failure(identity, key, kind, status=None) -> bool:
     return False
 
 
-def _kame_note_busy(identity) -> None:
+def _kame_note_busy(identity, first=None, ceiling=None) -> None:
+    """Open, or double, the busy (or slow) window. It doubles when the model is caught
+    again within one window of the last one ending, not only 30 s."""
+    first = _KAME_BUSY_FIRST_S if first is None else first
+    ceiling = _KAME_BUSY_MAX_S if ceiling is None else ceiling
     now = time.time()
     with _KAME_LOCK:
         until = _KAME_BUSY_UNTIL.get(identity, 0.0)
         window = _KAME_BUSY_WINDOW.get(identity, 0.0)
-        window = min(_KAME_BUSY_MAX_S, window * 2.0) if (window and now < until + _KAME_BUSY_FIRST_S) \
-            else _KAME_BUSY_FIRST_S
+        window = min(ceiling, max(first, window * 2.0)) \
+            if (window and now < until + max(_KAME_BUSY_FIRST_S, window)) else first
         _KAME_BUSY_WINDOW[identity] = window
         _KAME_BUSY_UNTIL[identity] = now + window
 
 
 def _kame_is_busy(identity, busy_keys) -> bool:
+    """Two keys busy in this call, or one while the provider is known busy:
+    the window and as long again after it (inside the window a call is passed
+    down the list without a request; the first knock after it decides alone)."""
     if len(busy_keys) >= 2:
         return True
-    return bool(busy_keys) and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0)
+    return bool(busy_keys) and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0) + _KAME_BUSY_FIRST_S
 
 
 def _kame_entry_usable(identity, keys) -> bool:
@@ -5490,11 +5733,16 @@ _KAME_BACKGROUND_FRAMES = frozenset({"call_utility_model", "summarize_messages",
                                      "compact_chat", "_compact_single_pass", "_compact_large_history"})
 
 
+_KAME_RACED_MAIN = contextvars.ContextVar("kame_raced_main", default=False)
+
+
 def _kame_is_main_chat(stream) -> bool:
     """Whether the running call is the conversation itself (Agent Zero's
     `call_chat_model` / `call_chat_model_turn` on the stack, nearest wins)."""
     if not stream or "Compress" in (_KAME_CALL_CONTEXT.get() or ""):
         return False
+    if _KAME_RACED_MAIN.get():
+        return True   # review R6: a next model racing the reply runs in its own task
     try:
         import sys as _sys
         frame = _sys._getframe(1)
@@ -5689,6 +5937,7 @@ async def _kame_carousel(self, ctx):
     _burst_round = 0
     _denied = {}            # key -> status, for keys that refused this model on this call
     _busy_keys = set()      # v1.8.2.8: keys that failed on the provider's side (busy)
+    _busy_noted = [False]   # the busy window opened once per call
 
     def _absorb_race(skip=None):
         """The refusals a race judged on its own legs feed the 'every key refused'
@@ -5706,9 +5955,25 @@ async def _kame_carousel(self, ctx):
                 _no_clock_fix.add(_rk)
             else:
                 _no_clock_fix.discard(_rk)
+            # v1.8.2.8 (Hermes, live 2026-10-17): a raced leg's 503 is the
+            # provider's answer too; a busy model moves after the first round.
+            if _kame_busy_failure(identity, _rk, _rkind, _rsc):
+                _busy_keys.add(_rk)
+        if len(_busy_keys) >= 2 and not _busy_noted[0]:
+            _busy_noted[0] = True
+            _kame_note_busy(identity)
         _fl = ctx.get("flight")
         if judged and isinstance(_fl, dict):
             _fl["refusals"] = int(_fl.get("refusals") or 0) + len([j for j in judged if j[0] != skip])
+
+    # v1.8.2.8 (owner, live test on Hermes): every reply starts on the best
+    # model; one KAME still knows busy (inside its busy window) is passed down
+    # the list at once, without spending a request on it.
+    if _KAME_MODEL_SWITCH != "never" and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0):
+        _switched = await _kame_switch_model(self, ctx, "your provider is busy", None)
+        if _switched is not _KAME_NO_SWITCH:
+            return _switched
+
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
 
@@ -5866,11 +6131,16 @@ async def _kame_carousel(self, ctx):
                 await asyncio.sleep(0)
                 continue
 
-            _mark_key_health(identity, key, True)
-            _kame_learn_key(identity, key, ctx, _attempt_wall)
+            # review R4: when the next model won the race, its own call already
+            # recorded the answer; nothing of it is this pool's key's.
+            _by_next = bool(ctx.get("answered_by"))
+            if not _by_next:
+                _mark_key_health(identity, key, True)
+                _kame_learn_key(identity, key, ctx, _attempt_wall)
             _kame_after_answer(identity, ctx, _call_started_at)
-            _kame_timing(identity, key, attempt_no, "ok", "", None, _attempt_wall,
-                         ctx, _call_started_at, st, None, "", _call_id)
+            if not _by_next:
+                _kame_timing(identity, key, attempt_no, "ok", "", None, _attempt_wall,
+                             ctx, _call_started_at, st, None, "", _call_id)
             if _last_failed_key is not None:
                 _kame_event("recovery", identity, key,
                             reason=f"answered on attempt {attempt_no}")
@@ -5878,7 +6148,7 @@ async def _kame_carousel(self, ctx):
             # mode, print a one-line recap so the operator sees how big it was.
             # (_storm_end always pops the state; it returns a recap only for a
             # storm of >= _KAME_STORM_MIN_FOR_SUMMARY failures.)
-            _storm_recap = _storm_end(identity)
+            _storm_recap = _storm_end(identity) if not _by_next else None
             if (_storm_recap and _lvl_normal() and not _lvl_verbose()
                     and _KAME_COLLAPSE_STORM_LOGS and not _KAME_LOG_FULL_ERRORS):
                 _sc_n, _sc_span = _storm_recap
@@ -5939,6 +6209,15 @@ async def _kame_carousel(self, ctx):
             if isinstance(e, _KameSwitchModel):
                 _kame_wait_notice_finish(st, "stopped")
                 raise
+            if isinstance(e, _KameSlowModel):
+                # v1.8.2.8 (D11): inside a fallback model this raises on to the
+                # outer call, which tries the entry after it.
+                _switched = await _kame_switch_model(self, ctx, e.reason, None)
+                if _switched is not _KAME_NO_SWITCH:
+                    _kame_wait_notice_finish(st, "resumed")
+                    return _switched
+                e = TimeoutError(f"KAME: {e.reason}")   # nothing could take it: a timeout
+                _kame_tag(e, key, time.perf_counter() - _call_started_at)
             # v1.8.2.7 (Hermes stitching): a provider that will not continue
             # from the model's own turn says so in a 400. That is the shape of
             # the continuation, not the key and not the request: learn it once
@@ -6086,8 +6365,9 @@ async def _kame_carousel(self, ctx):
             _last_kind = kind
             if _kame_busy_failure(identity, key, kind, sc):
                 _busy_keys.add(key)
-                if len(_busy_keys) == 2:
-                    _kame_note_busy(identity)
+            if len(_busy_keys) >= 2 and not _busy_noted[0]:
+                _busy_noted[0] = True
+                _kame_note_busy(identity)
             if _KAME_CAROUSEL_DISABLED:
                 # v1.8.1.0: the key is sized and rested above; what happens
                 # next is Agent Zero's own retry, exactly as without KAME.

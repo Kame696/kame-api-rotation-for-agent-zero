@@ -228,6 +228,10 @@ class FakeModel:
             raise K._KameSwitchModel("every key resting")
         if behaviour == "error":
             raise Refusal("Error code: 400", 400, {"error": {"message": "bad request"}})
+        if behaviour == "slow":   # 1.8.2.8: a fallback model as slow as the first one
+            await asyncio.sleep(3.0)
+        if behaviour == "late":   # 1.8.2.8: answers, a little after the first slow bound
+            await asyncio.sleep(0.35)
         return (f"fallback answer from {self.model_name}", "")
 
 
@@ -316,7 +320,7 @@ def test_a_short_rest_waits_instead_of_switching(fake_models, monkeypatch):
 
     monkeypatch.setattr(K, "_kame_sleep_on_exhaustion", sleep)
     ctx, _ = make_ctx(streaming({}))
-    _rest_every_key(10, "per_minute")   # back in 10 s: under failover_after_seconds
+    _rest_every_key(4, "per_minute")    # back in 4 s: well under the switch time (auto: 10 s cold)
     with pytest.raises(StopTest):
         run(ctx)
     assert waited and not fake_models

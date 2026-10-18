@@ -335,7 +335,8 @@ check("F2 every exit from the carousel closes the notice",
       # from a refusal), the wait bound, and a fallback hop handing back.
       # review 2026-10-17 M1: and a bounded call on a fallback model.
       # second review N10: and a call the user stopped (CancelledError).
-      _carousel_src.count("_kame_wait_notice_finish(") == 12,
+      # 1.8.2.8 (D11): and a slow model answered by the next one.
+      _carousel_src.count("_kame_wait_notice_finish(") == 13,
       str(_carousel_src.count("_kame_wait_notice_finish(")))
 check("F3 a success closes it as 'resumed'",
       '_kame_wait_notice_finish(st, "resumed")' in _carousel_src)

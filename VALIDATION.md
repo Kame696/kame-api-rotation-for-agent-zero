@@ -1,3 +1,33 @@
+# Agent Zero 1.8.2.8 validation
+
+## Verified runtime
+
+[CI __A0_CI__](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/__A0_CI__) on the
+release commit: the offline suites on Linux, Windows and macOS, Python 3.11 / 3.12 / 3.13 / 3.14,
+and the pinned official Agent Zero v2.12, v2.13 and v2.14 hosts (Python 3.13). Per host, the 23
+1.8.1.8 checks (`tests/native_1818.py`) and 41 checks of `tests/native_1827.py`, all through the
+real LiteLLM / OpenAI SDK over local TCP:
+
+- everything listed for 1.8.2.7 below;
+- a key that accepts and then says nothing is dropped after the first-token wait, the next one
+  answers; an answer cut mid-stream is continued on the next key, which is sent what was shown,
+  and nothing is shown twice; an error every key refuses reaches Agent Zero's `format_error`
+  text with the line telling the agent that retrying will not help;
+- **1.8.2.8:** a model answering 503 "overloaded" on two keys is answered by the next model of
+  the list after those two requests, within seconds, and remembered as busy; without a list the
+  configured model keeps being asked; a turn ends with the line naming its model and time.
+
+Offline: 29 / 29 suites, 68 new tests (`tests/test_v1_8_2_8.py`, `tests/test_v1_8_2_7_parity.py`), among them: a reply silent past its model's slow bound answered by the next model of the list; a late reply raced by the next model and, when that one is silent too, by the one after it, the first to answer shown and nothing recorded on the first pool; a raced model never cut before its own bound; a model known busy passed down without a request.
+
+## Boundaries
+
+As for 1.8.2.7 below: native Agent Zero ran only on disposable remote runners, with real SDK and
+TCP but no real provider credentials. The automatic numbers (switch time, first-token wait) are
+learned from each installation's own traffic and start from the stated cold values; their effect
+on a real provider's latency has not been measured on this port.
+
+---
+
 # Agent Zero 1.8.2.7 validation
 
 ## Verified runtime

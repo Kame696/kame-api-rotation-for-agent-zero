@@ -29,22 +29,27 @@ SETTINGS: Dict[str, tuple] = {
         "that can, one provider/model per line. Empty: never switch."),
     "model_switch": (
         "choice", "auto", None, None, ("auto", "timed", "never"), "KAME_MODEL_SWITCH",
-        "Move to your next model",
-        "With fallback models set. Automatic: when your provider is busy (two keys "
-        "in a row overloaded or timing out) the next model answers at once; "
-        "otherwise after about three times your model's usual first-word time "
-        "(6 to 20 s). After my time: the seconds below. Never: always wait for your "
-        "keys. Nothing switches after part of an answer is on screen."),
+        "Fallback",
+        "With fallback models set: one big pool where your best model always comes "
+        "first. Every reply starts on your chat model and uses all of its keys; it "
+        "goes to the next model of the list only when the provider says it is busy "
+        "(two keys overloaded or timing out: at once), every key is resting, or "
+        "nothing comes back in time. Automatic: about three times the model's usual "
+        "first word, 6 to 20 s, learned. Set time: the seconds below. Never: always "
+        "wait for your keys. A model KAME knows is busy is passed down without a "
+        "request. Nothing switches after part of an answer is on screen."),
     "failover_after_seconds": (
         "number", 60, 0, 3600, None, "KAME_FAILOVER_AFTER",
-        "My time to move to the next model",
-        "With 'After my time': once you have waited this long with nothing on "
-        "screen, the next model of your list answers."),
+        "Fallback after (seconds)",
+        "Only with Fallback set to 'Set time': when a reply has waited this long "
+        "with nothing on screen (keys resting, failing or slow), the next model of "
+        "your list answers it. A busy provider moves at once, whatever this number."),
     "max_total_wait_seconds": (
         "number", 0, 0, 604800, None, "KAME_MAX_TOTAL_WAIT",
-        "Stop waiting and show an error after",
-        "When every key rests, KAME waits for the first one back. 0 = wait as "
-        "long as it takes (Agent Zero ends the task on an error)."),
+        "Give up after (seconds)",
+        "0 (default): never give up; KAME waits for a key or uses your fallback "
+        "list. A number makes it give up with an error after that long, which "
+        "ends Agent Zero's task."),
     "hedge_mode": (
         "choice", "adaptive", None, None, ("off", "adaptive", "max"), "KAME_HEDGE_MODE",
         "Speed",
@@ -64,8 +69,8 @@ SETTINGS: Dict[str, tuple] = {
         "computer. Backup keys still race a slow reply much sooner."),
     "stream_silence_timeout_seconds": (
         "number", 0, 0, 3600, None, "KAME_STREAM_SILENCE_TIMEOUT",
-        "My first-token wait",
-        "With 'My time': seconds a key may stay silent before the next one is tried "
+        "First-token wait (seconds)",
+        "Only with 'Set time': seconds a key may stay silent before the next one is tried "
         "(a quarter of it from the third try on; never for a local model)."),
     "reply_notice": (
         "choice", "always", None, None, ("always", "switches", "never"), "KAME_REPLY_NOTICE",
@@ -212,14 +217,14 @@ SETTINGS: Dict[str, tuple] = {
 }
 
 #: 1.8.2.7: on the settings page for everybody. The rest is advanced.
-VISIBLE = ("fallback_models", "model_switch", "failover_after_seconds", "max_total_wait_seconds",
+VISIBLE = ("fallback_models", "model_switch", "failover_after_seconds",
            "hedge_mode", "first_token_wait", "stream_silence_timeout_seconds", "reply_notice",
            "kame_wait_notice", "kame_log_level")
 #: 1.8.2.8: what each choice is called on screen, in the order it is shown.
 CHOICE_LABELS = {
     "hedge_mode": (("off", "Saver"), ("adaptive", "Balanced"), ("max", "Fastest")),
-    "model_switch": (("auto", "Automatic"), ("timed", "After my time"), ("never", "Never")),
-    "first_token_wait": (("auto", "Automatic"), ("timed", "My time"), ("off", "Off")),
+    "model_switch": (("auto", "Automatic"), ("timed", "Set time"), ("never", "Never")),
+    "first_token_wait": (("auto", "Automatic"), ("timed", "Set time"), ("off", "Off")),
     "reply_notice": (("always", "Every reply"), ("switches", "Only another model"), ("never", "Never")),
 }
 #: 1.8.2.8: a number shown only under one answer of a choice.

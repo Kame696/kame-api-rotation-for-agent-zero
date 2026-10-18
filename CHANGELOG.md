@@ -9,36 +9,61 @@ moves on, sizes its own numbers, and says which model answered.
 - **A busy provider moves to your next model at once.** Two keys in a row that get
   "overloaded" (503) or time out means the model is busy, not the keys: the next model
   of your list answers, and the busy model is left alone for 30 s (doubling while it
-  stays busy, at most 5 minutes) before it is tried again — the first model of your list
-  always comes back first. Until now a 503 rested its key one second, so "every key
-  resting longer than 60 s" never came and the list was never used.
+  stays busy, at most 5 minutes). Until now a 503 rested its key one second, so "every
+  key resting longer than 60 s" never came and the list was never used.
+- **One big pool, best model first, every reply.** Each reply starts on your chat model
+  and uses all of its keys; it goes down the list only when that model is busy, every key
+  rests, or nothing comes back in time. A model KAME knows is still busy is passed down
+  without spending a request.
+- **Speed first: the next model races a late reply.** A reply still silent at about 3 × its
+  model's usual first word (8 s at least; 12 s before anything is learned) — after a backup
+  key of the same model has had its chance at 2 × — gets a second request on the next model
+  of your list — and if that one is silent too, the model after it joins a few seconds later
+  — and whichever starts answering first is shown; the others are cut. No waiting
+  for a slow model to fail, no starting over. A model that loses this race sits out only
+  30 s, so your best model is tried first again almost at once. Not in Saver mode; the
+  next model runs through Agent Zero's own model, so any provider of your list can race.
+- **A slow model is passed on too.** Live on the owner's keys (on Hermes, the same engine), gemini-3.8-flash took about
+  two minutes to a one-word answer — on every key, with no error — while gemini-3.7-flash
+  answered in three seconds. Nothing failed, so nothing switched. Now a reply with no sign
+  of work (no word, no tool call, no reasoning) by the model's slow bound falls back to the
+  next model of your list, and the slow model is left alone for 2 minutes (doubling while
+  it stays slow, at most 10), so the next replies go straight to a model that is fast now
+  and only one reply now and then pays to check the slow one again.
+  *Automatic* learns the bound from that model's own first words on your computer
+  (3 × median, 20–45 s; thinking models 25–60 s; 30 / 45 s before
+  anything is learned); *Set time* uses your number. Only when a later model can take it
+  (not resting, not itself known slow or busy); never for background work; the last model
+  of the list is always waited for.
 - **The switch counts your wait.** The time you have waited with nothing on screen,
   every failed attempt included — not only the seconds every key was resting.
 - **Three choices instead of numbers to guess** (Settings and the KAME panel):
-  - *Move to your next model*: **Automatic** (the busy rule, otherwise about three times
-    your model's usual first-word time, 6–20 s, learned) / After my time / Never.
+  - *Fallback*: **Automatic** (the busy rule, at once when every key rests, otherwise
+    about three times your model's usual first-word time, 6–20 s, learned) / Set time /
+    Never.
   - *Wait for the first token*: **Automatic** (learned per model, far past its usual
     first word: 20–120 s, 60–300 s for thinking models; never for a model on your own
-    machine) / My time / Off.
+    machine) / Set time / Off.
   - *Show which model answered*: **Every reply** / Only another model / Never.
-  A number you set before 1.8.2.8 keeps working: a time you changed is "my time", 0 is
-  never / off. Each number is shown only under "my time".
+  A number you set before 1.8.2.8 keeps working: a time you changed is "Set time", 0 is
+  never / off. Each number is shown only under "Set time".
 - **Which model answered, on every reply.** When a reply ends, one line in the chat log:
   its time, its first word, and the model that answered each step — "gemini-3.7-flash
   for gemini-3.8-flash" when a fallback model stood in. The KAME panel keeps the last
   replies. The line is for you; it never enters what the model reads.
 - **Speed is Saver / Balanced / Fastest** (the stored values `off` / `adaptive` / `max`
-  are unchanged).
+  are unchanged). "Stop waiting and show an error after" is *Give up after*, now an
+  advanced setting (0, never give up, stays the default); the panel says *Fallback*.
 
 **Not done, on purpose:** asking several keys at once when the provider is busy (tried
 and removed: an "overloaded" model is overloaded for every key, and parallel requests
 during recovery break a rule this plugin has kept since 1.7.0.7). The fast exit from a
 busy model is the switch above.
 
-**Evidence:** __A0_EVIDENCE_1828__
+**Evidence:** offline suites 29 / 29 green on Linux, Windows and macOS, Python 3.11–3.14 (68 new tests: 48 for 1.8.2.8, 20 for the Hermes parity); remote native acceptance on real Agent Zero v2.12 / v2.13 / v2.14 through the real LiteLLM / OpenAI SDK over local TCP ([CI __A0_CI__](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/__A0_CI__)): 23 + 41 checks per host, among them a model answering 503 "overloaded" handed to the next model after two requests, a silent key dropped, a cut answer continued and shown once, and the reply line; an adversarial review of the whole change, every finding fixed or answered in the decision record. No Agent Zero installation on the author's computer; no real-provider 1.8.2.8 session yet.
 
 **Upgrading from 1.8.2.7:** nothing to change; restart Agent Zero once. Defaults that
-differ: *Move to your next model* and *Wait for the first token* are Automatic, and a
+differ: *Fallback* and *Wait for the first token* are Automatic, and a
 line naming the model ends each reply (Settings → *Show which model answered* → Never
 turns it off).
 
