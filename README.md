@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="webui/kame_banner.jpg" alt="KAME — Key-Aware Management Engine for Agent Zero" width="600" />
+<img src="webui/kame_banner.jpg" alt="KAME — Key-Aware Management Engine for Agent Zero" width="340" />
 
 # 🐢⚡ KAME — free API key rotation for Agent Zero
 
@@ -140,27 +140,20 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 
 ```mermaid
 flowchart TD
-    A([🤖 Your agent asks for a reply]) --> B[🔑 KAME picks the healthiest key<br/>least loaded · not resting]
-    B --> C[📡 Send the request]
-    C --> D{First word<br/>in time?}
-    D -->|✅ yes| OK([✨ Reply shown<br/>which model and how long])
-    D -->|⏱ slower than usual| E[🏁 Race a backup key,<br/>then your next model]
+    A([🤖 Your agent asks for a reply]) --> B[🔑 Pick the healthiest key<br/>least loaded, not resting]
+    B --> C{{📡 What happens?}}
+    C -->|✅ first word in time| OK([✨ Reply shown<br/>with the model and the time])
+    C -->|⏱ late| E[🏁 Race a backup key,<br/>then your next model]
     E --> OK
-    D -->|🐌 far too slow| I
-    C --> F{Error?}
-    F -->|429 per-minute| G[💤 Rest that key<br/>the provider's own retry time]
-    F -->|429 daily · no credit| H[🛑 Rest it long<br/>still used on your other models]
-    F -->|503 overloaded| I[🔀 Hand the reply to the<br/>next model of your list]
-    G --> B
-    H --> B
-    I --> J[🎯 The next reply starts on<br/>your best model again]
-    J --> B
+    C -->|❌ 429| G[💤 Rest that key as long<br/>as the provider says]
+    G -.->|next key| B
+    C -->|❌ 503 or far too slow| I[🔀 Next model of your list]
+    I --> J([🎯 The next reply starts on<br/>your best model again])
 
     style B fill:#10b981,color:#fff
     style OK fill:#10b981,color:#fff
     style E fill:#3b82f6,color:#fff
     style G fill:#f59e0b,color:#fff
-    style H fill:#ef4444,color:#fff
     style I fill:#8b5cf6,color:#fff
     style J fill:#8b5cf6,color:#fff
 ```
