@@ -2,7 +2,7 @@
 
 ## Verified runtime
 
-[CI __A0_CI__](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/__A0_CI__) on the
+[CI 39127288740](https://github.com/Kame696/kame-api-rotation-for-agent-zero/actions/runs/39127288740) on the
 release commit: the offline suites on Linux, Windows and macOS, Python 3.11 / 3.12 / 3.13 / 3.14,
 and the pinned official Agent Zero v2.12, v2.13 and v2.14 hosts (Python 3.13). Per host, the 23
 1.8.1.8 checks (`tests/native_1818.py`) and 41 checks of `tests/native_1827.py`, all through the
