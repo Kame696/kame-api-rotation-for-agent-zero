@@ -22,12 +22,14 @@ class KameSettingsSet(ApiHandler):
             return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
         name = str((input or {}).get("name") or "").strip()
         reset = bool((input or {}).get("reset"))
+        # 1.8.3.0: an old name (`kame_wait_notice`) is saved under Hermes' name for the opposite switch.
+        name, raw = table.canonical(name, (input or {}).get("value"))
         if name not in table.SETTINGS:
             return {"ok": False, "message": f"`{name}` is not a KAME setting."}
         if reset:
             value = table.default(name)
         else:
-            ok, value, message = table.parse(name, (input or {}).get("value"))
+            ok, value, message = table.parse(name, raw)
             if not ok:
                 return {"ok": False, "message": message}
         try:

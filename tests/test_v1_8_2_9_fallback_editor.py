@@ -127,8 +127,10 @@ def test_the_panel_has_the_rows_the_plus_button_the_x_and_the_guarded_import():
     assert 'aria-label="Move up"' in html and 'aria-label="Move down"' in html
     # Agent Zero's own model search is optional: the import is guarded, and without it the inputs are plain
     assert "/plugins/_model_config/webui/model-config-store.js" in store
-    assert "try {" in store.split("async function loadModelConfig", 1)[1].split("}\n\nlet rowSeq", 1)[0]
-    assert "catch" in store.split("async function loadModelConfig", 1)[1][:600]
+    # 1.8.3.0 (A5): the import is still guarded (a failed import is a plain input, never an error), but it is
+    # now a retried second way to the store, which is first looked up on `Alpine` when the person types
+    guard = store.split("async function loadModelConfig", 1)[1].split("\n}\n", 1)[0]
+    assert "import(MODEL_CONFIG)" in guard and ".catch(" in guard
     assert "$store.kamePanel.hasSearch" in html and "searchModelsDetailed" in store and "groupResults" in store
     assert "Catalog suggestions" in html and "No models found" in html
     assert "kame_fallback_set" in store and "rows" in store

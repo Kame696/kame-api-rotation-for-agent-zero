@@ -253,3 +253,21 @@ spread_disabled: false
 # Agent Zero instead of KAME trying the next key.
 # Environment override: KAME_CAROUSEL_DISABLED.
 carousel_disabled: false
+
+# v1.8.3.0 (Hermes' name, the opposite of kame_collapse_storm_logs above).
+# On: every failure during an outage is logged in full instead of collapsed
+# into a periodic count. Default off. Environment override:
+# KAME_STORM_COLLAPSE_DISABLED. When this key is present it wins over the
+# older kame_collapse_storm_logs.
+storm_collapse_disabled: false
+
+# v1.8.3.0 (Hermes' name, the opposite of kame_wait_notice above).
+# On: pool health and the recovery countdown stop appearing on the chat's
+# status line. Rotation is unchanged. Default off. Environment override:
+# KAME_LIVE_STATUS_DISABLED. When present it wins over kame_wait_notice.
+live_status_disabled: false
+
+# v1.8.3.0. Ignore my fallback list. Off (default): the fallback models take
+# over when your keys are out; on: always wait for your keys.
+# Environment override: KAME_NO_MODEL_FALLBACK.
+never_fall_back_to_another_model: false

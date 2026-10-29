@@ -2,6 +2,14 @@
   "source": "Hermes 1.8.2.9: desktop/plugin.js, settings.py (read-only, by tools/extract_hermes_ui_strings.py)",
   "substitutions": [
     [
+      "Hermes’",
+      "Agent Zero’s"
+    ],
+    [
+      "Hermes'",
+      "Agent Zero's"
+    ],
+    [
       "Hermes",
       "Agent Zero"
     ]
@@ -79,12 +87,892 @@
       "title": "Troubleshooting: turn parts of KAME off",
       "note": "Each switch turns one part of KAME off and gives that job back to Hermes. For finding out whether KAME is behind a problem. Leave them alone unless something is wrong.",
       "keys": [
-        "*disable-flags*"
+        "disabled",
+        "spread_disabled",
+        "resolver_disabled",
+        "carousel_disabled",
+        "storm_collapse_disabled",
+        "live_status_disabled",
+        "stream_stitch_disabled",
+        "refusal_recorder_disabled",
+        "quota_id_disabled",
+        "call_timings_disabled",
+        "hedging_disabled"
       ]
     }
   ],
   "groups_hermes_only_keys": [
-    "never_fall_back_to_another_model"
+    "resolver_disabled",
+    "quota_id_disabled"
+  ],
+  "groups_renamed_keys": {
+    "disabled": "rotation_disabled"
+  },
+  "settings": [
+    {
+      "key": "model_switch",
+      "kind": "string",
+      "title": "Fallback",
+      "help": "Uses the fallback models you set in Hermes (hermes fallback add), as one big pool where your best model always comes first. Every reply starts on your best model and uses all of its keys. The reply goes to the next model of your list only when that model cannot answer: the provider says it is busy (two keys answer 'overloaded' or time out: at once, whatever the setting), every key is resting, or nothing has come back in time. Automatic: in time is about three times the model's usual first word, 6 to 20 s, learned on this computer. Set time: the seconds below. Never: always wait for this model's keys. The next reply starts on your best model again; one KAME knows is still busy or resting is passed down without spending a request. Nothing switches after part of an answer is on screen.",
+      "when": "Leave on Automatic. Never if you would rather always wait for the model you picked.",
+      "detail": "Uses the fallback models you set in Hermes (hermes fallback add), as one big pool where your best model always comes first. Every reply starts on your best model and uses all of its keys. The reply goes to the next model of your list only when that model cannot answer: the provider says it is busy (two keys answer 'overloaded' or time out: at once, whatever the setting), every key is resting, or nothing has come back in time. Automatic: in time is about three times the model's usual first word, 6 to 20 s, learned on this computer. Set time: the seconds below. Never: always wait for this model's keys. The next reply starts on your best model again; one KAME knows is still busy or resting is passed down without spending a request. Nothing switches after part of an answer is on screen.",
+      "impact": "high",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "auto",
+      "env": "KAME_MODEL_SWITCH",
+      "group": "extra",
+      "choice_order": [
+        "auto",
+        "timed",
+        "never"
+      ],
+      "choice_labels": {
+        "auto": "Automatic",
+        "timed": "Set time",
+        "never": "Never"
+      },
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "failover_after_seconds",
+      "kind": "number",
+      "title": "Fallback after (seconds)",
+      "help": "Only with Fallback set to 'Set time': when a reply has waited this long with nothing on screen (keys resting, failing or slow), it goes to the next model of your list. A busy provider goes at once, whatever this number.",
+      "when": "Only with 'Set time'. Lower to fall back sooner, raise to stay on your best model longer.",
+      "detail": "Works only when you have set fallback models in Hermes (hermes fallback add); with no list nothing ever switches. When every key of the model you picked is resting and the soonest one is more than this many seconds away, KAME stops waiting and lets Hermes answer with the next model in your list. Hermes brings you back to the model you picked on the next message once its keys return. Short rests (a minute of rate limit) are waited out on the model you picked. 0 means never hand over. KAME itself never chooses a model.",
+      "impact": "medium",
+      "advanced": false,
+      "units": "seconds",
+      "min": 0.0,
+      "max": 3600.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 60.0,
+      "env": "KAME_FAILOVER_AFTER",
+      "group": "extra",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "reply_notice",
+      "kind": "string",
+      "title": "Show which model answered",
+      "help": "After a reply, a short notice says the model that wrote it and how long it took, and when a model from your fallback list answered. Never part of the conversation the model reads.",
+      "when": "Only another model, if a notice after every reply is too much.",
+      "detail": "After a reply, a short notice says the model that wrote it and how long it took, and when a model from your fallback list answered. Never part of the conversation the model reads.",
+      "impact": "medium",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "always",
+      "env": "KAME_REPLY_NOTICE",
+      "group": "extra",
+      "choice_order": [
+        "always",
+        "switches",
+        "never"
+      ],
+      "choice_labels": {
+        "always": "Every reply",
+        "switches": "Only another model",
+        "never": "Never"
+      },
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "max_total_wait_seconds",
+      "kind": "number",
+      "title": "Give up after (seconds)",
+      "help": "Default: a chat never gives up, it waits for a key or uses your fallback list; a scheduled job gives up after 5 minutes. A number here makes both give up with an error after that long; 0 makes neither give up.",
+      "when": "Change only if you would rather get an error than wait for your keys to come back.",
+      "detail": "Unset, a chat waits for as long as every key is resting: each key's own rest is already capped by the ceiling above, and the call retries the moment one returns, so a spent quota ends with an answer on the same model. A cron job, unset, stops after 300 s — below Hermes' own cron timeout — and hands Hermes the provider's original refusal. Any value you set wins everywhere: 0 means never stop waiting, chats and cron alike; a number bounds both.",
+      "impact": "high",
+      "advanced": true,
+      "units": "seconds",
+      "min": 0.0,
+      "max": 604800.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 0.0,
+      "env": "KAME_MAX_TOTAL_WAIT",
+      "group": "extra",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "never_fall_back_to_another_model",
+      "kind": "flag",
+      "title": "Ignore my fallback list",
+      "help": "Off (default): the fallback models you set in Hermes take over when your keys are out; on: always wait for your keys.",
+      "when": "Only if you keep a fallback list in Hermes but want KAME to wait for your keys anyway.",
+      "detail": "KAME itself never chooses a model. Off (the default): if you have set fallback models in Hermes (hermes fallback add), they are used automatically when every key of your model is resting for long, and Hermes comes back to your model once its keys return. With no list nothing ever switches. On: your list is ignored and KAME waits for your keys however long that takes, and tells Hermes not to fall back on the errors it classifies (Hermes can still move on its own for some errors it sees itself, such as repeated timeouts). Summarisation and titling are routed by Hermes on a lane this cannot reach.",
+      "impact": "low",
+      "advanced": true,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_NO_MODEL_FALLBACK",
+      "group": "extra",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_mode",
+      "kind": "string",
+      "title": "Speed",
+      "help": "How soon KAME races a second key when a reply is late. The line under the buttons says what the chosen mode costs in extra requests.",
+      "when": "Leave on Balanced. Saver if every extra request costs you money; Faster if speed matters more than a few extra requests.",
+      "detail": "When a reply is slower than usual, send a backup request on another key and use whichever answers first. Balanced learns each model's usual wait and only races the slow calls; Faster does the same a notch sooner and more often, within a larger budget, and steps back to Balanced for 10 minutes when a key hits a rate limit.",
+      "impact": "high",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "adaptive",
+      "env": "KAME_HEDGE_MODE",
+      "group": "speed",
+      "choice_order": [
+        "off",
+        "adaptive",
+        "max"
+      ],
+      "choice_labels": {
+        "off": "Saver · 1x",
+        "adaptive": "Balanced · up to 1.1x",
+        "max": "Faster · up to 1.3x"
+      },
+      "choice_help": {
+        "off": "One request per reply, never more: the cheapest, and a slow reply simply waits.",
+        "adaptive": "A second key races only a reply that is slower than twice its usual time, so over a day it uses at most about 10% more requests.",
+        "max": "Races a little sooner and more often, at most about 30% more requests, and goes back to Balanced by itself for 10 minutes whenever one of that model's keys hits a rate limit."
+      },
+      "choice_footnote": "Balanced and Faster may also race your next model when a reply is already about 3x slower than usual, and ask several keys at once when a model runs out of quota - the counter below shows what was really spent."
+    },
+    {
+      "key": "first_token_wait",
+      "kind": "string",
+      "title": "Wait for the first token",
+      "help": "How long a key may stay silent before KAME drops it and asks the next one. Automatic learns each model's usual first-word time and drops a key only when it is far past it (20 s at least, 60 s for thinking models); never for a model on this computer. Backup keys still race a slow reply much sooner. Set time: the seconds below. Off: Hermes' own 120 s.",
+      "when": "Leave on Automatic. Set time only if a provider hangs in silence and Automatic is too patient for you.",
+      "detail": "How long a key may stay silent before KAME drops it and asks the next one. Automatic learns each model's usual first-word time and drops a key only when it is far past it (20 s at least, 60 s for thinking models); never for a model on this computer. Backup keys still race a slow reply much sooner. Set time: the seconds below. Off: Hermes' own 120 s.",
+      "impact": "medium",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "auto",
+      "env": "KAME_FIRST_TOKEN_WAIT",
+      "group": "speed",
+      "choice_order": [
+        "auto",
+        "timed",
+        "off"
+      ],
+      "choice_labels": {
+        "auto": "Automatic",
+        "timed": "Set time",
+        "off": "Off"
+      },
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "stream_silence_timeout_seconds",
+      "kind": "number",
+      "title": "First-token wait (seconds)",
+      "help": "Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay silent before KAME asks the next one; 60 suits most providers. 0 (default) leaves the wait to Hermes' own 120 s.",
+      "when": "Only with 'Set time'. 60 is a safe number for most providers.",
+      "detail": "For a provider that accepts a request and then sends nothing. KAME waits this long for the first character — and for every character after it — before dropping that key and asking the next one. Zero, the default, means only Hermes' own 120s applies. Leave it at zero unless you have a provider that accepts a request and then hangs: a reasoning model can spend well over twenty seconds before its first token, and a number that short would abandon it mid-thought and rotate through the whole pool doing the same. Anything above zero is raised to at least 5s for the same reason. If you do have such a provider, 60 is the number to try: it is well clear of the slowest honest first token anyone has measured here, and half of what Hermes would otherwise spend before giving up — so a hung key costs a minute instead of two, and a slow one is still allowed to think.",
+      "impact": "low",
+      "advanced": false,
+      "units": "seconds",
+      "min": 0.0,
+      "max": 3600.0,
+      "step": null,
+      "off_or_at_least": 5.0,
+      "consequential": false,
+      "default": 0.0,
+      "env": "KAME_STREAM_SILENCE_TIMEOUT",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_max_legs",
+      "kind": "number",
+      "title": "Most parallel requests per call",
+      "help": "1 turns backup requests off. 2 allows one backup per call. 3 lets a chat reply that is still silent after the first backup try a third key (calls that do not stream use one backup at most).",
+      "when": "Lower to 2 to cap a slow call at one backup.",
+      "detail": "1 turns backup requests off. 2 allows one backup per call. 3 lets a chat reply that is still silent after the first backup try a third key (calls that do not stream use one backup at most).",
+      "impact": "medium",
+      "advanced": true,
+      "units": "legs",
+      "min": 1.0,
+      "max": 3.0,
+      "step": 1,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 3.0,
+      "env": "KAME_HEDGE_MAX_LEGS",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "probe_burst_max_legs",
+      "kind": "number",
+      "title": "Keys asked at once when quota runs out",
+      "help": "When two keys in a row are refused because their quota is spent, asking the rest one at a time costs almost a second each. KAME then asks 4 keys at once, then 8, then 16, and the first that answers wins; in a chat the others are cut (a call that does not stream asks at most 4 at once, and those finish on their own). Keys the provider itself said are still spent are asked all at once, and only they. A key that still had quota and lost the race may have spent one request. 0 or 1 asks one key at a time. Off when backup requests are off; never for background jobs.",
+      "when": "Rarely. Lower it if every request costs you money; 0 asks keys one by one.",
+      "detail": "When two keys in a row are refused because their quota is spent, asking the rest one at a time costs almost a second each. KAME then asks 4 keys at once, then 8, then 16, and the first that answers wins; in a chat the others are cut (a call that does not stream asks at most 4 at once, and those finish on their own). Keys the provider itself said are still spent are asked all at once, and only they. A key that still had quota and lost the race may have spent one request. 0 or 1 asks one key at a time. Off when backup requests are off; never for background jobs.",
+      "impact": "low",
+      "advanced": true,
+      "units": "keys",
+      "min": 0.0,
+      "max": 32.0,
+      "step": 1,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 16.0,
+      "env": "KAME_PROBE_BURST",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_budget_pct",
+      "kind": "number",
+      "title": "Backup budget (% of calls)",
+      "help": "Roughly what share of calls may carry a backup request. The budget refills as normal calls succeed, so a slow afternoon hedges a few times and then pauses until it is earned back.",
+      "when": "Lower it to spend fewer extra requests on backups; raise it for faster worst cases.",
+      "detail": "Roughly what share of calls may carry a backup request. The budget refills as normal calls succeed, so a slow afternoon hedges a few times and then pauses until it is earned back.",
+      "impact": "medium",
+      "advanced": true,
+      "units": "% of calls",
+      "min": 0.0,
+      "max": 50.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 10.0,
+      "env": "KAME_HEDGE_BUDGET_PCT",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_burst",
+      "kind": "number",
+      "title": "Backup burst allowance",
+      "help": "How many backups can fire back-to-back after an idle period, before the budget above has been earned back.",
+      "when": "Rarely. How many backups may go out back to back.",
+      "detail": "How many backups can fire back-to-back after an idle period, before the budget above has been earned back.",
+      "impact": "low",
+      "advanced": true,
+      "units": "backups",
+      "min": 1.0,
+      "max": 10.0,
+      "step": 1,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 3.0,
+      "env": "KAME_HEDGE_BURST",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_quantile",
+      "kind": "number",
+      "title": "Send backup when slower than usual",
+      "help": "For calls that do not stream: the percentile of learned response times a call must exceed before a backup is sent. 90 means 'slower than 9 calls in 10'. The chat uses its own trigger: twice the model's usual time to the first word.",
+      "when": "Rarely. Lower = backups sooner.",
+      "detail": "For calls that do not stream: the percentile of learned response times a call must exceed before a backup is sent. 90 means 'slower than 9 calls in 10'. The chat uses its own trigger: twice the model's usual time to the first word.",
+      "impact": "low",
+      "advanced": true,
+      "units": "percentile",
+      "min": 50.0,
+      "max": 99.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 90.0,
+      "env": "KAME_HEDGE_QUANTILE",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_cold_s",
+      "kind": "number",
+      "title": "First backup while still learning",
+      "help": "Before KAME has learned how fast this model usually answers, a call slower than this still gets a backup. Keep it well above the slowest honest first token so a merely normal call is never doubled.",
+      "when": "Rarely. Used only until KAME has learned a model's normal speed.",
+      "detail": "Before KAME has learned how fast this model usually answers, a call slower than this still gets a backup. Keep it well above the slowest honest first token so a merely normal call is never doubled.",
+      "impact": "low",
+      "advanced": true,
+      "units": "seconds",
+      "min": 0.5,
+      "max": 120.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 6.0,
+      "env": "KAME_HEDGE_COLD_S",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_cold_reasoning_s",
+      "kind": "number",
+      "title": "First backup while learning (thinking)",
+      "help": "The same threshold, separate for models that think before they answer — a long thinking phase is normal there and must not trigger a backup.",
+      "when": "Rarely. Same as above, for thinking models.",
+      "detail": "The same threshold, separate for models that think before they answer — a long thinking phase is normal there and must not trigger a backup.",
+      "impact": "low",
+      "advanced": true,
+      "units": "seconds",
+      "min": 2.0,
+      "max": 300.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 30.0,
+      "env": "KAME_HEDGE_COLD_REASONING_S",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedge_max_prompt_tokens",
+      "kind": "number",
+      "title": "Skip backups for very long prompts",
+      "help": "A backup of a huge prompt spends your token quota twice and never hits a warm cache, so above this size backups are skipped.",
+      "when": "Rarely. Very long prompts are not duplicated, to save quota.",
+      "detail": "A backup of a huge prompt spends your token quota twice and never hits a warm cache, so above this size backups are skipped.",
+      "impact": "low",
+      "advanced": true,
+      "units": "tokens",
+      "min": 1000.0,
+      "max": 1000000.0,
+      "step": 1,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 32000.0,
+      "env": "KAME_HEDGE_MAX_PROMPT_TOKENS",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "share_pool_health",
+      "kind": "flag",
+      "title": "Profiles share what they learn",
+      "help": "On: when several Hermes profiles use the same keys, a key resting in one rests in all; no effect with one profile.",
+      "when": "Keep on when several Hermes profiles use the same keys.",
+      "detail": "For an install with more than one Hermes profile on the same machine, using the same API keys. Off, each profile learns a key's rest and its recovery on its own, so one profile can bench a key while another calls it in the same second and both are told the same refusal. On, every profile reads and writes one file outside any profile's own folder, so a bench or a success in one is seen by the others, and a hold survives restarting Hermes instead of being thrown away with the process. Never a key — only a hash of one. Turning this on never makes a hold longer than the ceiling above already allows, and does nothing at all if only one profile is running.",
+      "impact": "medium",
+      "advanced": true,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": true,
+      "env": "KAME_SHARE_POOL_HEALTH",
+      "group": "keyring",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "pacing_rpm_overrides",
+      "kind": "string",
+      "title": "Per-model requests-per-minute limits",
+      "help": "Tell the pacer what a provider really allows, e.g. 'gemini:gemini-2.5-flash=10, groq:*=30'. It is the most KAME will assume; a real per-minute refusal can still lower it, and nothing learned can raise it above this. Leave empty to let it learn from real answers and refusals.",
+      "when": "Only if you know a model's per-minute limit and KAME keeps hitting it.",
+      "detail": "Tell the pacer what a provider really allows, e.g. 'gemini:gemini-2.5-flash=10, groq:*=30'. It is the most KAME will assume; a real per-minute refusal can still lower it, and nothing learned can raise it above this. Leave empty to let it learn from real answers and refusals.",
+      "impact": "low",
+      "advanced": true,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "",
+      "env": "KAME_PACING_RPM_OVERRIDES",
+      "group": "keyring",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "key_region_overrides",
+      "kind": "string",
+      "title": "Region per key",
+      "help": "For regional providers (Vertex, Bedrock), name a key's region, e.g. 'key:a1b2c3=us-central1' — the key as the Events tab shows it (the six characters alone also work). It sets the region of the whole model on that endpoint, so refusals there do not rest the same model elsewhere. Auto-detected from the endpoint URL when left empty.",
+      "when": "Only if one key must be treated as a different region (Vertex, Bedrock).",
+      "detail": "For regional providers (Vertex, Bedrock), name a key's region, e.g. 'key:a1b2c3=us-central1' — the key as the Events tab shows it (the six characters alone also work). It sets the region of the whole model on that endpoint, so refusals there do not rest the same model elsewhere. Auto-detected from the endpoint URL when left empty.",
+      "impact": "low",
+      "advanced": true,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": "",
+      "env": "KAME_KEY_REGION_OVERRIDES",
+      "group": "keyring",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "daily_quota_cooldown_seconds",
+      "kind": "number",
+      "title": "Daily quota cooldown",
+      "help": "How long a key rests after a daily or account-level refusal — a quota that is genuinely spent. The provider's own retry hint is ignored for these on purpose: it routinely says a minute when the truth is midnight. It does not govern a key the provider *refused* (a 401, a revoked key): that rests twenty seconds and is then offered last, because waiting is not what repairs one — and a key the provider names dead leaves rotation instead of resting.",
+      "when": "Only if your provider's daily quota resets at a known time KAME cannot read.",
+      "detail": "How long a key rests after a daily or account-level refusal — a quota that is genuinely spent. The provider's own retry hint is ignored for these on purpose: it routinely says a minute when the truth is midnight. It does not govern a key the provider *refused* (a 401, a revoked key): that rests twenty seconds and is then offered last, because waiting is not what repairs one — and a key the provider names dead leaves rotation instead of resting.",
+      "impact": "medium",
+      "advanced": true,
+      "units": "seconds",
+      "min": 1.0,
+      "max": 86400.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 3600.0,
+      "env": "KAME_DAILY_COOLDOWN",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "max_hold_seconds",
+      "kind": "number",
+      "title": "Ceiling on any hold",
+      "help": "No credential sits out longer than this, whatever set the rest — a provider's own stated wait, the daily cooldown above, or this plugin's own escalation. Past it the key returns to selection and is probed; a refusal that repeats is held again, so a genuinely long outage costs about one refused request per interval instead of a healthy key sitting out for however long a provider claimed.",
+      "when": "The longest any key is ever benched. Lower it to retry spent keys sooner.",
+      "detail": "No credential sits out longer than this, whatever set the rest — a provider's own stated wait, the daily cooldown above, or this plugin's own escalation. Past it the key returns to selection and is probed; a refusal that repeats is held again, so a genuinely long outage costs about one refused request per interval instead of a healthy key sitting out for however long a provider claimed.",
+      "impact": "medium",
+      "advanced": true,
+      "units": "seconds",
+      "min": 60.0,
+      "max": 86400.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 3600.0,
+      "env": "KAME_MAX_HOLD",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "unsized_throttle_backoff",
+      "kind": "flag",
+      "title": "Short ladder: bare RESOURCE_EXHAUSTED",
+      "help": "Applies to one error only: an HTTP 429 whose structured status is RESOURCE_EXHAUSTED and that carries no retry number and no quotaId (Gemini's bare refusal). On, that key rests 1s, then 2, 4, 8, 16, 32... on each consecutive repeat on the same key and model, up to the cap below, instead of the flat rest. Every other throttle keeps the flat rest. It resets to 1s the moment that key answers, or when a refusal carries a number the provider stated; a stated number is never multiplied. In real use it made fewer calls per minute than the flat rest (24 against 29) without answering less. Off restores the flat rest exactly.",
+      "when": "Keep on. It retries a bare 'rate limit' after 1, 2, 4… seconds instead of a fixed wait.",
+      "detail": "Applies to one error only: an HTTP 429 whose structured status is RESOURCE_EXHAUSTED and that carries no retry number and no quotaId (Gemini's bare refusal). On, that key rests 1s, then 2, 4, 8, 16, 32... on each consecutive repeat on the same key and model, up to the cap below, instead of the flat rest. Every other throttle keeps the flat rest. It resets to 1s the moment that key answers, or when a refusal carries a number the provider stated; a stated number is never multiplied. In real use it made fewer calls per minute than the flat rest (24 against 29) without answering less. Off restores the flat rest exactly.",
+      "impact": "medium",
+      "advanced": true,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": true,
+      "env": "KAME_UNSIZED_BACKOFF",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "unsized_throttle_rest_seconds",
+      "kind": "number",
+      "title": "Rest after an unsized throttle",
+      "help": "How long a credential rests after a per-minute or rate-limit refusal that never once named a number - no retry hint, no window. Measured on real traffic: a refused key retried within 30s answered 0 of 73 times, and over the whole recorded corpus 30s avoids 388 of 413 avoidable refused calls while delaying 6 answers - the best return of any rest tried. Set to 0 to offer the credential again immediately instead. Clamped to 0-300; past 300 this is no longer an unsized throttle's business.",
+      "when": "Rarely. The wait for a rate limit that states no time, when the ladder is off.",
+      "detail": "How long a credential rests after a per-minute or rate-limit refusal that never once named a number - no retry hint, no window. Measured on real traffic: a refused key retried within 30s answered 0 of 73 times, and over the whole recorded corpus 30s avoids 388 of 413 avoidable refused calls while delaying 6 answers - the best return of any rest tried. Set to 0 to offer the credential again immediately instead. Clamped to 0-300; past 300 this is no longer an unsized throttle's business.",
+      "impact": "low",
+      "advanced": true,
+      "units": "seconds",
+      "min": 0.0,
+      "max": 300.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 30.0,
+      "env": "KAME_UNSIZED_REST",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "unsized_backoff_max_seconds",
+      "kind": "number",
+      "title": "Where the ladder stops",
+      "help": "The longest rest the bare RESOURCE_EXHAUSTED ladder above will reach. The default, 64, runs 1, 2, 4, 8, 16, 32, 64 seconds and then holds at 64: the fastest measured recovery for this error is 23-34s, so going far past 64 only keeps a key out longer than it needed. Set it to 3600 for the uncapped doubling (1, 2, 4 ... up to an hour). The ceiling on any hold still bounds it. Clamped to 1-3600.",
+      "when": "Rarely. Where the 1, 2, 4… ladder stops.",
+      "detail": "The longest rest the bare RESOURCE_EXHAUSTED ladder above will reach. The default, 64, runs 1, 2, 4, 8, 16, 32, 64 seconds and then holds at 64: the fastest measured recovery for this error is 23-34s, so going far past 64 only keeps a key out longer than it needed. Set it to 3600 for the uncapped doubling (1, 2, 4 ... up to an hour). The ceiling on any hold still bounds it. Clamped to 1-3600.",
+      "impact": "low",
+      "advanced": true,
+      "units": "seconds",
+      "min": 1.0,
+      "max": 3600.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 64.0,
+      "env": "KAME_UNSIZED_BACKOFF_MAX",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "stream_resume_limit",
+      "kind": "number",
+      "title": "Resume attempts per turn",
+      "help": "Minus one (the default) continues while the answer makes progress; no-progress repetition still stops on evidence. Zero switches stitching off entirely. Explicit ceilings from one to ten retain their operator-selected limit.",
+      "when": "Rarely. Caps how often one cut answer is continued.",
+      "detail": "Minus one (the default) continues while the answer makes progress; no-progress repetition still stops on evidence. Zero switches stitching off entirely. Explicit ceilings from one to ten retain their operator-selected limit.",
+      "impact": "low",
+      "advanced": true,
+      "units": "times",
+      "min": -1.0,
+      "max": 10.0,
+      "step": 1,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": -1.0,
+      "env": "KAME_STREAM_RESUME_LIMIT",
+      "group": "tuning",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "disabled",
+      "kind": "flag",
+      "title": "Turn KAME off",
+      "help": "Every call keeps the key Hermes resolved and failures follow Hermes' own retry rules. The plugin stays installed and does nothing.",
+      "when": "Only to check whether KAME is behind a problem. Everything goes back to plain Hermes.",
+      "detail": "Every call keeps the key Hermes resolved and failures follow Hermes' own retry rules. The plugin stays installed and does nothing.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": true,
+      "default": false,
+      "env": "KAME_ROTATION_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "spread_disabled",
+      "kind": "flag",
+      "title": "Give back key selection",
+      "help": "Cooldown sizing stays, but each call carries the first healthy key in the pool's order (Hermes' own fill_first) instead of the least-loaded one.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "Cooldown sizing stays, but each call carries the first healthy key in the pool's order (Hermes' own fill_first) instead of the least-loaded one.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_SPREAD_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "resolver_disabled",
+      "kind": "flag",
+      "title": "Send multi-key values whole",
+      "help": "KAME stops keeping a comma-separated key variable as one pool row per key, and Hermes reads it as one long key again, which no provider accepts. `/kame-keys split` still does it once by hand.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "KAME stops keeping a comma-separated key variable as one pool row per key, and Hermes reads it as one long key again, which no provider accepts. `/kame-keys split` still does it once by hand.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_RESOLVER_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "carousel_disabled",
+      "kind": "flag",
+      "title": "Stop rotating per call",
+      "help": "Hermes' own key, retry ceiling and rotation rules come back. Cooldown sizing stays. This is the switch that stops a failed call trying the next key.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "Hermes' own key, retry ceiling and rotation rules come back. Cooldown sizing stays. This is the switch that stops a failed call trying the next key.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": true,
+      "default": false,
+      "env": "KAME_CAROUSEL_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "storm_collapse_disabled",
+      "kind": "flag",
+      "title": "Log every failure during an outage",
+      "help": "Repeated identical failures are written in full instead of being collapsed into a periodic count. Louder logs, same rotation.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "Repeated identical failures are written in full instead of being collapsed into a periodic count. Louder logs, same rotation.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_STORM_COLLAPSE_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "live_status_disabled",
+      "kind": "flag",
+      "title": "Hide the status line",
+      "help": "Pool health and the recovery countdown stop appearing on the spinner line. Rotation is unchanged.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "Pool health and the recovery countdown stop appearing on the spinner line. Rotation is unchanged.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_LIVE_STATUS_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "stream_stitch_disabled",
+      "kind": "flag",
+      "title": "Stop continuing cut answers",
+      "help": "An answer cut off mid-stream is handed back to Hermes, which restarts it behind a '[System: The previous response was cut off...]' note, instead of KAME continuing it on another key.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "An answer cut off mid-stream is handed back to Hermes, which restarts it behind a '[System: The previous response was cut off...]' note, instead of KAME continuing it on another key.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_STREAM_STITCH_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "refusal_recorder_disabled",
+      "kind": "flag",
+      "title": "Stop recording refusals",
+      "help": "KAME writes each refusal a provider sends to refusals.jsonl beside its own state — status, message and body, with API keys removed first — and decides nothing from it. It is there because the field that tells a per-minute quota from a per-day one could not be read before 1.7.0.0, so it appears in no older log and no rule about it can be checked against real traffic. Writes only, never interrupts a call, and keeps the last ~8 MB (the file rotates). Turn this on to stop the writing.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "KAME writes each refusal a provider sends to refusals.jsonl beside its own state — status, message and body, with API keys removed first — and decides nothing from it. It is there because the field that tells a per-minute quota from a per-day one could not be read before 1.7.0.0, so it appears in no older log and no rule about it can be checked against real traffic. Writes only, never interrupts a call, and keeps the last ~8 MB (the file rotates). Turn this on to stop the writing.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_RECORDER_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "quota_id_disabled",
+      "kind": "flag",
+      "title": "Stop reading the quota window",
+      "help": "Google's per-minute and per-day free-tier quotas report the identical metric name and differ only in one field, quotaId, which Hermes' Gemini adapter drops before KAME sees the error. KAME reads the refusal body on its own connection so that field survives; nothing else about the error changes. Turn this on to leave the refusal exactly as Hermes reads it.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "Google's per-minute and per-day free-tier quotas report the identical metric name and differ only in one field, quotaId, which Hermes' Gemini adapter drops before KAME sees the error. KAME reads the refusal body on its own connection so that field survives; nothing else about the error changes. Turn this on to leave the refusal exactly as Hermes reads it.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_QUOTA_ID_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "call_timings_disabled",
+      "kind": "flag",
+      "title": "Stop timing calls",
+      "help": "KAME writes one line per attempt to calls.jsonl beside its own state: how long until anything came back, how long until the answer started, how long the attempt took in total, and how much of the turn had already been spent waiting for a key. It exists so “is it slow, and whose fault is it” can be answered with numbers rather than from memory — a turn that took two minutes is a quota problem or a slow model, and those look identical from outside. No key, no prompt and no answer text is written; only durations, a model name and the same key fingerprint the panel already shows. Writes only, never interrupts a call, and keeps the last ~4 MB (the file rotates). Turn this on to stop the writing.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "KAME writes one line per attempt to calls.jsonl beside its own state: how long until anything came back, how long until the answer started, how long the attempt took in total, and how much of the turn had already been spent waiting for a key. It exists so “is it slow, and whose fault is it” can be answered with numbers rather than from memory — a turn that took two minutes is a quota problem or a slow model, and those look identical from outside. No key, no prompt and no answer text is written; only durations, a model name and the same key fingerprint the panel already shows. Writes only, never interrupts a call, and keeps the last ~4 MB (the file rotates). Turn this on to stop the writing.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_CALL_TIMINGS_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "hedging_disabled",
+      "kind": "flag",
+      "title": "Stop adaptive hedging",
+      "help": "When hedging is active and a reply is slower than usual, KAME asks a second key (and, if that is slow too, a third) and uses whichever answers first. In the chat the race is decided by the first word: the moment one key starts answering, the others are cut. Each backup is one extra request on a key of another project, held to a budget (about 10% of calls) and stopped by itself when rate limits appear. Turn this on to stop hedging everywhere.",
+      "when": "Only to check whether this part of KAME is behind a problem.",
+      "detail": "When hedging is active and a reply is slower than usual, KAME asks a second key (and, if that is slow too, a third) and uses whichever answers first. In the chat the race is decided by the first word: the moment one key starts answering, the others are cut. Each backup is one extra request on a key of another project, held to a budget (about 10% of calls) and stopped by itself when rate limits appear. Turn this on to stop hedging everywhere.",
+      "impact": "escape",
+      "advanced": false,
+      "units": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": false,
+      "env": "KAME_HEDGING_DISABLED",
+      "group": "off",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    }
   ],
   "groups_agent_zero_only": [
     {
@@ -98,343 +986,1183 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1990
+      "hermes_line": 1991
     },
     {
       "hermes": "What KAME did",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2015
+      "hermes_line": 2016
     },
     {
       "hermes": "Quick controls",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2127
+      "hermes_line": 2128
     },
     {
       "hermes": "Getting started",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3838
+      "hermes_line": 3839
     },
     {
       "hermes": "Nothing to report — every reply went straight out.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2035
+      "hermes_line": 2036
     },
     {
       "hermes": "All events →",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2039
+      "hermes_line": 2040
     },
     {
       "hermes": "All settings →",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2133
+      "hermes_line": 2134
     },
     {
       "hermes": "The three you may want to change often. Everything else is in Settings.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2127
+      "hermes_line": 2128
     },
     {
       "hermes": "Wake this model",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1927
+      "hermes_line": 1928
     },
     {
       "hermes": "Try this model now",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1939
+      "hermes_line": 1940
     },
     {
       "hermes": "Wake it",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1920
+      "hermes_line": 1921
     },
     {
       "hermes": "Its keys start again as if never tried; a key that is really spent is refused again. No key is deleted.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1906
+      "hermes_line": 1907
     },
     {
       "hermes": "In the order of your fallback list: KAME starts every reply on 1, and goes down the list when a model is busy, slow or out of quota.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 1988
+      "hermes_line": 1989
     },
     {
       "hermes": "One ring per provider and model. A key spent on one model keeps its allowance on another.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 1989
+      "hermes_line": 1990
     },
     {
       "hermes": "Also used by background jobs",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1995
+      "hermes_line": 1996
     },
     {
       "hermes": "Background jobs and your quota",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2094
+      "hermes_line": 2095
     },
     {
       "hermes": "Titles, summaries and other side jobs spend the same per-model quota as your chats.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2093
+      "hermes_line": 2094
     },
     {
       "hermes": "Nothing wrong.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1503
+      "hermes_line": 1504
     },
     {
       "hermes": "Every model is busy — KAME keeps asking, your best first, until one answers.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1519
+      "hermes_line": 1520
     },
     {
       "hermes": "No model can answer right now — KAME waits for the first key to come back.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1520
+      "hermes_line": 1521
     },
     {
       "hermes": "Nothing is ready right now — see the models below.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1444
+      "hermes_line": 1445
     },
     {
       "hermes": "Answering now",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1419
+      "hermes_line": 1420
     },
     {
       "hermes": "Everything works without changing anything here. Changes apply on the next message and survive restarts.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2869
+      "hermes_line": 2870
     },
     {
       "hermes": "KAME settings · all at their defaults",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2871
+      "hermes_line": 2872
     },
     {
       "hermes": "Reset to defaults",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2893
+      "hermes_line": 2894
     },
     {
       "hermes": "Clear pool",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2898
+      "hermes_line": 2899
     },
     {
       "hermes": "Clear events",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2903
+      "hermes_line": 2904
     },
     {
       "hermes": "Hide advanced settings",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2912
+      "hermes_line": 2913
     },
     {
       "hermes": "Reset everything",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2924
+      "hermes_line": 2925
     },
     {
       "hermes": "Clear the pool",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2937
+      "hermes_line": 2938
     },
     {
       "hermes": "Settings that are already tuned or only one unusual setup needs. Hidden unless you changed them.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2908
+      "hermes_line": 2909
     },
     {
       "hermes": "Hide these switches",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2641
+      "hermes_line": 2642
     },
     {
       "hermes": "Empties the event list on the Events page. Nothing else changes.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2902
+      "hermes_line": 2903
     },
     {
       "hermes": "Only clears rotation and quarantine; it does not delete any key.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2897
+      "hermes_line": 2898
     },
     {
       "hermes": "Last replies",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3684
+      "hermes_line": 3685
     },
     {
       "hermes": "Right now",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4351
+      "hermes_line": 4352
     },
     {
       "hermes": "This Hermes process",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4363
+      "hermes_line": 4364
     },
     {
       "hermes": "Keys asked together",
       "files": [
-        "kame-panel.html"
+        "kame-panel-store.js"
       ],
-      "hermes_line": 4373
+      "hermes_line": 4374
     },
     {
       "hermes": "Still waiting",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3585
+      "hermes_line": 3586
+    },
+    {
+      "hermes": "Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2232
+    },
+    {
+      "hermes": "When to change it: ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2260
+    },
+    {
+      "hermes": "Reset every setting?",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2934
+    },
+    {
+      "hermes": "Clear the pool?",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2946
+    },
+    {
+      "hermes": "Every key starts again as if it had never been tried: cooldowns, quarantines and the request history are forgotten. This does not delete any key, and a key that is genuinely spent will simply be refused again.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2941
+    },
+    {
+      "hermes": "Turn it on",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2345
+    },
+    {
+      "hermes": "This KAME reports no settings.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2653
+    },
+    {
+      "hermes": "Not sorted into any of the groups above.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2705
+    },
+    {
+      "hermes": "empty = not used",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2591
+    },
+    {
+      "hermes": "Saving…",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2861
+    },
+    {
+      "hermes": "Nothing anywhere mentions this one, so the built-in default is in force.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2172
+    },
+    {
+      "hermes": "is set in the environment, which outranks everything else.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2169
+    },
+    {
+      "hermes": "This one counts whole things, so it takes a whole number.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 347
+    },
+    {
+      "hermes": "anything shorter fires while a healthy provider is still connecting.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 351
+    },
+    {
+      "hermes": "This is the switch people reach for when they suspect KAME of breaking something — it is reversible, and nothing is uninstalled.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2348
+    },
+    {
+      "hermes": "Show the ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2642
+    },
+    {
+      "hermes": "Reading this list",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3802
+    },
+    {
+      "hermes": "The background calls Hermes makes on its own",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3618
+    },
+    {
+      "hermes": "Each word on this list, and what it means.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3802
+    },
+    {
+      "hermes": "KAME rotating",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3751
+    },
+    {
+      "hermes": "providers refusing",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3760
+    },
+    {
+      "hermes": "Rotations, recoveries, continued answers and waits — the plugin doing its job.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3753
+    },
+    {
+      "hermes": "What the providers said. A refusal here is not a fault in KAME; it is what KAME is for.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3762
+    },
+    {
+      "hermes": "Everything in the buffer, newest first.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3744
+    },
+    {
+      "hermes": "Every background call in the buffer, newest first.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3634
+    },
+    {
+      "hermes": "all tasks",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3632
+    },
+    {
+      "hermes": "What went wrong",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3069
+    },
+    {
+      "hermes": "What the provider actually sent, with anything key-shaped removed before it was stored.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3431
+    },
+    {
+      "hermes": "Click to see what the provider actually said.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3243
+    },
+    {
+      "hermes": "see the error",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3331
+    },
+    {
+      "hermes": "Keys appear as fingerprints: a hash, never a prefix of the key itself. Provider error text is scrubbed before it is written down, because a provider can quote your own prompt back inside an error.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3728
+    },
+    {
+      "hermes": "The model that wrote each of the last replies of your conversation (each step of a reply that uses tools is a reply of its own), the time to its first word and in total. A model from your fallback list says which model it answered for.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3682
+    },
+    {
+      "hermes": "Nothing of that kind yet.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3790
+    },
+    {
+      "hermes": "Nothing recorded yet. Every rotation, refusal, cut answer and continuation appears here as it happens.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3791
+    },
+    {
+      "hermes": "KAME is running and has not been asked to route a call yet in this process.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3488
+    },
+    {
+      "hermes": "An empty list above means nothing failed.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3491
+    },
+    {
+      "hermes": "Everything below is what it last knew, not what is happening now.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3485
+    },
+    {
+      "hermes": "KAME keeps trying, as configured.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3590
+    },
+    {
+      "hermes": "Auxiliary model calls",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3622
+    },
+    {
+      "hermes": "Click a task to see only its calls.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3618
+    },
+    {
+      "hermes": "They share the same keys and the same pools as the chat (one pool per provider and model), so this is only a separate view, never a separate rotation.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3618
+    },
+    {
+      "hermes": "Naming this chat",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3166
+    },
+    {
+      "hermes": "Shrinking a long conversation",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3167
+    },
+    {
+      "hermes": "The key this call went out on answered, first time.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2981
+    },
+    {
+      "hermes": "The provider refused this key for THIS model only",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2984
+    },
+    {
+      "hermes": "The provider said this is not a valid credential. Replace it — waiting will not repair one.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2985
+    },
+    {
+      "hermes": "This key was rested for a minute or more before it will be offered again.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2986
+    },
+    {
+      "hermes": "A key answered after KAME had already rotated at least once. The rotation worked.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2987
+    },
+    {
+      "hermes": "This key was rested briefly and the next call went somewhere else.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2988
+    },
+    {
+      "hermes": "An answer that was cut short was continued on another key and joined back up.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2990
+    },
+    {
+      "hermes": "A lot of keys refused at once, which is usually the provider rather than your keys.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2991
+    },
+    {
+      "hermes": "The provider stopped in the middle of an answer.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2992
+    },
+    {
+      "hermes": "Your model could not answer now — its provider said it is busy (overloaded, or timing out on several keys), it was far slower than usual, or every key was resting — so this reply fell back to the next model of your fallback list. The next reply starts on your best model again.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2993
+    },
+    {
+      "hermes": "The previous key did not answer, so KAME asked this one instead — or a slow reply got a backup key racing it.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2995
+    },
+    {
+      "hermes": "Every key was resting, so KAME waited instead of spending a request it knew would be refused.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2996
+    },
+    {
+      "hermes": "the next request uses another key",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3036
+    },
+    {
+      "hermes": "the key sits out, the others carry on",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3034
+    },
+    {
+      "hermes": "out of rotation until you replace it (/kame-keys)",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3033
+    },
+    {
+      "hermes": "keys keep rotating; repeats are counted, not listed",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3040
+    },
+    {
+      "hermes": "continuing on another key from where it stopped",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3041
+    },
+    {
+      "hermes": "shown to you as one answer",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3039
+    },
+    {
+      "hermes": "no request is sent until a key is back",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3045
+    },
+    {
+      "hermes": "the next model of your list answers this reply",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3042
+    },
+    {
+      "hermes": "the provider rejected the request itself",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3155
+    },
+    {
+      "hermes": "a rate limit with no quota number",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3158
+    },
+    {
+      "hermes": "The provider said how long. This wait is its number, not ours.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3315
+    },
+    {
+      "hermes": "Nothing in the response said how long. This wait is a fallback.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3316
+    },
+    {
+      "hermes": "Fingerprint of the source actually installed. Compare it with the build you deployed.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4195
+    },
+    {
+      "hermes": "to replace",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1417
+    },
+    {
+      "hermes": "not rotating",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 821
+    },
+    {
+      "hermes": "reading ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 859
+    },
+    {
+      "hermes": "live",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4146
+    },
+    {
+      "hermes": "Reading the pool…",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4209
+    },
+    {
+      "hermes": "This install is incomplete — KAME is not rotating.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1508
+    },
+    {
+      "hermes": "Re-deploy the whole plugin directory. A copy that does not recurse drops core/ ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4260
+    },
+    {
+      "hermes": "and leaves a plugin that registers, reports itself active, and does nothing.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4260
+    },
+    {
+      "hermes": "KAME is loaded but every call keeps the key Hermes resolved: ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4289
+    },
+    {
+      "hermes": "The numbers below are the last reading, not the current one — ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4163
+    },
+    {
+      "hermes": "the backend is probably restarting.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4163
+    },
+    {
+      "hermes": " left rotation — the provider refused ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4304
+    },
+    {
+      "hermes": "so KAME no longer offers ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4304
+    },
+    {
+      "hermes": "Nothing was deleted: paste the replacement over ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4304
+    },
+    {
+      "hermes": "back by itself. Your other keys are carrying every turn meanwhile.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4304
+    },
+    {
+      "hermes": " just refused and ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4316
+    },
+    {
+      "hermes": " still being tried. ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4316
+    },
+    {
+      "hermes": "One refusal is not proof — an expired token a second from refreshing sends the same thing — ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4316
+    },
+    {
+      "hermes": " in a row, with nothing working in between.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4316
+    },
+    {
+      "hermes": "Ready — your next reply goes to ",
+      "files": [
+        "kame-view.js"
+      ],
+      "hermes_line": 1442
+    },
+    {
+      "hermes": " old — Hermes may be restarting.",
+      "files": [
+        "kame-view.js"
+      ],
+      "hermes_line": 1511
+    },
+    {
+      "hermes": "KAME is loaded but not rotating — see the note below.",
+      "files": [
+        "kame-view.js"
+      ],
+      "hermes_line": 1514
+    },
+    {
+      "hermes": "Idle. A key is ready, so the next call goes straight out.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1114
+    },
+    {
+      "hermes": "Idle, and every key is resting. The first one comes back in ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1115
+    },
+    {
+      "hermes": "Rotated. Attempt ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1124
+    },
+    {
+      "hermes": " rather than failing the turn — press Esc to stop.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1135
+    },
+    {
+      "hermes": "Recovered",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4368
+    },
+    {
+      "hermes": "answered after a rotation",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4368
+    },
+    {
+      "hermes": "Surfaced",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4369
+    },
+    {
+      "hermes": "errors KAME let through",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4369
+    },
+    {
+      "hermes": "Rotations",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3753
+    },
+    {
+      "hermes": "Fallbacks",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4371
+    },
+    {
+      "hermes": "replies your fallback list answered: the model was busy, resting or too slow",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4371
+    },
+    {
+      "hermes": "quota ran out, so several keys were tried at once",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4374
+    },
+    {
+      "hermes": "Waited",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4376
+    },
+    {
+      "hermes": "Answers cut",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4378
+    },
+    {
+      "hermes": "the provider stopped mid-sentence",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4378
+    },
+    {
+      "hermes": "Continued",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4380
+    },
+    {
+      "hermes": "finished on another key, as one reply",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4380
+    },
+    {
+      "hermes": "Backend process ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4418
+    },
+    {
+      "hermes": "/kame for the same picture in the chat, /kame-quota per key and model, /kame-keys to add keys in bulk",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4422
+    },
+    {
+      "hermes": "KAME API Rotation is made by ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4468
+    },
+    {
+      "hermes": "github.com/Kame696",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4434
+    },
+    {
+      "hermes": "⭐ Star it on GitHub",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4471
+    },
+    {
+      "hermes": "Made by KAME",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4481
+    },
+    {
+      "hermes": "KAME API Rotation is designed and built by ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4479
+    },
+    {
+      "hermes": ". Free and MIT-licensed. If it saves your conversations from rate limits, a star on GitHub helps other people find it — it costs nothing.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4479
+    },
+    {
+      "hermes": "⭐ Star on GitHub",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4486
+    },
+    {
+      "hermes": "KAME on GitHub (Kame696)",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4487
+    },
+    {
+      "hermes": "Report a problem",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4488
+    },
+    {
+      "hermes": "KAME has not served this model yet",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2769
+    },
+    {
+      "hermes": "(your model)",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2767
     },
     {
       "hermes": "not used yet",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1371
+      "hermes_line": 1372
     },
     {
       "hermes": "out for today",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1231
+      "hermes_line": 1232
     },
     {
       "hermes": "busy — asked again soon",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1381
+      "hermes_line": 1382
     },
     {
       "hermes": "no key used yet",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1413
+      "hermes_line": 1414
     },
     {
       "hermes": "out of credit",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1244
+      "hermes_line": 1245
     },
     {
       "hermes": "daily quota spent",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1245
+      "hermes_line": 1246
     },
     {
       "hermes": "per-minute limit",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1250
+      "hermes_line": 1251
     },
     {
       "hermes": "key revoked",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1252
+      "hermes_line": 1253
     },
     {
       "hermes": "refused as a credential",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1243
+      "hermes_line": 1244
     },
     {
       "hermes": "out of rotation — replace it",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1233
+      "hermes_line": 1234
     },
     {
       "hermes": "refused — still being tried",
@@ -448,98 +2176,98 @@
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1843
+      "hermes_line": 1844
     },
     {
       "hermes": "out for today (dotted)",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1844
+      "hermes_line": 1845
     },
     {
       "hermes": "Not for this model",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2955
+      "hermes_line": 2956
     },
     {
       "hermes": "Bad key",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2957
+      "hermes_line": 2958
     },
     {
       "hermes": "Key benched",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2958
+      "hermes_line": 2959
     },
     {
       "hermes": "Answered on retry",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2959
+      "hermes_line": 2960
     },
     {
       "hermes": "Key rests",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2960
+      "hermes_line": 2961
     },
     {
       "hermes": "Setting changed",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2962
+      "hermes_line": 2963
     },
     {
       "hermes": "Provider outage",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2964
+      "hermes_line": 2965
     },
     {
       "hermes": "Answer cut",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2965
+      "hermes_line": 2966
     },
     {
       "hermes": "Next key",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2968
+      "hermes_line": 2969
     },
     {
       "hermes": "All keys resting",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2969
+      "hermes_line": 2970
     },
     {
       "hermes": "Passed to Hermes",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2967
+      "hermes_line": 2968
     },
     {
       "hermes": "just now",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3088
+      "hermes_line": 3089
     }
   ],
   "adapted": [
@@ -549,7 +2277,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1946,
+      "hermes_line": 1947,
       "reason": "Agent Zero keeps its keys in Settings > API keys, one comma-separated field per provider"
     },
     {
@@ -558,7 +2286,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2093,
+      "hermes_line": 2094,
       "reason": "Agent Zero has no profiles; the sentence stops before the Hermes-only clause"
     },
     {
@@ -567,8 +2295,134 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3854,
+      "hermes_line": 3855,
       "reason": "same advice, pointing at Agent Zero's own Settings > API keys"
+    },
+    {
+      "hermes": "Set in config.yaml under this plugin. The environment would outrank it.",
+      "agent_zero": "Set in this plugin's settings. The environment would outrank it.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2171,
+      "reason": "Agent Zero keeps its plugin settings in its own settings store, not in config.yaml"
+    },
+    {
+      "hermes": "set in config.yaml",
+      "agent_zero": "set in the settings",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 314,
+      "reason": "the Source badge names the place the value was stored"
+    },
+    {
+      "hermes": "Reads Hermes' .env again and rebuilds this page on the spot.",
+      "agent_zero": "Reads Agent Zero's settings again and rebuilds this page on the spot.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2882,
+      "reason": "Agent Zero has no .env of its own for this: the sentence names the settings it reads"
+    },
+    {
+      "hermes": "Removes every KAME_ line from the .env and forgets the environment value, so every setting falls back to its built-in default.",
+      "agent_zero": "Every KAME setting goes back to its built-in default.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2893,
+      "reason": "Hermes stores the settings in .env lines; Agent Zero stores them in its plugin settings"
+    },
+    {
+      "hermes": "Every KAME setting goes back to its built-in default, and the KAME_ lines are removed from the .env. Nothing else in that file is touched, and no key is affected.",
+      "agent_zero": "Every KAME setting goes back to its built-in default. Your fallback list and your keys are not touched.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 2927,
+      "reason": "same promise without the .env clause; Agent Zero's fallback list is part of its settings and is kept"
+    },
+    {
+      "hermes": "Every call your conversation sent and every decision it made about your keys, newest first",
+      "agent_zero": "Every decision your conversation made about your keys, newest first",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3728,
+      "reason": "Agent Zero's list records the decisions and the failures, not one row per call (the Last replies card carries the answers)"
+    },
+    {
+      "hermes": "No auxiliary model calls yet. Titles, compression, vision and the other auxiliary tasks appear here as Hermes runs them.",
+      "agent_zero": "No auxiliary model calls yet. Titles, compression, memory and the other background jobs appear here as Agent Zero runs them.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 3660,
+      "reason": "Agent Zero's jobs are not Hermes' auxiliary tasks"
+    },
+    {
+      "hermes": "auxiliary models →",
+      "agent_zero": "background jobs →",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 3770,
+      "reason": "Agent Zero's tab is called Background jobs"
+    },
+    {
+      "hermes": "Nothing has been written for ",
+      "agent_zero": "Nothing has been read for ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 4163,
+      "reason": "Agent Zero's page reads the status on demand; Hermes' reads a file the backend writes"
+    },
+    {
+      "hermes": "This page reads a file the backend half of KAME writes. If Hermes has just started, give it a moment.",
+      "agent_zero": "This page reads Agent Zero’s status. If Agent Zero has just started, give it a moment.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4213,
+      "reason": "there is no snapshot file on Agent Zero: the page asks the plugin directly"
+    },
+    {
+      "hermes": "in Hermes’ own provider/key settings and ",
+      "agent_zero": "in Agent Zero’s Settings > API keys and ",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 1067,
+      "reason": "Agent Zero keeps the keys in Settings > API keys, one field per provider"
+    },
+    {
+      "hermes": "Across every conversation it is serving, including subagents and the auxiliary lane.",
+      "agent_zero": "Across every conversation it is serving, including subagents and the background jobs.",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4363,
+      "reason": "Agent Zero's side calls are its background jobs, not an auxiliary lane"
+    },
+    {
+      "hermes": " · reading refreshed every second",
+      "agent_zero": " · reading refreshed every ",
+      "files": [
+        "kame-panel.html"
+      ],
+      "hermes_line": 4418,
+      "reason": "Agent Zero reads its status every few seconds (the footer says how many), Hermes reads a local file every second"
+    },
+    {
+      "hermes": "Change this list in Hermes: hermes fallback add / remove. Background jobs never switch model.",
+      "agent_zero": "Change this list in the Fallback models tab. Background jobs never switch model.",
+      "files": [
+        "kame-panel-store.js"
+      ],
+      "hermes_line": 2786,
+      "reason": "Agent Zero edits the list on its own tab; Hermes uses its command line"
     },
     {
       "hermes": "What KAME can see",
@@ -576,70 +2430,15 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4010,
+      "hermes_line": 4011,
       "reason": "the card is the 1.8.2.8 'what the host looks like' card, named for the host"
     }
   ],
   "not_ported": [
     {
-      "hermes": "Idle. A key is ready, so the next call goes straight out.",
-      "hermes_line": 1114,
-      "reason": "Agent Zero's first sentence is built in kame-view.js nowSentences() with its own words"
-    },
-    {
-      "hermes": "Reset every setting?",
-      "hermes_line": 2933,
-      "reason": "Agent Zero asks in one line with its own confirm text"
-    },
-    {
-      "hermes": "Clear the pool?",
-      "hermes_line": 2945,
-      "reason": "Agent Zero asks in one line with its own confirm text"
-    },
-    {
-      "hermes": "Reading this list",
-      "hermes_line": 3801,
-      "reason": "Events tab: Agent Zero keeps its 1.8.2.8 wording and its own legend"
-    },
-    {
-      "hermes": "Each word on this list, and what it means.",
-      "hermes_line": 3801,
-      "reason": "Events tab: Agent Zero keeps its 1.8.2.8 wording"
-    },
-    {
-      "hermes": "KAME rotating",
-      "hermes_line": 3750,
-      "reason": "Events tab filter names are Agent Zero's own"
-    },
-    {
-      "hermes": "providers refusing",
-      "hermes_line": 3759,
-      "reason": "Events tab filter names are Agent Zero's own"
-    },
-    {
-      "hermes": "What went wrong",
-      "hermes_line": 3068,
-      "reason": "Events tab filter names are Agent Zero's own"
-    },
-    {
-      "hermes": "Auxiliary model calls",
-      "hermes_line": 3621,
-      "reason": "Background jobs tab: Agent Zero names its own jobs (kame_aux), not Hermes' auxiliary router"
-    },
-    {
-      "hermes": "Naming this chat",
-      "hermes_line": 3165,
-      "reason": "Background jobs: Agent Zero names the job from its own call stack"
-    },
-    {
       "hermes": "Waiting for the first snapshot…",
-      "hermes_line": 4507,
-      "reason": "Agent Zero reads on demand, there is no snapshot file to wait for"
-    },
-    {
-      "hermes": "Reading the pool…",
-      "hermes_line": 4208,
-      "reason": "Agent Zero reads on demand, there is no snapshot file to wait for"
+      "hermes_line": 4508,
+      "reason": "Hermes' second entry of the form, under Settings > Plugins, has no Agent Zero twin: the form lives only on this page"
     }
   ]
 }

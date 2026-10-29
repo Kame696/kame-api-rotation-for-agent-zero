@@ -199,7 +199,7 @@ def test_every_path_hermes_reads_exists_in_the_view():
     K.set_fallback_models("google/gemini-3.7-flash")
     K._KAME_PRIMARY["identity"] = "openai:gpt-5.4-nano"
     K._KJ.EVENTS.add("rotation", identity="openai:gpt-5.4-nano", key="ka5206", reason="out of credit")
-    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": 1.0, "total_s": 2.0})
+    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": 1.0, "total_s": 2.0, "main": {"provider": "p", "model": "m"}})
     view = K.status_view()
     paths = json.loads((FIXTURES / "hermes_1829_panel_reads.json").read_text(encoding="utf-8"))["paths"]
     assert len(paths) >= 40

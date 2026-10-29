@@ -81,7 +81,7 @@ HERMES_TITLES = ["If your model cannot answer", "Speed", "Your API keys", "Rest 
 
 
 def test_the_settings_shelves_are_hermes_shelves_in_hermes_order_plus_the_agent_zero_one():
-    out = run_store("await store.refresh(); return store.settingCards.map(c => c.id + '|' + c.title);", loaded())
+    out = run_store("await store.refresh(); store.showAdvanced = true; return store.settingCards.map(c => c.id + '|' + c.title);", loaded())
     ids = [row.split("|")[0] for row in out]
     titles = [row.split("|", 1)[1] for row in out]
     assert ids == ["extra", "speed", "keyring", "tuning", "agentzero", "off"]
@@ -142,11 +142,9 @@ def test_the_speed_buttons_say_what_each_costs_and_the_sentence_follows_the_choi
 
 
 def test_the_first_page_has_the_three_controls_and_the_failover_number_only_for_set_time():
-    out = run_store("await store.refresh(); return [store.quickChoices.map(m => m.name), store.quickNotice.map(m => m.name), store.quickTimed && store.quickTimed.name];",
-                    loaded())
-    assert out == [["hedge_mode", "model_switch"], ["reply_notice"], None]
-    timed = run_store("await store.refresh(); return store.quickTimed && store.quickTimed.name;", loaded(model_switch="timed"))
-    assert timed == "failover_after_seconds"
+    names = "await store.refresh(); return store.quickCards[0].rows.map(m => m.name);"
+    assert run_store(names, loaded()) == ["hedge_mode", "model_switch", "reply_notice"]
+    assert run_store(names, loaded(model_switch="timed")) == ["hedge_mode", "model_switch", "failover_after_seconds", "reply_notice"]
 
 
 # -- U2: the page ------------------------------------------------------------------------------------------
@@ -158,7 +156,8 @@ def test_the_details_are_folded_until_asked():
 def test_the_header_count_is_the_one_count_over_keys():
     out = run_store("await store.refresh(); return [store.headerStatus, store.said.line1];", loaded())
     assert out[0]["text"] == "2 of 3 keys ready"
-    assert "2 of 3 keys ready" in out[1]
+    # the first sentence counts the keys of the model it names (Hermes' wording), not the whole pool
+    assert out[1].endswith("(2 of 2 keys ready).")
 
 
 def test_opening_a_ring_lists_its_keys_and_the_buttons_that_act_on_that_model():

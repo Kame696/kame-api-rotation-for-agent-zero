@@ -53,7 +53,8 @@ def test_the_agent_zero_shelf_follows_rest_times_and_troubleshooting_closes_the_
 
 def test_hermes_keys_sit_where_hermes_puts_them():
     by_group = {g: list(keys) for g, _t, _n, keys in S.GROUPS}
-    assert by_group["extra"] == ["model_switch", "failover_after_seconds", "reply_notice", "max_total_wait_seconds"]
+    assert by_group["extra"] == ["model_switch", "failover_after_seconds", "reply_notice", "max_total_wait_seconds",
+                                 "never_fall_back_to_another_model"]
     assert by_group["speed"][:3] == ["hedge_mode", "first_token_wait", "stream_silence_timeout_seconds"]
     assert by_group["keyring"] == ["share_pool_health", "pacing_rpm_overrides", "key_region_overrides"]
     assert by_group["tuning"][0] == "daily_quota_cooldown_seconds"
@@ -73,10 +74,12 @@ def test_every_setting_is_on_exactly_one_shelf_and_the_list_has_its_own_tab():
     assert S.group_of("a_setting_added_later") == "tuning"          # a wrong shelf beats a missing setting
 
 
-def test_the_basic_settings_are_the_first_two_of_each_shelf():
-    expected = tuple(key for g, _t, _n, keys in S.GROUPS if g != "off" for key in keys[:2])
+def test_the_basic_settings_are_the_ones_hermes_does_not_mark_advanced():
+    expected = tuple(key for g, _t, _n, keys in S.GROUPS if g != "off" for key in keys if key not in S.ADVANCED)
     assert S.VISIBLE == expected
     assert "rotation_disabled" not in S.VISIBLE and "fallback_models" not in S.VISIBLE
+    assert {"model_switch", "hedge_mode"} <= set(S.VISIBLE)
+    assert "hedge_burst" in S.ADVANCED
 
 
 def test_the_panel_report_carries_the_shelf_of_every_setting_and_the_shelves():

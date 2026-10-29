@@ -233,10 +233,12 @@ MODEL_SWITCH = "model_switch"
 BACKUP = "backup"
 #: 1.8.2.9: a background job used up its budget and was stopped (its keys are kept for the chat).
 GAVE_UP = "gave_up"
+#: 1.8.3.0: an answer that was cut short was continued on another key and joined back up.
+STITCH = "stitch"
 _KINDS = frozenset({ROTATION, SWITCH, QUARANTINE, INVALID_KEY, DENIED_MODEL,
                     STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING,
-                    MODEL_SWITCH, BACKUP, GAVE_UP})
-GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP})
+                    MODEL_SWITCH, BACKUP, GAVE_UP, STITCH})
+GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP, STITCH})
 #: 1.8.2.7: which job an event belongs to. `chat` is the conversation; the
 #: others are Agent Zero's background calls (memory, titles, summaries).
 JOBS = ("chat", "utility", "compress", "")
@@ -253,7 +255,7 @@ class Events:
     def add(self, kind: str, *, identity: str = "", key: str = "",
             reason: str = "", code: Optional[int] = None,
             seconds: Optional[float] = None, at: Optional[float] = None,
-            detail: str = "", sized_by: str = "", job: str = "") -> Dict[str, Any]:
+            detail: str = "", sized_by: str = "", job: str = "", task: str = "") -> Dict[str, Any]:
         """Record one event. ``key`` must already be a fingerprint; it is
         truncated anyway, so a raw key passed by mistake is useless, not leaked.
         """
@@ -270,6 +272,8 @@ class Events:
                 "detail": redact(detail) if detail else "",
                 "sized_by": str(sized_by or "")[:24],
                 "job": str(job) if job in JOBS else "",
+                # 1.8.3.0: which background job (title_generation, compression ...) made the call
+                "task": str(task or "")[:40],
             }
         except Exception:
             return {}

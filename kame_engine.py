@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.2.9"
+KAME_VERSION = "1.8.3.0"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -239,6 +239,8 @@ _KAME_CALL_CONTEXT = contextvars.ContextVar('kame_ctx', default='')
 #: v1.8.2.7: which job the running call is ("chat", "utility", "compress"), so
 #: the Events view can keep the conversation apart from background calls.
 _KAME_JOB = contextvars.ContextVar('kame_job', default='')
+#: 1.8.3.0: which named background job (title_generation, compression ...) the running call is.
+_KAME_TASK = contextvars.ContextVar('kame_task', default='')
 #: v1.8.2.7: set while a call runs on a model of KAME's fallback list, so that
 #: call never walks the list itself (one walk, owned by the outer call).
 _KAME_FALLBACK_HOP = contextvars.ContextVar('kame_fallback_hop', default=None)
@@ -574,6 +576,15 @@ _KAME_STATS = {
     "retired": 0,
 }
 _KAME_CALL_COUNT = 0
+#: 1.8.3.0: when the last call was answered (the Events tab's proof of life)
+_KAME_CALLS = {"last_call_at": 0.0}
+#: 1.8.3.0 (A9): what happened in this process, for the "This Agent Zero process" card of the Details fold
+#: (Hermes' counters of the same names). Counted where the event is written, so the card and the Events
+#: tab can never disagree.
+_KAME_COUNTS = {"rotations": 0, "recovered": 0, "surfaced": 0, "waits": 0, "waited_s": 0.0,
+                "stream_drops": 0, "stitched": 0}
+_KAME_COUNT_OF_KIND = {"rotation": "rotations", "invalid_key": "rotations", "denied_model": "rotations",
+                       "recovery": "recovered", "surfaced": "surfaced", "wait": "waits", "stitch": "stitched"}
 
 # --- v1.6.0.1: where each cooldown actually came from ------------------------
 #
@@ -975,6 +986,18 @@ def set_stream_resume_limit(n) -> None:
         _KAME_STREAM_RESUME_LIMIT = int(v)
 
 
+#: 1.8.3.0 (A6): "Ignore my fallback list" (Hermes `never_fall_back_to_another_model`). On: the list is
+#: never used and KAME waits for the keys, however long that takes.
+_KAME_NO_MODEL_FALLBACK = False
+
+
+def set_no_model_fallback(enabled) -> None:
+    global _KAME_NO_MODEL_FALLBACK
+    flag = _kame_flag(enabled)
+    if flag is not None:
+        _KAME_NO_MODEL_FALLBACK = flag
+
+
 def set_stream_stitch_disabled(enabled) -> None:
     global _KAME_STREAM_STITCH_DISABLED
     flag = _kame_flag(enabled)
@@ -1183,6 +1206,10 @@ def current_settings() -> dict:
         "kame_log_full_errors": _KAME_LOG_FULL_ERRORS,
         "kame_collapse_storm_logs": _KAME_COLLAPSE_STORM_LOGS,
         "kame_wait_notice": _KAME_WAIT_NOTICE,
+        # 1.8.3.0: the same two, under Hermes' names (the opposite switch)
+        "storm_collapse_disabled": not _KAME_COLLAPSE_STORM_LOGS,
+        "live_status_disabled": not _KAME_WAIT_NOTICE,
+        "never_fall_back_to_another_model": _KAME_NO_MODEL_FALLBACK,
         "rotation_disabled": _KAME_ROTATION_DISABLED,
         "spread_disabled": _KAME_SPREAD_DISABLED,
         "carousel_disabled": _KAME_CAROUSEL_DISABLED,
@@ -1217,6 +1244,14 @@ def note_setting_changes() -> list:
 def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
                 detail="", sized_by=""):
     """One row on the events timeline. Never raises; never a raw key."""
+    try:
+        counted = _KAME_COUNT_OF_KIND.get(kind)
+        if counted:
+            _KAME_COUNTS[counted] += 1
+            if kind == "wait" and isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+                _KAME_COUNTS["waited_s"] += max(0.0, float(seconds))
+    except Exception:
+        pass
     if _KJ is None:
         return
     try:
@@ -1227,7 +1262,7 @@ def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
         try:
             _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
                            reason=reason, code=code, seconds=seconds, detail=detail,
-                           sized_by=sized_by, job=job)
+                           sized_by=sized_by, job=job, task=_KAME_TASK.get())
         except TypeError:  # an older kame_journal.py beside this engine
             _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
                            reason=reason, code=code, seconds=seconds, detail=detail,
@@ -1272,6 +1307,8 @@ def reset_counts() -> None:
     with _KAME_LOCK:
         for name in list(_KAME_STATS):
             _KAME_STATS[name] = 0
+        for name in list(_KAME_COUNTS):
+            _KAME_COUNTS[name] = 0.0 if name == "waited_s" else 0
         _KAME_TALLY.clear()
 
 
@@ -1408,6 +1445,7 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_RECORDER_DISABLED", set_recorder_disabled),
         ("KAME_CALL_TIMINGS_DISABLED", set_call_timings_disabled),
         ("KAME_SHARE_POOL_HEALTH", set_share_pool_health),
+        ("KAME_NO_MODEL_FALLBACK", set_no_model_fallback),
         ("KAME_STORM_COLLAPSE_DISABLED", _inverse(set_collapse_storm_logs)),
         ("KAME_LIVE_STATUS_DISABLED", _inverse(set_wait_notice)),
         # v1.8.2.7: the Hermes names where the two hosts share a meaning.
@@ -1837,8 +1875,17 @@ def pool_report(context_id=None) -> dict:
         totals["ready"] += ready
         totals["resting"] += resting
         totals["retired"] += retired
+    active = bool(_KAME_PATCHED) and _KAME_LAYER in (1, 2)
     return {
         "version": KAME_VERSION,
+        # 1.8.3.0 (A9): the process the numbers belong to, and, when KAME is loaded but not rotating, why
+        # (Hermes' footer line and its "KAME is loaded but every call keeps the key ..." note).
+        "pid": os.getpid(),
+        # how many refusals in a row take a credential out of rotation (the page quotes it)
+        "refusals_before_retiring": _KAME_REFUSALS_BEFORE_RETIRING,
+        "reason": ("active" if active else
+                   ("KAME has not bound to Agent Zero yet" if not _KAME_PATCHED
+                    else f"KAME could not bind to Agent Zero's model calls (layer {_KAME_LAYER})")),
         # v1.6.0.1: the version is what somebody typed; the build is what is on
         # disk. When they disagree, the build is the one telling the truth.
         "build": _build_report(),
@@ -1858,6 +1905,13 @@ def pool_report(context_id=None) -> dict:
         # v1.8.1.0: the last decisions, newest first, and every setting as it
         # is in force. Fingerprints and KAME's own phrases only.
         "events": _KJ.EVENTS.recent(50) if _KJ is not None else [],
+        # 1.8.3.0: the proof-of-life line of the Events tab (calls answered, and when the last one was)
+        "counters": {
+            "calls": _KAME_CALL_COUNT, "last_call_at": _KAME_CALLS["last_call_at"],
+            **{name: (round(value, 1) if isinstance(value, float) else value) for name, value in _KAME_COUNTS.items()},
+            "handed_over": _KAME_SPEED_STATS.get("model_switches", 0),
+            "probe_bursts": _KAME_SPEED_STATS.get("probe_bursts", 0),
+        },
         "settings": current_settings(),
         # v1.8.2.7: backups, keys asked together, model switches, the list.
         "speed": speed_report(),
@@ -1910,6 +1964,8 @@ _KEY_DAY_KINDS = frozenset({"daily", "insufficient_quota"})
 def _kame_note_call(ctx, owner, identity) -> None:
     """Remember what the view needs from a call that starts: the endpoint, which model is the
     conversation's own, and the Agent Zero chat it belongs to. Never raises."""
+    if ctx.get("main_chat"):
+        _kame_reply_on_main(ctx)    # 1.8.3.0 (D1): settled where the reply starts, with its chat on the stack
     try:
         base = _kame_api_base(owner, ctx)
         with _KAME_LOCK:
@@ -1947,15 +2003,96 @@ def _kame_view_order(identities) -> list:
                 ordered.append(ident)
                 return
 
-    if _KAME_PRIMARY["identity"]:
-        take(_KAME_PRIMARY["identity"])
+    primary = _kame_primary_identity()
+    if primary:
+        take(primary)
     for entry in _KAME_FALLBACK_MODELS:
         take(entry["identity"])
     return ordered + sorted(left)
 
 
-def _kame_key_view(now=None) -> dict:
-    """``{pools, key_groups, totals}`` over every model KAME has a key table for."""
+# --- 1.8.3.0 (D4): the keys Agent Zero holds are known before the first call -----------------
+
+#: When the configured models were last read (monotonic; ``None`` = never) and what they were.
+_KAME_KNOWN = {"at": None, "models": []}
+_KAME_KNOWN_TTL_S = 5.0
+#: Agent Zero's own settings names, for a version without the `_model_config` plugin.
+_KAME_SETTINGS_SLOTS = (("chat", "chat_model"), ("utility", "util_model"), ("embedding", "embed_model"),
+                        ("browser", "browser_model"))
+
+
+def _kame_configured_slots() -> list:
+    """``[(role, provider, name, api_base)]``: the models Agent Zero is configured with. Read from its
+    own resolver (`plugins._model_config`, the configured preset's chat, utility and embedding slots),
+    else from its settings (`chat_model_provider`...). Never raises; ``[]`` when nothing can be read."""
+    try:
+        import importlib
+        mc = importlib.import_module("plugins._model_config.helpers.model_config")
+        out = []
+        for role, fn in (("chat", "get_chat_model_config"), ("utility", "get_utility_model_config"),
+                         ("embedding", "get_embedding_model_config")):
+            cfg = getattr(mc, fn)() or {}
+            out.append((role, cfg.get("provider"), cfg.get("name"), cfg.get("api_base")))
+        return out
+    except Exception:
+        pass
+    try:
+        from helpers import settings as _settings
+        cfg = _settings.get_settings() or {}
+        return [(role, cfg.get(f"{prefix}_provider"), cfg.get(f"{prefix}_name"), cfg.get(f"{prefix}_api_base"))
+                for role, prefix in _KAME_SETTINGS_SLOTS]
+    except Exception:
+        return []
+
+
+def _kame_known_models(force=False) -> list:
+    """``[{identity, provider, api_base, role, keys}]``: every model Agent Zero is configured with and
+    every model of the fallback list that has at least one key in Agent Zero's key field, read with the
+    same lookup the call makes (`_kame_provider_keys`). Kept for a few seconds: the page polls. Raw
+    keys stay inside this module's view builder; nothing of them is ever sent out."""
+    now = time.monotonic()
+    with _KAME_LOCK:
+        if not force and _KAME_KNOWN["at"] is not None and now - _KAME_KNOWN["at"] < _KAME_KNOWN_TTL_S:
+            return list(_KAME_KNOWN["models"])
+    wanted = [(role, str(provider or "").strip().lower(), str(name or "").strip(), str(api_base or "").strip())
+              for role, provider, name, api_base in _kame_configured_slots()]
+    wanted += [("fallback", e["provider"].lower(), e["name"], e.get("api_base", "") or "")
+               for e in list(_KAME_FALLBACK_MODELS)]
+    models = []
+    for role, provider, name, api_base in wanted:
+        if not provider or not name:
+            continue
+        identity = f"{provider}:{name}".lower()
+        if any(_kame_names_match(m["identity"], identity) for m in models):
+            continue
+        keys = _kame_provider_keys(provider)
+        if keys:
+            models.append({"identity": identity, "provider": provider, "api_base": api_base,
+                           "role": role, "keys": keys})
+    with _KAME_LOCK:
+        _KAME_KNOWN["at"], _KAME_KNOWN["models"] = now, list(models)
+    return models
+
+
+def _kame_primary_identity() -> str:
+    """The conversation's own model: the last one that answered, else (before any call) the chat model
+    Agent Zero is configured with, so "your model" is first on screen from the start."""
+    if _KAME_PRIMARY["identity"]:
+        return _KAME_PRIMARY["identity"]
+    try:
+        for model in _kame_known_models():
+            if model["role"] == "chat":
+                return model["identity"]
+    except Exception:
+        pass
+    return ""
+
+
+def _kame_key_view(now=None, known=True) -> dict:
+    """``{pools, key_groups, totals}`` over every model KAME has a key table for. 1.8.3.0: ``known``
+    adds the models Agent Zero is configured with and that have not been called yet, with the keys in
+    its key field, as ready keys of a pool marked ``unused`` (the status line passes ``False``: it
+    does not read Agent Zero's settings from inside a wait)."""
     now = time.time() if now is None else float(now)
     with _KAME_LOCK:
         table = {
@@ -1969,6 +2106,22 @@ def _kame_key_view(now=None) -> dict:
         for fl in _KAME_IN_FLIGHT.values():
             if fl.get("key") and fl.get("job") == "chat":
                 live.setdefault(fl.get("identity"), set()).add(fl["key"])
+    unused = set()
+    if known:
+        try:
+            for model in _kame_known_models():
+                if any(_kame_names_match(i, model["identity"]) for i in table):
+                    continue
+                base = model["api_base"]
+                for ident, held in table.items():     # a key a used model holds is the same physical key
+                    if ident.split(":", 1)[0] == model["provider"] and any(r[0] in model["keys"] for r in held):
+                        base = bases.get(ident, base)
+                        break
+                table[model["identity"]] = [(k, 0.0, "", False, 0.0) for k in model["keys"]]
+                bases[model["identity"]] = base
+                unused.add(model["identity"])
+        except Exception:
+            pass
     pools, groups, physical = [], {}, {}
     for identity in _kame_view_order(list(table)):
         rows = sorted(table[identity], key=lambda r: _key_short_id(r[0]))
@@ -2000,6 +2153,7 @@ def _kame_key_view(now=None) -> dict:
                 row["until_epoch"] = until      # the soonest the key is back for any of its models
         pools.append({
             "identity": identity, "label": label, "keys": len(rows), "healthy": healthy,
+            "unused": identity in unused,
             "in_flight": sum(1 for s in key_states if s[1] == "f"),
             "resting": len(rows) - healthy,
             "soonest_s": round(soonest, 1) if (soonest is not None and not healthy) else None,
@@ -2032,8 +2186,8 @@ def _kame_key_view(now=None) -> dict:
 
 
 def _kame_view_order_index(identity) -> int:
-    names = ([_KAME_PRIMARY["identity"]] if _KAME_PRIMARY["identity"] else []) + \
-        [e["identity"] for e in _KAME_FALLBACK_MODELS]
+    primary = _kame_primary_identity()
+    names = ([primary] if primary else []) + [e["identity"] for e in _KAME_FALLBACK_MODELS]
     for i, want in enumerate(names):
         if _kame_names_match(identity, want):
             return i
@@ -2109,7 +2263,8 @@ def _kame_activity(key_view, context_id, now) -> dict:
 
 def _kame_fallback_view(now) -> dict:
     entries = []
-    for role, entry in ([("primary", {"identity": _KAME_PRIMARY["identity"]})] if _KAME_PRIMARY["identity"] else []) + \
+    primary = _kame_primary_identity()
+    for role, entry in ([("primary", {"identity": primary})] if primary else []) + \
             [("fallback", e) for e in _KAME_FALLBACK_MODELS]:
         identity = entry["identity"]
         with _KAME_LOCK:
@@ -2123,19 +2278,23 @@ def _kame_fallback_view(now) -> dict:
         })
     mode = _KAME_MODEL_SWITCH
     if not _KAME_FALLBACK_MODELS:
-        state, why = "no_chain", ("Switching: off - no fallback models are set, so KAME waits for your keys. "
+        state, why = "no_chain", ("Switching: off - no fallback models are set in Agent Zero, so KAME waits for your keys. "
                                   "Add some in the Fallback models tab and switching is automatic.")
+    elif _KAME_NO_MODEL_FALLBACK:
+        state, why = "off_by_flag", "Switching: off - \"Ignore my fallback list\" is on, so KAME waits for your keys."
     elif mode == "never":
-        state, why = "off_by_zero", "Fallback: off - 'Fallback' is set to Never, so KAME waits for your keys."
+        state, why = "off_by_zero", "Fallback: off - 'Fallback' is set to Never."
+    elif mode == "timed" and _KAME_FAILOVER_AFTER_S <= 0:
+        state, why = "off_by_zero", "Switching: off - your time is 0."
     elif mode == "timed":
-        state, why = "on", (f"Switching: after your time - once you have waited {int(_KAME_FAILOVER_AFTER_S)} s "
-                            "with nothing on screen, KAME answers with the next model below, and your model "
-                            "comes back as soon as it can answer.")
+        state, why = "on", (f"Switching: after your time - once you have waited {int(_KAME_FAILOVER_AFTER_S)} s with nothing "
+                            "on screen, Agent Zero answers with the next model below, and comes back to your model "
+                            "as soon as it can answer.")
     else:
-        state, why = "on", ("Switching: automatic - when your provider is busy, KAME answers with the next model "
-                            "below at once; when your keys are resting, after a few seconds (KAME learns how long "
-                            "your model usually takes). Your model comes back as soon as it can answer, and the "
-                            "first model in the list is always tried first.")
+        state, why = "on", ("Switching: automatic - when your provider is busy, Agent Zero answers with the next "
+                            "model below at once; when your keys are resting, after a few seconds (KAME learns "
+                            "how long your model usually takes). Your model comes back as soon as it can answer, "
+                            "and the first model in the list is always tried first.")
     return {"state": state, "why": why, "warning": "", "entries": entries}
 
 
@@ -2639,6 +2798,7 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             _refresh_account_projections(provider, key)
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
+            _KAME_CALLS["last_call_at"] = time.time()
             if _KJ is not None:
                 _KJ.note_answer(identity, key)
         else:
@@ -3449,6 +3609,14 @@ def _classify_error(exc):
             return _stated_t, "server", status_code
         return 0, "timeout", status_code
 
+    # v1.8.3.0 (the owner's closed rule, "503 never escalates"; Hermes reads a 5xx
+    # before any words): a 503 is ALWAYS a busy server, whatever its body says. A
+    # 503 whose body said "payment required" was filed as a spent account and
+    # rested a healthy key for an hour. A wait the provider names is still obeyed.
+    if status_code == 503:
+        _stated_503 = _stated_server_delay(exc)
+        return (_stated_503 if _stated_503 else _KAME_SERVER_BASE_S), "server", 503
+
     # v1.8.1.0: the evidence reader speaks first, and only when a field or a
     # sentence it trusts named the failure. See `kame_evidence.judge`.
     judgment = _kame_judgment(exc)
@@ -3564,7 +3732,7 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
     """
     delay, kind, sc = _classify_error(exc)
     # v1.8.2.7: what a provider keeps in a status or a phrase the tables missed.
-    quirk = _kame_quirk(exc, "auth" if (kind == "other" and _is_auth_error(exc)) else kind)
+    quirk = None if sc == 503 else _kame_quirk(exc, "auth" if (kind == "other" and _is_auth_error(exc)) else kind)
     if quirk in ("billing", "per_minute", "server") and (sc or _evidence_status(exc)) == 429 \
             and _delay_source(exc, "per_minute") == "provider":
         quirk = None  # a number the provider STATED outranks one a text rule would invent
@@ -4260,10 +4428,22 @@ _CONTENT_BLOCK_INDICATORS = ("content_policy", "content filter", "content_filter
 def _get_all_api_keys(model_instance) -> list:
     """Extract ALL comma-separated API keys for this model's provider."""
     try:
-        from helpers import dotenv as _dotenv
         if not model_instance.a0_model_conf:
             return []
         provider = model_instance.a0_model_conf.provider
+        if not provider:
+            return []
+    except Exception:
+        return []
+    return _kame_provider_keys(provider)
+
+
+def _kame_provider_keys(provider) -> list:
+    """The keys in Agent Zero's key field for one provider (1.8.3.0: the lookup `_get_all_api_keys`
+    makes at call time, by provider, so the page can count them before any call)."""
+    try:
+        from helpers import dotenv as _dotenv
+        provider = str(provider or "")
         if not provider:
             return []
         raw_key = (
@@ -4703,7 +4883,7 @@ def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> No
         return
     try:
         eta = _next_recovery_seconds(identity, all_keys)
-        view = _kame_key_view()
+        view = _kame_key_view(known=False)
         totals = view["totals"]
         # review M2: the keys of the model being waited on, not every key KAME holds
         pool = next((p for p in view["pools"] if _kame_names_match(p["identity"], identity)), None)
@@ -5100,6 +5280,8 @@ def _kame_slow_after(ctx, identity, reasoning) -> float:
             return 0.0
         if not _KAME_FALLBACK_MODELS or not _kame_switch_on() or _KAME_CAROUSEL_DISABLED:
             return 0.0
+        if not _kame_reply_on_main(ctx):    # 1.8.3.0 (D1)
+            return 0.0
         now_t, now_m = time.time(), time.monotonic()
         hop = _KAME_FALLBACK_HOP.get()
         usable = [e for e in _KAME_FALLBACK_MODELS
@@ -5144,6 +5326,8 @@ def _kame_cross_allowed(ctx) -> bool:
     Gemini function-call turn needs its own signature, so no other model may be asked
     beside the reply. The sequential switch to the next model is unchanged."""
     kwargs = ctx.get("kwargs") or {}
+    if not _kame_reply_on_main(ctx):    # 1.8.3.0 (D1): the list belongs to the main model
+        return False
     if kwargs.get("responses_input_items") or kwargs.get("previous_response_id"):
         return False
     if kwargs.get("a0_responses_function_tools"):
@@ -5617,7 +5801,9 @@ def _kame_after_answer(identity, ctx, call_started_perf) -> None:
         row = {"at": time.time(), "model": _kame_model_label(identity),
                "for": _kame_model_label(hop.get("origin")) if hop else "",
                "first_s": first_s if (first_s is None or first_s >= 0) else None,
-               "total_s": total}
+               "total_s": total,
+               # 1.8.3.0: the conversation's own model, as Hermes' reply row carries it
+               "main": _kame_main_pair(hop.get("origin") if hop else identity)}
         with _KAME_LOCK:
             _KAME_REPLIES.append(row)
         agent = _KAME_CURRENT_AGENT.get()
@@ -5688,6 +5874,13 @@ def reply_line(agent):
         return f"⏱ {tail} · {line}"
     except Exception:
         return None
+
+
+def _kame_main_pair(identity) -> dict:
+    """``provider:model`` as ``{"provider", "model"}`` (empty when the identity has no provider)."""
+    text = str(identity or "")
+    provider, sep, model = text.partition(":")
+    return {"provider": provider, "model": model} if sep else {"provider": "", "model": text}
 
 
 def replies_report() -> list:
@@ -5797,7 +5990,7 @@ async def _kame_finish_continuation(ctx, result):
         callback = ctx.get("a0_response_callback")
         if tail and callback is not None:
             await callback(tail, seen + stitcher.forwarded)
-        _kame_event("recovery", ctx.get("identity", ""),
+        _kame_event("stitch", ctx.get("identity", ""),
                     reason=f"cut answer continued ({stitcher.mode or 'new'}), shown once")
         return _kame_stitched_result(result, seen + stitcher.forwarded)
     except Exception:
@@ -6299,7 +6492,7 @@ _KAME_AUTO_SWITCH_COLD_S = 10.0
 
 
 def _kame_switch_on() -> bool:
-    if _KAME_MODEL_SWITCH == "never":
+    if _KAME_MODEL_SWITCH == "never" or _KAME_NO_MODEL_FALLBACK:
         return False
     return _KAME_MODEL_SWITCH == "auto" or _KAME_FAILOVER_AFTER_S > 0
 
@@ -6426,9 +6619,58 @@ def _kame_nothing_shown(ctx) -> bool:
     return not (ctx.get("shown") or progress.get("any") or progress.get("reasoning"))
 
 
+def _kame_slot_identity(slot) -> str:
+    """``provider:name`` (lower case) of one `_model_config` slot dict, ``""`` when it names no model."""
+    if not isinstance(slot, dict):
+        return ""
+    provider, name = str(slot.get("provider") or "").strip(), str(slot.get("name") or "").strip()
+    return f"{provider}:{name}".lower() if provider and name else ""
+
+
+def _kame_main_model_verdict(agent) -> bool:
+    """1.8.3.0 (D1): does this chat run the MAIN model - the chat slot of the preset Agent Zero has
+    configured for the chat's scope - and not a per-chat override or another preset?
+
+    Read from Agent Zero's own resolver (`plugins._model_config.helpers.model_config`, v2.12 and
+    later), never from its files. A seam that is absent, fails or names no model counts as "yes":
+    the 1.8.2.9 behaviour, never a silent loss of the fallback list."""
+    import importlib
+    mc = importlib.import_module("plugins._model_config.helpers.model_config")
+    if hasattr(mc, "get_config"):
+        main = _kame_slot_identity((mc.get_config(agent) or {}).get("chat_model"))
+    else:
+        preset = mc.resolve_preset(mc.get_configured_preset_name(agent))
+        main = _kame_slot_identity((preset or {}).get("chat"))
+    effective = _kame_slot_identity(mc.get_chat_model_config(agent))
+    if not main or not effective:
+        return True
+    return _kame_names_match(main, effective)
+
+
+def _kame_reply_on_main(ctx) -> bool:
+    """1.8.3.0 (D1): the fallback list may answer only a reply that STARTED on the main model.
+    Asked once per reply (kept on ``ctx``); a walk down the list inside that reply is not asked
+    again. A background job is not a reply of the conversation: it keeps its own rules."""
+    if not _kame_main(ctx) or not _KAME_FALLBACK_MODELS:
+        return True     # no list: nothing to guard, and Agent Zero's settings are not read for nothing
+    known = ctx.get("on_main")
+    if known is not None:
+        return bool(known)
+    verdict = True
+    try:
+        agent = _kame_frame_agent()
+        if agent is not None:
+            verdict = _kame_main_model_verdict(agent)
+    except Exception:
+        verdict = True
+    ctx["on_main"] = verdict
+    return verdict
+
+
 def _kame_can_switch(ctx) -> bool:
     return bool(_KAME_FALLBACK_MODELS) and _kame_switch_on() \
         and _kame_main(ctx) and not _KAME_CAROUSEL_DISABLED \
+        and _kame_reply_on_main(ctx) \
         and _kame_nothing_shown(ctx) \
         and ctx.get("entry_name")
 
@@ -6798,6 +7040,10 @@ def _kame_aux_begin(ctx):
         return None
     task, known = _kame_aux_task()
     ctx["aux_task"], ctx["aux_known"] = task, known
+    if known:
+        _KAME_TASK.set(task)
+        if isinstance(ctx.get("flight"), dict):
+            ctx["flight"]["task"] = task
     if not known:
         return None     # review H2: a job nobody vetted keeps the 1.8.2.8 wait (no budget, still no backups)
     budget = _KAB.budget_for(task, known, None, _KAME_MAX_TOTAL_WAIT_S)
@@ -7391,6 +7637,7 @@ async def _kame_carousel(self, ctx):
             # on a reasoning model is every turn, and it told the reader their
             # answer had been cut when nothing had been shown at all.
             if ctx["progress"]["any"]:
+                _KAME_COUNTS["stream_drops"] += 1
                 # v1.8.2.7: what the user saw is continued on the next key.
                 ctx["stitch_seen"] = ctx["progress"].get("full_text") or ctx.get("stitch_seen", "")
             _prev_stitch = ctx.get("stitcher")
@@ -7774,6 +8021,7 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
         _job = "chat" if ctx["main_chat"] else (
             "compress" if "Compress" in (_KAME_CALL_CONTEXT.get() or "") else "utility")
         _job_token = _KAME_JOB.set(_job)
+        _task_token = _KAME_TASK.set("")
         _flight_id = secrets.token_hex(6)
         ctx["flight"] = {"job": _job, "identity": identity, "started": time.time(),
                          "refusals": 0, "last": "", "fallback": bool(_KAME_FALLBACK_HOP.get())}
@@ -7786,6 +8034,7 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
             with _KAME_LOCK:
                 _KAME_IN_FLIGHT.pop(_flight_id, None)
             _KAME_JOB.reset(_job_token)
+            _KAME_TASK.reset(_task_token)
 
     _kame_entry.__name__ = f"_kame_{entry_name}"
     _kame_entry.__qualname__ = f"_kame_{entry_name}"

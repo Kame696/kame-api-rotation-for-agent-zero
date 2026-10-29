@@ -35,6 +35,7 @@
     "replies[].at",
     "replies[].first_s",
     "replies[].for",
+    "replies[].main",
     "replies[].model",
     "replies[].total_s",
     "speed.cap_pct",

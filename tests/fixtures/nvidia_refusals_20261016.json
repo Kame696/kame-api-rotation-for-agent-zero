@@ -1,0 +1,42 @@
+{
+  "copied_from": "04_plugins/kame/hermes/tests/fixtures/nvidia_refusals_20261016.json (Hermes 1.8.3.0 H4, commit b51eb8d), copied unchanged: the same four recorded lines drive both ports' tests",
+  "source": "plugin-data refusals.jsonl, nvidia lines with status 400 (2026-10-15 and 2026-10-16); nothing redacted was needed, checked for key-shaped text",
+  "recorded": [
+    {
+      "provider": "nvidia",
+      "model": "nvidia:z-ai/glm-5.3:global",
+      "status": 400,
+      "type": "BadRequestError",
+      "code": "",
+      "message": "Error code: 400 - {'message': 'Validation: Unsupported parameter(s): `reasoning`', 'type': 'Bad Request', 'code': 400}",
+      "body": "{\"message\": \"Validation: Unsupported parameter(s): `reasoning`\", \"type\": \"Bad Request\", \"code\": 400}"
+    },
+    {
+      "provider": "nvidia",
+      "model": "z-ai/glm-5.3",
+      "status": 400,
+      "type": "BadRequestError",
+      "code": "",
+      "message": "error code: 400 - {'message': 'validation: unsupported parameter(s): `reasoning`', 'type': 'bad request', 'code': 400}",
+      "body": "{\"message\": \"Validation: Unsupported parameter(s): `reasoning`\", \"type\": \"Bad Request\", \"code\": 400}"
+    },
+    {
+      "provider": "nvidia",
+      "model": "nvidia:z-ai/glm-5.3:global",
+      "status": 400,
+      "type": "BadRequestError",
+      "code": "",
+      "message": "Error code: 400 - {'message': 'Validation: Unsupported parameter(s): `reasoning`', 'type': 'Bad Request', 'code': 400}",
+      "body": "{\"message\": \"Validation: Unsupported parameter(s): `reasoning`\", \"type\": \"Bad Request\", \"code\": 400}"
+    },
+    {
+      "provider": "nvidia",
+      "model": "z-ai/glm-5.3",
+      "status": 400,
+      "type": "BadRequestError",
+      "code": "",
+      "message": "error code: 400 - {'message': 'validation: unsupported parameter(s): `reasoning`', 'type': 'bad request', 'code': 400}",
+      "body": "{\"message\": \"Validation: Unsupported parameter(s): `reasoning`\", \"type\": \"Bad Request\", \"code\": 400}"
+    }
+  ]
+}

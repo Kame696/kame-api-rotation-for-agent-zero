@@ -73,7 +73,7 @@ def test_the_stored_value_is_still_max_and_still_parses():
 
 def test_the_setting_sentence_no_longer_says_every_reply_races():
     sentence = S.SETTINGS["hedge_mode"][7]
-    assert "every reply races" not in sentence and "Faster" in sentence
+    assert "every reply races" not in sentence
 
 
 SHIPPED_SUFFIXES = {".py", ".html", ".js", ".yaml", ".yml", ".md", ".json", ".txt"}

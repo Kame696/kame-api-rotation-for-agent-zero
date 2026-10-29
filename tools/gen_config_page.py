@@ -1,5 +1,6 @@
 # Generate the 1.8.2.7 settings screen from one table, so every control carries
 # the x-init default the yaml has.
+import html as html_module
 import os
 import sys
 
@@ -15,117 +16,57 @@ SPEED_FOOTNOTE = table.CHOICE_FOOTNOTE["hedge_mode"]
 #: Sentences shown under a choice's control, for the chosen value only: name -> (by value, footnote).
 CHOICE_NOTES = {"hedge_mode": (SPEED_HELP, SPEED_FOOTNOTE)}
 
-rows = [
-    ("fallback_models", "text", "''", "Fallback models",
-     "When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these "
-     "that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional "
-     "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.", ""),
-    ("model_switch", "choice", "'auto'", "Fallback",
-     "One big pool where your best model comes first: every reply starts on your chat model and goes to the "
-     "next model of the list only when the provider says it is busy (at once), every key is resting, or "
-     "nothing comes back in time. <b>Automatic</b>: in time is about three times the model's usual first word "
-     "(6 to 20 s, learned). <b>Set time</b>: the seconds below. <b>Never</b>: always wait for your keys.",
-     [("auto", "Automatic"), ("timed", "Set time"), ("never", "Never")],
-     "", "(config.failover_after_seconds === undefined || config.failover_after_seconds === null "
-         "|| Number(config.failover_after_seconds) === 60) ? 'auto' : "
-         "(Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')"),
-    ("failover_after_seconds", "number", "60", "Fallback after (seconds)",
-     "When a reply has waited this long with nothing on screen (keys resting, failing or slow), the next "
-     "model of your list answers it. A busy provider moves at once, whatever this number.",
-     'min="0" max="3600"', "config.model_switch === 'timed'"),
-    ("hedge_mode", "choice", "'adaptive'", "Speed",
-     "<b>Saver</b>: one key at a time. <b>Balanced</b>: a reply still silent after twice its usual wait "
-     "races a backup key; the first key that starts working wins. <b>Faster</b>: the same a notch sooner, "
-     "with three times the budget. The sentence under the buttons says what each costs.",
-     [(value, SPEED_LABELS[value]) for value in ("off", "adaptive", "max")]),
-    ("first_token_wait", "choice", "'auto'", "Wait for the first token",
-     "How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's "
-     "usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never "
-     "for a model on this computer). <b>Set time</b>: the seconds below. <b>Off</b>: no limit.",
-     [("auto", "Automatic"), ("timed", "Set time"), ("off", "Off")],
-     "", "(config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null "
-         "|| Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"),
-    ("stream_silence_timeout_seconds", "number", "0", "First-token wait (seconds)",
-     "Seconds a key may stay silent before the next one is tried (a quarter of it from the third try on).",
-     'min="0" max="3600"', "config.first_token_wait === 'timed'"),
-    ("reply_notice", "choice", "'always'", "Show which model answered",
-     "When a reply ends, one line in the chat log: its time and the model that answered each step. Never "
-     "part of what the model reads.",
-     [("always", "Every reply"), ("switches", "Only another model"), ("never", "Never")]),
-    ("kame_wait_notice", "flag", "true", "Say on the status line what KAME waits for",
-     "The chat's own status line ('A0: Calling LLM...') says which model or key KAME waits for "
-     "and when the next one is back. Off: the line stays as Agent Zero writes it.", ""),
-    ("kame_log_level", "choice", "'normal'", "Log level",
-     "How much KAME writes to the Docker log. The rotation is the same at every level.",
-     ["silent", "normal", "verbose", "verbose+errors"]),
-]
-adv = [
-    ("max_total_wait_seconds", "number", "0", "Give up after (seconds)",
-     "0 (default): never give up; KAME waits for a key or uses your fallback list. A number makes it give up "
-     "with an error after that long, which ends Agent Zero's task.", 'min="0" max="604800"'),
-    ("probe_burst_max_legs", "number", "16", "Keys asked together when quota runs dry",
-     "After two long refusals in a row, ask 4, then 8, then up to this many keys at once instead of one by "
-     "one. 0 = one by one.", 'min="0" max="32"'),
-    ("hedge_max_legs", "number", "3", "Most keys raced for one reply",
-     "One call plus at most this many minus one backups.", 'min="1" max="3"'),
-    ("stream_resume_limit", "number", "-1", "Resume attempts per answer",
-     "An answer cut mid-stream is continued on the next key from where it stopped, shown once. -1 continues "
-     "while it makes progress; 0 starts the answer again.", 'min="-1" max="10"'),
-    ("hedge_budget_pct", "number", "10", "Backup budget (% of calls)",
-     "Roughly what share of calls may carry a backup request.", 'min="0" max="50"'),
-    ("hedge_burst", "number", "3", "Backup burst allowance",
-     "How many backups can fire back to back after an idle period.", 'min="1" max="10"'),
-    ("hedge_quantile", "number", "90", "Send backup when slower than usual",
-     "For calls that do not stream: the percentile of learned times a call must exceed.", 'min="50" max="99"'),
-    ("hedge_cold_s", "number", "6", "First backup while still learning (seconds)",
-     "Before a model's usual time is learned, a call slower than this still gets a backup.", 'min="0.5" max="120"'),
-    ("hedge_cold_reasoning_s", "number", "30", "First backup while learning, thinking models (seconds)",
-     "The same, for models that think before they answer.", 'min="2" max="300"'),
-    ("hedge_max_prompt_tokens", "number", "32000", "Skip backups for very long prompts (tokens)",
-     "Above this size no backup and no keys asked together.", 'min="1000" max="1000000"'),
-    ("pacing_rpm_overrides", "line", "''", "Per-model requests-per-minute limits",
-     "e.g. <code>google:gemini/gemini-2.5-flash=10, groq:*=30</code>. KAME also learns them from real 429s.", ""),
-    ("key_region_overrides", "line", "''", "Region per key",
-     "For Vertex / Bedrock behind an endpoint that hides it: <code>k3f9a1=us-central1</code>.", ""),
-    ("daily_quota_cooldown_seconds", "number", "3600", "Daily quota cooldown (seconds)",
-     "How long a key rests once a daily or account quota is really spent.", 'min="1" max="86400"'),
-    ("max_hold_seconds", "number", "3600", "Longest a key can be held (seconds)",
-     "No key sits out longer than this, whatever the provider claimed.", 'min="60" max="86400"'),
-    ("unsized_throttle_rest_seconds", "number", "30", "Rest after a throttle with no number (seconds)",
-     "Measured: a refused key retried within 30 s answered 0 of 73 times.", 'min="0" max="300"'),
-    ("unsized_throttle_backoff", "flag", "true", "Short ladder for a bare RESOURCE_EXHAUSTED",
-     "Gemini's bare 429 rests the key 1, 2, 4 ... 64 s, back to 1 s when it answers.", ""),
-    ("unsized_backoff_max_seconds", "number", "64", "Where the ladder stops (seconds)",
-     "The longest rung of the ladder above.", 'min="1" max="3600"'),
-    ("share_pool_health", "flag", "true", "Keep key health across restarts",
-     "Holds are kept on disk (a hash of each key, never the key).", ""),
-    ("key_log_style", "choice", "'fingerprint'", "How keys appear in logs",
-     "A fingerprint never leaks; prefix8 shows the first 8 characters.", ["fingerprint", "prefix8"]),
-    ("kame_log_full_errors", "flag", "false", "Show the full raw error",
-     "Every failure also logs the provider's untruncated message.", ""),
-    ("kame_collapse_storm_logs", "flag", "true", "Collapse outage logs",
-     "During an outage, repeats become one line every ~20 s.", ""),
-    ("kame_unusable_response_limit", "number", "5", "Floor for Agent Zero's unusable-response limit",
-     "Agent Zero stops a turn after this many unparseable answers in a row; KAME raises its limit to at "
-     "least this. 0 leaves it alone.", 'min="0" max="100"'),
-]
-trouble = [
-    ("rotation_disabled", "flag", "false", "Turn KAME off",
-     "Every call goes to Agent Zero as if KAME were not installed (<code>KAME_ROTATION_DISABLED</code>).", ""),
-    ("spread_disabled", "flag", "false", "Give back key selection",
-     "Cooldowns stay, but the first ready key in the order you wrote them is used "
-     "(<code>KAME_SPREAD_DISABLED</code>).", ""),
-    ("carousel_disabled", "flag", "false", "Stop rotating per call",
-     "A refused key is still rested, but the error goes back to Agent Zero (<code>KAME_CAROUSEL_DISABLED</code>).", ""),
-    ("hedging_disabled", "flag", "false", "Stop backups and keys asked together",
-     "The same as speed boost 'off': one key at a time (<code>KAME_HEDGING_DISABLED</code>).", ""),
-    ("stream_stitch_disabled", "flag", "false", "Stop continuing cut answers",
-     "A cut answer starts again on the next key instead of continuing (<code>KAME_STREAM_STITCH_DISABLED</code>).", ""),
-    ("refusal_recorder_disabled", "flag", "false", "Stop recording refusals",
-     "No more refusals.jsonl (keys removed, keeps the last ~8 MB, decides nothing).", ""),
-    ("call_timings_disabled", "flag", "false", "Stop timing calls",
-     "No more calls.jsonl (durations only, keeps the last ~4 MB; the speed boost also learns from them).", ""),
-]
+#: 1.8.3.0 (A6): the stored value of a choice saved before the choice existed (kame_settings.choice_from_config).
+LEGACY_INIT = {
+    "model_switch": "(config.failover_after_seconds === undefined || config.failover_after_seconds === null "
+                    "|| Number(config.failover_after_seconds) === 60) ? 'auto' : "
+                    "(Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')",
+    "first_token_wait": "(config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null "
+                        "|| Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'",
+}
+POWER = {"high": "●●● High", "medium": "●●○ Medium", "low": "●○○ Low",
+         "escape": "Off switch"}
+FALLBACK_SENTENCE = (
+    "When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these "
+    "that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional "
+    "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.")
+
+
+def _row(name):
+    """One settings row from the plugin's own table, so this page cannot say what the panel does not."""
+    kind, default, low, high, choices, _env, title, sentence = table.SETTINGS[name]
+    esc = html_module.escape
+    if name == "fallback_models":
+        sentence_html = FALLBACK_SENTENCE
+    else:
+        sentence_html = esc(sentence, quote=False)
+    when = table.WHEN.get(name, "")
+    if when and name != "fallback_models":
+        sentence_html += f"<br><i>When to change it: {esc(when, quote=False)}</i>"
+    power = POWER.get(table.IMPACT.get(name, ""), "")
+    title_html = esc(title, quote=False) + (f' <span style="opacity:.55;font-size:.8em">{power}</span>' if power else "")
+    shown = ""
+    if name in table.DEPENDS_ON:
+        shown = f"config.{table.DEPENDS_ON[name][0]} === '{table.DEPENDS_ON[name][1]}'"
+    if kind == "flag":
+        return (name, "flag", "true" if default else "false", title_html, sentence_html, "", shown)
+    if kind == "number":
+        step = "1" if name in table.INTEGRAL else "any"
+        return (name, "number", repr(default), title_html, sentence_html,
+                f'step="{step}" min="{low:g}" max="{high:g}"', shown)
+    if kind == "choice":
+        labels = table.choice_labels_now(name, _BUDGET)
+        opts = [(c, labels.get(c, c)) for c in (table.CHOICE_LABELS.get(name) and [v for v, _l in table.CHOICE_LABELS[name]] or choices)]
+        return (name, "choice", repr(default), title_html, sentence_html, opts, shown, LEGACY_INIT.get(name, ""))
+    return (name, "text" if name == "fallback_models" else "line", "''", title_html, sentence_html, "", shown)
+
+
+rows = []
+adv = []
+trouble = []
+for _gid, _title, _note, _keys in table.GROUPS:
+    for _name in (["fallback_models"] if _gid == "extra" else []) + list(_keys):
+        (trouble if _gid == "off" else rows).append(_row(_name))
 
 
 def field(r, also=""):
@@ -142,7 +83,7 @@ def field(r, also=""):
         ctl = (f'<label class="toggle"><input type="checkbox" x-model="config.{name}" {init} />'
                f'<span class="toggler"></span></label>')
     elif kind == "number":
-        ctl = f'<input type="number" step="1" {extra} x-model.number="config.{name}" {init} />'
+        ctl = f'<input type="number" {extra} x-model.number="config.{name}" {init} />'
     elif kind == "line":
         ctl = f'<input type="text" style="width:100%;font-family:monospace" x-model="config.{name}" {init} />'
     elif kind == "choice":

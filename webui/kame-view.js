@@ -219,7 +219,8 @@ export function ringModels(view) {
 /** What a model is doing, in a few words: `{ word, tone }`. */
 export function modelState(model, view, nowMs) {
   const { entry, pool } = model;
-  if (!pool || !pool.keys) return { tone: "quiet", word: "not used yet" };
+  // 1.8.3.0 (D4): keys Agent Zero holds for a model that has not been called yet are known, not used
+  if (!pool || !pool.keys || pool.unused) return { tone: "quiet", word: "not used yet" };
   const busy = untilEpoch(entry?.busy_until, nowMs);
   if (busy) {
     const again = untilEpoch(entry?.probe_at, nowMs);
@@ -442,24 +443,36 @@ export function keyRows(view, nowMs) {
 
 // -- the three sentences -----------------------------------------------------------------------
 
+/** A reading older than this is called old (the header says so, the second sentence says so). */
+export const STALE_READING_S = 30;
+
+/** Hermes' duration: `45s`, `1m 15s`, `2h 05m`. */
+export function durationWords(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
 /** The three lines at the top of the Overview: what is happening, anything wrong, what is next.
  *  `view` is `status_view()` (the page adds `active` and `build` from the status report).
+ *  `ageS` is how long ago the page last read the status (Hermes: the age of the snapshot): an old reading
+ *  says so in the second sentence instead of describing a state that may be gone.
  *  `icon` is a character, never colour alone. */
-export function nowSentences(view, nowMs) {
+export function nowSentences(view, nowMs, ageS = 0) {
   const nowSec = nowMs / 1000;
   const activity = view?.activity;
   const entries = view?.fallback?.entries || [];
   const models = ringModels(view).main;
-  const usable = models.find((model) => model.pool && modelState(model, view, nowMs).tone === "good");
+  const usable = models.find((model) => model.pool && (model.pool.unused || modelState(model, view, nowMs).tone === "good"));
   const first = models[0];
-  const totals = view?.totals || {};
-  const everything = totalsPhrase(totals);
 
   // -- line 1: what is happening
   let icon = "●";
-  const untouched = models.every((model) => !model.pool || !model.pool.keys);
+  const untouched = models.every((model) => !model.pool || !model.pool.keys || model.pool.unused);
   let line1 = usable
-    ? `Ready — your next reply goes to ${usable.label}. ${everything}.`
+    ? `Ready — your next reply goes to ${usable.label} (${keyCounts(usable.pool).r + keyCounts(usable.pool).f} of ${usable.pool.keys} keys ready).`
     : untouched
       ? `Ready — nothing has been asked yet.${first ? ` Your first reply goes to ${first.label}.` : ""}`
       : "Nothing is ready right now — see the models below.";
@@ -514,8 +527,11 @@ export function nowSentences(view, nowMs) {
   if (view?.build?.complete === false) {
     line2 = "This install is incomplete — KAME is not rotating.";
     tone = "bad";
+  } else if (ageS > STALE_READING_S) {
+    line2 = `This reading is ${durationWords(ageS)} old — Agent Zero may be restarting.`;
+    tone = "warn";
   } else if (view?.active === false) {
-    line2 = "KAME is loaded but not rotating — Agent Zero is running natively.";
+    line2 = "KAME is loaded but not rotating — see the note below.";
     tone = "warn";
   } else if (models.length && !usable && !untouched) {
     const everyoneBusy = models.every((model) => model.pool && untilEpoch(model.entry?.busy_until, nowMs));
@@ -543,7 +559,7 @@ export function nowSentences(view, nowMs) {
     line3 = view.fallback.why;
   } else if (first && entries.length > 1 && modelState(first, view, nowMs).tone === "warn") {
     const again = untilEpoch(first.entry?.probe_at, nowMs);
-    const next = models.find((model) => model !== first && model.pool && modelState(model, view, nowMs).tone === "good");
+    const next = models.find((model) => model !== first && model.pool && (model.pool.unused || modelState(model, view, nowMs).tone === "good"));
     line3 =
       `If ${first.label} stays busy, the next reply starts on ${next ? next.label : "the next model"}` +
       (again ? `; ${first.label} is asked again in ${fmtLeft(again, nowMs)}.` : ".");

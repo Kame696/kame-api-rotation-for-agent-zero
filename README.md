@@ -6,7 +6,7 @@
 
 ### What API key rotation should have been: all your keys and models, one agent that never waits.
 
-[![Version](https://img.shields.io/badge/version-1.8.2.9-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.3.0-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.14-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
@@ -171,7 +171,9 @@ flowchart TD
 </table>
 
 <details>
-<summary><b>📣 What's new in 1.8.2.9 and the versions before it</b></summary>
+<summary><b>📣 What's new in 1.8.3.0 and the versions before it</b></summary>
+
+> **1.8.3.0 — the same page as the Hermes port, your fallback list belongs to your main model.** Includes everything planned for 1.8.2.9 (never released on its own). Settings, Events, Background jobs and the Overview say what the Hermes page says, in the same order; the fallback is Automatic, Set time or Never; the model field of a fallback row searches Agent Zero's own models; the list is used only for a reply that started on your main model; a request error ("unsupported parameter") is not blamed on your keys and an NVIDIA "payment required" rests the key for the long window; a 503 is a busy server; your keys are counted before the first call. Offline suites 62 / 62 green. See [validation and limits](VALIDATION.md).
 
 > **1.8.2.9 — a page you can read, the wait on the chat line.** No more pop-up per error: when KAME waits for a key, the chat's own status line ("Calling LLM...") and the chip say what it waits for and how long is left, with one time and one count everywhere. The menu entry and the page are called **API Rotation**: three plain sentences first, one ring per model in the order of your fallback list, what KAME did, the three settings you reach for, the rest folded under Details; models that share one dead key are one row. Settings sit on the Hermes port's shelves, and your fallback models are edited in rows with Agent Zero's own model search. When your best model is busy, KAME asks it again on a 20-second clock, best first, instead of once per key; no reply waits behind two silent models; speed has plain words (**Saver · 1x**, **Balanced · up to 1.1x**, **Faster · up to 1.3x**), and Faster sends one request on a good reply. Background jobs (chat names, memory, compression) get a budget, and the page says where your quota went. The instrument logs rotate instead of stopping. Offline suites 52 / 52 green (341 new 1.8.2.9 tests); not yet run on a real Agent Zero, and the reply-path cost and idle CPU have not been measured on a server, so nothing is claimed there. See [the changelog](CHANGELOG.md).
 
@@ -196,7 +198,7 @@ flowchart TD
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.2.9 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.3.0 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -351,7 +353,8 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
-| **1.8.2.9** — offline suites | 52 / 52 suites green (341 new 1.8.2.9 tests in 23 files). Not yet run on a real Agent Zero; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
+| **1.8.3.0** — offline suites | 62 / 62 suites green (232 new 1.8.3.0 tests in 10 files, on top of the 341 of 1.8.2.9). Not yet run on a real Agent Zero; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
+| **1.8.2.9** — offline suites | 52 / 52 suites green (341 new 1.8.2.9 tests in 23 files). Never released on its own |
 | **1.8.2.7** — remote native acceptance, real Agent Zero v2.12 / v2.13 / v2.14, real LiteLLM/OpenAI SDK over local TCP | 16 / 16 CI jobs green, 23 + 27 native checks per host: a backup key answered before a slow key's 4 s; the fallback list answered through Agent Zero's own model factory when every key rested and on a closed door, and the next call went back to the configured model; the panel's API answered in the host's real plugin layout, no key in any report |
 | **1.8.2.7** — provider answer keys, 82 providers, 774 documented error shapes | family 674 · action 675 (Hermes 1.8.2.7: 670 · 670); same floors in the LiteLLM shape (670 · 674) |
 | **1.8.2.7** — upgrade check | **15 / 15** patch points and **16 / 16** host facts on v2.12, v2.13 and v2.14 |
@@ -388,6 +391,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.3.0** | The same page as the Hermes port, your fallback list belongs to your main model | Settings, Events, Background jobs and Overview say what the Hermes page says, in the same order; Fallback is Automatic / Set time / Never; model search in the list rows; the list is used only for a reply that started on your main model; request errors are not blamed on keys; includes all of 1.8.2.9 |
 | **v1.8.2.9** | A page you can read, the wait on the chat line, back to your best model | No pop-up: the wait is said on the chat's own status line and in the chip, one time (left) and one count (keys) everywhere. Menu and page are **API Rotation**: three sentences, a ring per model, what KAME did, details folded; models on one dead key are one row; Hermes' settings shelves; fallback models edited in rows with a model search. A busy best model is asked again on a 20-second clock, best first; no reply waits behind two silent models; speed in plain words (Saver 1x / Balanced up to 1.1x / Faster up to 1.3x, one request on a good reply); named background jobs get a budget (busy answers do not eat it; `KAME_AUX_UNBOUNDED=1` undoes it) and the page says where your quota went; instrument logs rotate. Offline suites 52 / 52 green (341 new 1.8.2.9 tests); not yet run on a real Agent Zero. |
 | **v1.8.2.8** | Busy providers, automatic waits, who answered | Two keys "overloaded" or timing out move the reply to your next fallback model at once (the busy model left alone for a while); the switch counts your wait; every reply starts on your best model again; *Fallback* and *Wait for the first token* are Automatic, learned per model; a line naming the model and time ends every reply. Hermes parity inside the call: cut answers continued, silent keys dropped, retry hints the agent reads, learned pacing, the faster key first, region in the pool. |
 | **v1.8.2.7** | Every provider learned, your own fallback models, faster when quota runs dry | 82 providers learned from their own documentation (774 error shapes, A0 ≥ Hermes on every field). A fallback model list KAME uses by itself — Agent Zero has none. Backup keys for a slow first word; 4 → 8 → 16 keys asked together when a pool runs dry. A panel in the central menu: Overview, Events, Background jobs, Fallback models, Settings. Six settings on show, `max_total_wait_seconds` new. Remote native acceptance on v2.12 / v2.13 / v2.14. |

@@ -96,8 +96,9 @@ def test_the_keys_on_each_shelf_are_the_hermes_keys_minus_the_hermes_only_ones()
     mine = {g: list(keys) for g, _t, _n, keys in S.GROUPS}
     for group in FIXTURE["groups"]:
         if group["id"] == "off":
-            # Hermes lists its `*disable*` flags; Agent Zero's twins are the switches of TROUBLESHOOTING
-            assert group["keys"] == ["*disable-flags*"]
+            # 1.8.3.0: the same flags in the same order; Hermes' `disabled` is Agent Zero's `rotation_disabled`
+            expected_off = [("rotation_disabled" if k == "disabled" else k) for k in group["keys"] if k not in hermes_only]
+            assert mine["off"] == expected_off
             assert set(mine["off"]) == set(S.TROUBLESHOOTING)
             continue
         expected = [k for k in group["keys"] if k not in hermes_only]

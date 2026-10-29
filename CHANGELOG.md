@@ -1,6 +1,63 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
-## 1.8.2.9 — A page you can read, the wait said on the chat line, back to your best model, speed in plain words, side jobs on a budget (2026-10-28)
+## 1.8.3.0 — The page says what the Hermes page says, your fallback list belongs to your main model (2026-10-29)
+
+**In short:** this version includes everything that was planned for 1.8.2.9 (that version was never
+released for Agent Zero; its notes are kept below) and adds 1.8.3.0 on top. The owner opened the
+1.8.2.9 candidate on a real Agent Zero server and said what was wrong: the fallback tab still counted
+seconds, the Events and Background jobs tabs read differently, the setting sentences were not the
+Hermes ones and there was no model search. His order: the Agent Zero page and the Hermes page are the
+same, in settings, words, options, defaults and order. This is that version.
+
+**What you see**
+
+- **The same page as the Hermes port.** Settings: the same rows in the same order, each with its power
+  tag, a "changed" tag, "When to change it", where the value comes from, Save buttons, and a question
+  before you turn on a switch that stops KAME doing its job. Fallback is a choice of Automatic, Set
+  time or Never (the seconds only appear under Set time), above the list of your fallback models, with
+  the sentence that says what happens next and how each model's keys are doing.
+- **Events and Background jobs** read as on Hermes: each kind of event has its word and what it means,
+  the tallies are filters, a click on a failure shows what the provider really said (with anything
+  key-shaped removed), a line says the plugin is alive when the list is empty, calls that wait for a
+  while are listed, and the background jobs can be filtered by job.
+- **Overview.** The header carries the build fingerprint beside the version and says "live" or
+  "reading 2m 05s old". Notes above the page say, in Hermes' words, that an install is incomplete, that
+  KAME is loaded but not rotating, that a reading is old, that keys left rotation or were just refused.
+  "Quick controls" are the same rows as Settings, "Right now" always shows, "This Agent Zero process"
+  lists the counters of the running process, and a footer says which process you are looking at. A
+  "Made by KAME" card at the end of Settings links to the project.
+- **Model search in the list rows.** Type in the model field of a fallback row and Agent Zero's own
+  model search answers (the provider list too); where Agent Zero has no search the fields stay typed.
+
+**What KAME does differently**
+
+- **Your fallback list belongs to your main model.** The list is used only for a reply that started on
+  your main model (the chat model of your Agent Zero preset). A chat you pointed at another model, or at
+  a model that is itself in your list, uses that model's keys and nothing else.
+- **A request error is not blamed on your keys.** A "400 unsupported parameter" is the request's fault:
+  it is given back after the first key and nothing is rested. An NVIDIA "402 payment required / credits
+  exhausted" is read as a spent account and rests the key for the long window.
+- **A 503 is a busy server,** one second, never escalated, whatever its body says.
+- **Your keys are counted before the first call.** The header and the rings are no longer empty on a
+  fresh start.
+
+**Not in this version, and why:** Hermes moves the model selector back to your main model after a
+fallback answered; Agent Zero has no per-reply selector that a fallback moves (KAME switches inside the
+call and never writes your chat model). The Hermes-only parts of its page (the snapshot file, the
+Neighbours card, the auxiliary task names, the Gemini tool-call repair) have no Agent Zero twin; each
+is listed with its reason in `decisions/0016-hermes-only-items-left-out.md`.
+
+**Evidence:** offline suites 62 / 62 green (232 new 1.8.3.0 tests in 10 files). Not yet run on a real
+Agent Zero server and not yet measured there: the cost of the reply path, the idle CPU, and how the
+new tabs look on a live screen.
+
+**Upgrading from 1.8.2.8 or 1.8.2.9:** nothing to change; restart Agent Zero once. What differs: the
+fallback is a three-way choice (Automatic, Set time, Never) on the page and in Settings, the page is
+organised as on Hermes, and the toast and the 90-second chat line are gone (1.8.2.9).
+
+---
+
+## 1.8.2.9 — (never released on its own; everything below is part of 1.8.3.0) A page you can read, the wait said on the chat line, back to your best model, speed in plain words, side jobs on a budget (2026-10-28)
 
 **In short:** the owner used 1.8.2.8 on a real Agent Zero and said what he saw: a pop-up per error
 whose numbers disagreed ("120.3h" in the title, "~45m" in the text; "1 of 1 keys" while the chip

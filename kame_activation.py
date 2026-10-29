@@ -36,6 +36,24 @@ History kept from the original extension:
 """
 
 
+def _truthy(value) -> bool:
+    return str(value).strip().lower() in ("1", "true", "on", "yes")
+
+
+def _collapse_from(cfg) -> bool:
+    """Collapse outage logs? Hermes' switch `storm_collapse_disabled` wins; else the 1.8.2.9 key."""
+    if cfg.get("storm_collapse_disabled") is not None:
+        return not _truthy(cfg["storm_collapse_disabled"])
+    return cfg.get("kame_collapse_storm_logs", True)
+
+
+def _notice_from(cfg) -> bool:
+    """Say what KAME waits for on the status line? Hermes' `live_status_disabled` wins; else the old key."""
+    if cfg.get("live_status_disabled") is not None:
+        return not _truthy(cfg["live_status_disabled"])
+    return cfg.get("kame_wait_notice", True)
+
+
 def activate(agent=None):
     """Apply KAME's settings and patches. Safe to call any number of times.
 
@@ -86,11 +104,13 @@ def activate(agent=None):
             set_daily_cooldown(cfg.get("daily_quota_cooldown_seconds", 3600))
             set_key_log_style(cfg.get("key_log_style", "fingerprint"))
             # v1.0.3: collapse repetitive 503-storm logs (on by default).
-            set_collapse_storm_logs(cfg.get("kame_collapse_storm_logs", True))
+            # 1.8.3.0: Hermes' name for it is `storm_collapse_disabled` (the opposite switch); a
+            # configuration saved before that still carries `kame_collapse_storm_logs`.
+            set_collapse_storm_logs(_collapse_from(cfg))
             # v1.2.0: tell the user in the chat when the whole pool is cooling
             # (on by default — the console said it, the person did not see it).
             if set_wait_notice is not None:
-                set_wait_notice(cfg.get("kame_wait_notice", True))
+                set_wait_notice(_notice_from(cfg))
             # v1.8.1.0: the Hermes 1.8.x rules. Looked up by name for the same
             # half-copied-directory reason as set_wait_notice above.
             for _setting, _setter, _default in (
@@ -105,6 +125,8 @@ def activate(agent=None):
                 ("refusal_recorder_disabled", "set_recorder_disabled", False),
                 ("call_timings_disabled", "set_call_timings_disabled", False),
                 ("share_pool_health", "set_share_pool_health", True),
+                # v1.8.3.0: "Ignore my fallback list", Hermes' never_fall_back_to_another_model.
+                ("never_fall_back_to_another_model", "set_no_model_fallback", False),
                 # v1.8.2.7: the fallback list, speed and the wait bound.
                 ("fallback_models", "set_fallback_models", ""),
                 ("failover_after_seconds", "set_failover_after", 60),

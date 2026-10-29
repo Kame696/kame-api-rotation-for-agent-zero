@@ -124,10 +124,16 @@ def test_the_old_cards_are_folded_under_details_and_the_thin_bar_is_gone():
     assert "detailsOpen: false" in STORE
     details = PANEL.split('<section class="kame-details">', 1)[1].split("</section>", 1)[0]
     for card in ("Right now", "Background jobs and your quota", "Your API keys", "Agent Zero, as KAME found it",
-                 "This Agent Zero process", "Each model's keys", "Last replies", "Fallbacks", "Backup keys started",
-                 "Keys asked together", "Still waiting"):
+                 "This Agent Zero process", "Each model's keys", "processFields"):
         assert card in details, card
+    # the counters of this process: Hermes' list, drawn from the store
+    for label in ("Fallbacks", "Keys asked together", "Backup keys started"):
+        assert label in STORE, label
     assert "kame-meter" not in PANEL and "kame-rot-meter" not in CHIP
+    # 1.8.3.0 (A7): as on Hermes, these two live on the Events page
+    assert "Last replies" not in details and "Still waiting" not in details
+    events = PANEL.split("<!-- ===== Events ===== -->", 1)[1].split("<!-- ===== Background jobs ===== -->", 1)[0]
+    assert "Last replies" in events and "Still waiting" in events
 
 
 def test_models_sharing_one_key_are_one_row_in_the_page_and_the_chip():

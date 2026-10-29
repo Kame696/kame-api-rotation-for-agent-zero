@@ -13,25 +13,44 @@
       <div class="kame-head">
         <div>
           <div class="kame-title">API Rotation</div>
-          <div class="kame-sub">KAME <span x-text="$store.kamePanel.version"></span></div>
+          <div class="kame-sub">KAME <span x-text="$store.kamePanel.version"></span>
+            <span class="kame-mono" x-show="$store.kamePanel.buildFingerprint" x-text="$store.kamePanel.buildFingerprint"
+                  title="Fingerprint of the source actually installed. Compare it with the build you deployed."></span></div>
         </div>
         <div class="kame-status" x-show="$store.kamePanel.headerStatus.text">
           <span class="kame-dot" :class="'kame-dot-' + $store.kamePanel.headerStatus.tone"></span>
           <span x-text="$store.kamePanel.headerStatus.text"></span>
           <span class="kame-bad" x-show="$store.kamePanel.headerStatus.replace"
                 x-text="$store.kamePanel.headerStatus.replace + ' to replace'"></span>
+          <span class="kame-dim" :class="$store.kamePanel.headerStatus.stale ? 'kame-bad' : ''"
+                x-text="$store.kamePanel.headerStatus.age"></span>
         </div>
       </div>
+
+      <div class="kame-stack" x-show="!$store.kamePanel.data">
+        <p class="kame-dim" x-show="!$store.kamePanel.error">Reading the pool…</p>
+        <p class="kame-dim kame-small">This page reads Agent Zero’s status. If Agent Zero has just started, give it a moment.</p>
+      </div>
+
+      <div class="kame-stack" x-show="$store.kamePanel.data">
+
+      <template x-for="n in $store.kamePanel.notes.filter((n) => n.id === 'incomplete')" :key="n.id">
+        <div class="kame-banner kame-banner-bad" role="alert" x-text="n.text"></div>
+      </template>
 
       <div class="kame-tabs">
         <template x-for="t in [['overview','Overview'],['settings','Settings'],['fallback','Fallback models'],['events','Events'],['background','Background jobs']]" :key="t[0]">
           <button class="btn" :class="$store.kamePanel.tab === t[0] ? 'btn-ok' : ''"
-                  @click="$store.kamePanel.tab = t[0]" x-text="t[1]"></button>
+                  @click="$store.kamePanel.tab = t[0]"><span x-text="t[1]"></span><span x-show="$store.kamePanel.tabCount(t[0])" x-text="' (' + $store.kamePanel.tabCount(t[0]) + ')'"></span></button>
         </template>
       </div>
 
       <div class="kame-error" x-show="$store.kamePanel.error" x-text="$store.kamePanel.error"></div>
       <div class="kame-note" x-show="$store.kamePanel.message" x-text="$store.kamePanel.message"></div>
+
+      <template x-for="n in $store.kamePanel.notes.filter((n) => n.id !== 'incomplete')" :key="n.id">
+        <div class="kame-banner" :class="n.tone === 'bad' ? 'kame-banner-bad' : ''" x-text="n.text"></div>
+      </template>
 
       <!-- ===== Overview ===== -->
       <div class="kame-stack" x-show="$store.kamePanel.tab === 'overview'">
@@ -108,7 +127,7 @@
                       <span class="kame-dim" x-text="k.words"></span></li>
                   </template>
                 </ul>
-                <div class="kame-actions">
+                <div class="kame-actions" x-show="!$store.kamePanel.keyTable.unused">
                   <template x-if="$store.kamePanel.confirming === 'wake'">
                     <span>
                       <span class="kame-small">Its keys start again as if never tried; a key that is really spent is refused again. No key is deleted.</span>
@@ -149,55 +168,80 @@
           <button class="btn" @click="$store.kamePanel.tab = 'events'">All events &rarr;</button>
         </div>
 
-        <!-- Quick controls -->
-        <div class="kame-card">
-          <div class="kame-card-title">Quick controls</div>
-          <div class="kame-dim kame-small">The three you may want to change often. Everything else is in Settings.</div>
-          <template x-for="m in $store.kamePanel.quickChoices" :key="m.name">
-            <div>
-              <div class="kame-setting">
-                <div class="kame-setting-label"><span class="kame-setting-title" x-text="m.title"></span></div>
-                <div class="kame-setting-control">
-                  <div class="kame-choices">
-                    <template x-for="c in $store.kamePanel.choicesOf(m)" :key="c">
-                      <button type="button" class="kame-choice" :class="String($store.kamePanel.value(m.name)) === c ? 'kame-choice-on' : ''"
-                              @click="$store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
-                    </template>
-                  </div>
-                </div>
-                <div class="kame-dim kame-small kame-setting-help" x-text="$store.kamePanel.choiceSentence(m)"></div>
-              </div>
-              <p class="kame-small" :class="$store.kamePanel.speedCost &amp;&amp; $store.kamePanel.speedCost.over ? 'kame-tone-warn' : 'kame-dim'"
-                 x-show="m.name === 'hedge_mode' &amp;&amp; $store.kamePanel.speedCost"
-                 x-text="$store.kamePanel.speedCost ? $store.kamePanel.speedCost.text : ''"></p>
-            </div>
+        <!-- Quick controls: the same rows as the Settings tab -->
+        <template x-for="card in $store.kamePanel.quickCards" :key="card.id">
+          <div class="kame-card">
+            <div class="kame-card-title">Quick controls</div>
+            <div class="kame-dim kame-small">The three you may want to change often. Everything else is in Settings.</div>
+          <template x-for="m in card.rows" :key="m.name">
+          <div>
+                          <div class="kame-setting" :class="$store.kamePanel.isChanged(m) ? 'kame-setting-changed' : ''">
+                            <div class="kame-setting-label">
+                              <div>
+                                <span class="kame-setting-title" x-text="m.title"></span>
+                                <span class="kame-tag" :class="'kame-tag-' + m.impact" x-show="$store.kamePanel.impactTag(m)" x-text="$store.kamePanel.impactTag(m)"
+                                      title="Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning."></span>
+                                <span class="kame-tag" x-show="$store.kamePanel.isChanged(m)">changed</span>
+                              </div>
+                              <div class="kame-dim kame-small" :title="m.detail || m.sentence" x-text="m.sentence"></div>
+                              <div class="kame-small" x-show="m.when" x-text="'When to change it: ' + m.when"></div>
+                              <div class="kame-dim kame-small kame-mono" x-show="$store.kamePanel.showAdvanced || $store.kamePanel.isChanged(m)">
+                                <span x-show="$store.kamePanel.showAdvanced" x-text="m.name"></span>
+                                <span x-show="$store.kamePanel.showAdvanced &amp;&amp; m.env" x-text="m.env"></span>
+                                <span class="kame-tag" :class="$store.kamePanel.sourceOf(m) === 'default' ? 'kame-tag-quiet' : ''" :title="$store.kamePanel.sourceTip(m)" x-text="$store.kamePanel.sourceLabel(m)"></span>
+                              </div>
+                            </div>
+                            <div class="kame-setting-control">
+                              <template x-if="m.type === 'flag'">
+                                <label class="toggle">
+                                  <input type="checkbox" :checked="!!$store.kamePanel.value(m.name)" :disabled="$store.kamePanel.busy"
+                                         @change="$store.kamePanel.flagChanged(m, $event.target.checked); if ($store.kamePanel.askingFlag === m.name) $event.target.checked = false" />
+                                  <span class="toggler"></span>
+                                </label>
+                              </template>
+                              <template x-if="m.type === 'choice'">
+                                <div class="kame-choices">
+                                  <template x-for="c in $store.kamePanel.choicesOf(m)" :key="c">
+                                    <button type="button" class="kame-choice" :class="String($store.kamePanel.value(m.name)) === c ? 'kame-choice-on' : ''"
+                                            @click="String($store.kamePanel.value(m.name)) === c || $store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
+                                  </template>
+                                </div>
+                              </template>
+                              <template x-if="m.type === 'number'">
+                                <span class="kame-setting-number">
+                                  <span class="kame-dim kame-small" x-show="$store.kamePanel.rangeText(m)" x-text="$store.kamePanel.rangeText(m)"></span>
+                                  <input type="number" :min="m.low" :max="m.high" :step="m.integral ? 1 : 'any'" :value="$store.kamePanel.value(m.name)"
+                                         @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveNumber(m)" />
+                                  <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveNumber(m)">Save</button>
+                                </span>
+                              </template>
+                              <template x-if="m.type === 'text'">
+                                <span class="kame-setting-number">
+                                  <textarea rows="1" placeholder="empty = not used" :value="$store.kamePanel.value(m.name)"
+                                            @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveText(m)"></textarea>
+                                  <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveText(m)">Save</button>
+                                </span>
+                              </template>
+                              <button class="btn" x-show="$store.kamePanel.isChanged(m)" :disabled="$store.kamePanel.busy" @click="$store.kamePanel.reset(m.name)">Reset</button>
+                            </div>
+                            <div class="kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceNote(m)" x-text="$store.kamePanel.choiceNote(m)"></div>
+                            <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceFoot(m)" x-text="$store.kamePanel.choiceFoot(m)"></div>
+                            <div class="kame-error kame-small kame-setting-help" x-show="$store.kamePanel.errorOf(m.name)" x-text="$store.kamePanel.errorOf(m.name)"></div>
+                            <div class="kame-confirm kame-setting-help" x-show="$store.kamePanel.askingFlag === m.name">
+                              <b class="kame-small" x-text="$store.kamePanel.flagQuestion(m)"></b>
+                              <span class="kame-small" x-text="$store.kamePanel.flagDescription(m)"></span>
+                              <button class="btn btn-ok" @click="$store.kamePanel.confirmFlag(m)">Turn it on</button>
+                              <button class="btn" @click="$store.kamePanel.askingFlag = ''">Cancel</button>
+                            </div>
+                          </div>
+                        <p class="kame-small" :class="$store.kamePanel.speedCost &amp;&amp; $store.kamePanel.speedCost.over ? 'kame-tone-warn' : 'kame-dim'"
+                           x-show="m.name === 'hedge_mode' &amp;&amp; $store.kamePanel.speedCost"
+                           x-text="$store.kamePanel.speedCost ? $store.kamePanel.speedCost.text : ''"></p>
+          </div>
           </template>
-          <template x-if="$store.kamePanel.quickTimed">
-            <div class="kame-setting">
-              <div class="kame-setting-label"><span class="kame-setting-title" x-text="$store.kamePanel.quickTimed.title"></span></div>
-              <div class="kame-setting-control">
-                <input type="number" :min="$store.kamePanel.quickTimed.low" :max="$store.kamePanel.quickTimed.high"
-                       :value="$store.kamePanel.value('failover_after_seconds')"
-                       @input="$store.kamePanel.draft('failover_after_seconds', $event.target.value)"
-                       @change="$store.kamePanel.save('failover_after_seconds', $event.target.value)" />
-              </div>
-            </div>
-          </template>
-          <template x-for="m in $store.kamePanel.quickNotice" :key="m.name">
-            <div class="kame-setting">
-              <div class="kame-setting-label"><span class="kame-setting-title" x-text="m.title"></span></div>
-              <div class="kame-setting-control">
-                <div class="kame-choices">
-                  <template x-for="c in $store.kamePanel.choicesOf(m)" :key="c">
-                    <button type="button" class="kame-choice" :class="String($store.kamePanel.value(m.name)) === c ? 'kame-choice-on' : ''"
-                            @click="$store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
-                  </template>
-                </div>
-              </div>
-            </div>
-          </template>
-          <button class="btn" @click="$store.kamePanel.tab = 'settings'">All settings &rarr;</button>
-        </div>
+            <button class="btn" @click="$store.kamePanel.tab = 'settings'">All settings &rarr;</button>
+          </div>
+        </template>
 
         <!-- Details (folded) -->
         <section class="kame-details">
@@ -206,9 +250,9 @@
                   x-text="($store.kamePanel.detailsOpen ? '▾' : '▸') + ' Details'"></button>
           <div class="kame-stack" x-show="$store.kamePanel.detailsOpen">
 
-            <div class="kame-card" x-show="$store.kamePanel.activity.kind !== 'idle'">
+            <div class="kame-card">
               <div class="kame-card-title">Right now</div>
-              <div x-text="$store.kamePanel.said.line1"></div>
+              <div x-text="$store.kamePanel.rightNow"></div>
               <div class="kame-dim kame-small" x-show="$store.kamePanel.waitingSince" x-text="'waiting since ' + $store.kamePanel.waitingSince"></div>
             </div>
 
@@ -254,7 +298,13 @@
 
             <div class="kame-card">
               <div class="kame-card-title">This Agent Zero process</div>
-              <div x-text="$store.kamePanel.process"></div>
+              <div class="kame-dim kame-small">Across every conversation it is serving, including subagents and the background jobs.</div>
+              <template x-for="f in $store.kamePanel.processFields" :key="f.label">
+                <div class="kame-field">
+                  <span class="kame-dim kame-small" x-text="f.label"></span>
+                  <span class="kame-field-value"><span x-text="f.value"></span><span class="kame-dim kame-small" x-show="f.hint" x-text="' ' + f.hint"></span></span>
+                </div>
+              </template>
             </div>
 
             <div class="kame-card" x-show="$store.kamePanel.pools.length">
@@ -264,50 +314,18 @@
               </template>
             </div>
 
-            <div class="kame-counters">
-              <div><b x-text="$store.kamePanel.speed.model_switches || 0"></b> Fallbacks</div>
-              <div><b x-text="$store.kamePanel.speed.backups || 0"></b> Backup keys started
-                (<span x-text="$store.kamePanel.speed.backup_wins || 0"></span> won)</div>
-              <div><b x-text="$store.kamePanel.speed.probe_bursts || 0"></b> Keys asked together</div>
-            </div>
-            <div class="kame-card" x-show="$store.kamePanel.speed.last_model_switch?.to">
-              Last fallback: <b x-text="$store.kamePanel.speed.last_model_switch?.to"></b>
-              answered for <span x-text="$store.kamePanel.speed.last_model_switch?.from"></span>
-              (<span x-text="$store.kamePanel.speed.last_model_switch?.reason"></span>,
-              <span x-text="$store.kamePanel.clock($store.kamePanel.speed.last_model_switch?.at)"></span>).
-            </div>
-
-            <template x-for="f in $store.kamePanel.inFlight" :key="f.started + f.identity">
-              <div class="kame-card kame-waiting">
-                Still waiting: <b x-text="$store.kamePanel.jobWord(f.job)"></b> on
-                <span x-text="f.identity"></span>, <span x-text="f.refusals"></span> refusal(s)<span x-show="f.last">, last: <span x-text="f.last"></span></span>.
-              </div>
-            </template>
-
-            <div class="kame-card" x-show="$store.kamePanel.replies.length">
-              <div class="kame-card-title">Last replies</div>
-              <div class="kame-dim kame-small">The model that wrote each of the last replies (each step of a reply that uses
-                tools counts), its first word and its whole time. A model from your fallback list says which model
-                it answered for.</div>
-              <template x-for="(r, i) in $store.kamePanel.replies" :key="i">
-                <div>
-                  <code x-text="r.model"></code>
-                  <span class="kame-tone-warn" x-show="r.for" x-text="'for ' + r.for"></span>
-                  <span x-text="'first word ' + (r.first_s == null ? '-' : r.first_s.toFixed(1) + ' s') + ' &middot; ' + r.total_s.toFixed(1) + ' s total'"></span>
-                </div>
-              </template>
-            </div>
           </div>
         </section>
       </div>
 
       <!-- ===== Settings ===== -->
       <div class="kame-stack" x-show="$store.kamePanel.tab === 'settings'">
+        <p class="kame-dim kame-small" x-show="$store.kamePanel.saving">Saving…</p>
         <div class="kame-card">
           <div class="kame-card-title" x-text="$store.kamePanel.toolbarTitle"></div>
           <div class="kame-dim kame-small">Everything works without changing anything here. Changes apply on the next message and survive restarts.</div>
           <div class="kame-actions">
-            <button class="btn" title="Reads the saved settings again and rebuilds this page on the spot." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.refresh()">Refresh</button>
+            <button class="btn" title="Reads Agent Zero's settings again and rebuilds this page on the spot. Use it after changing a setting somewhere else, or after adding a key somewhere else, instead of restarting." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.refresh()">Refresh</button>
             <button class="btn" title="Every KAME setting goes back to its built-in default." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'reset_all'">Reset to defaults</button>
             <button class="btn" title="Only clears rotation and quarantine; it does not delete any key." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'clear_pool_all'">Clear pool</button>
             <button class="btn" title="Empties the event list on the Events page. Nothing else changes." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.act('clear_events')">Clear events</button>
@@ -317,15 +335,22 @@
                     x-text="$store.kamePanel.showAdvanced ? 'Hide advanced settings' : 'Show advanced settings (' + $store.kamePanel.advancedCount + ')'"></button>
           </div>
           <div class="kame-confirm" x-show="$store.kamePanel.confirming === 'reset_all'">
+            <b class="kame-small">Reset every setting?</b>
             <span class="kame-small">Every KAME setting goes back to its built-in default. Your fallback list and your keys are not touched.</span>
             <button class="btn btn-ok" @click="$store.kamePanel.act('reset_settings')">Reset everything</button>
             <button class="btn" @click="$store.kamePanel.confirming = ''">Cancel</button>
           </div>
           <div class="kame-confirm" x-show="$store.kamePanel.confirming === 'clear_pool_all'">
+            <b class="kame-small">Clear the pool?</b>
             <span class="kame-small">Every key starts again as if it had never been tried: cooldowns, quarantines and the request history are forgotten. This does not delete any key, and a key that is genuinely spent will simply be refused again.</span>
             <button class="btn btn-ok" @click="$store.kamePanel.act('clear_pool')">Clear the pool</button>
             <button class="btn" @click="$store.kamePanel.confirming = ''">Cancel</button>
           </div>
+        </div>
+
+        <div class="kame-card" x-show="$store.kamePanel.noSettings">
+          <div class="kame-card-title">Settings</div>
+          <p class="kame-dim">This KAME reports no settings.</p>
         </div>
 
         <template x-for="card in $store.kamePanel.settingCards" :key="card.id">
@@ -333,13 +358,28 @@
             <div class="kame-card-title" x-text="card.title"></div>
             <div class="kame-dim kame-small" x-text="card.note"></div>
 
-            <template x-if="card.id === 'off'">
+            <template x-if="card.folded">
               <button class="btn" @click="$store.kamePanel.showSwitches = !$store.kamePanel.showSwitches"
-                      x-text="$store.kamePanel.showSwitches ? 'Hide these switches' : 'Show the ' + card.total + ' switches'"></button>
+                      x-text="($store.kamePanel.showSwitches || card.open) ? 'Hide these switches' : 'Show the ' + card.total + ' switches'"></button>
             </template>
 
-            <template x-if="card.shows_fallback">
+            <template x-if="card.shows_fallback &amp;&amp; $store.kamePanel.tab !== 'fallback'">
               <p><button class="btn" @click="$store.kamePanel.tab = 'fallback'">Edit your fallback models &rarr;</button></p>
+            </template>
+
+            <template x-if="card.shows_fallback &amp;&amp; $store.kamePanel.fallbackList">
+              <div class="kame-fblist">
+                <p x-text="$store.kamePanel.fallbackList.why"></p>
+                <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
+                <ol class="kame-small">
+                  <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
+                    <li><span class="kame-dim" x-text="e.n + '.'"></span> <span class="kame-mono" x-text="e.identity"></span>
+                      <span class="kame-dim" x-show="e.yours">(your model)</span>
+                      <span class="kame-dim" x-text="e.state"></span></li>
+                  </template>
+                </ol>
+                <p class="kame-dim kame-small" x-text="$store.kamePanel.fallbackList.how"></p>
+              </div>
             </template>
 
             <template x-if="card.shows_keys">
@@ -354,22 +394,29 @@
               </div>
             </template>
 
-            <div x-show="card.id !== 'off' || $store.kamePanel.showSwitches">
+            <div x-show="!card.folded || card.open || $store.kamePanel.showSwitches">
               <template x-for="m in card.rows" :key="m.name">
-                <div class="kame-setting">
+                <div class="kame-setting" :class="$store.kamePanel.isChanged(m) ? 'kame-setting-changed' : ''">
                   <div class="kame-setting-label">
-                    <span class="kame-setting-title" x-text="m.title"></span>
-                    <code class="kame-dim kame-small" x-text="m.name"></code>
-                    <div class="kame-dim kame-small">
-                      <span x-text="m.sentence"></span>
-                      <span x-show="m.env_override" x-text="'(set by ' + m.env_override + ' in the environment)'"></span>
+                    <div>
+                      <span class="kame-setting-title" x-text="m.title"></span>
+                      <span class="kame-tag" :class="'kame-tag-' + m.impact" x-show="$store.kamePanel.impactTag(m)" x-text="$store.kamePanel.impactTag(m)"
+                            title="Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning."></span>
+                      <span class="kame-tag" x-show="$store.kamePanel.isChanged(m)">changed</span>
+                    </div>
+                    <div class="kame-dim kame-small" :title="m.detail || m.sentence" x-text="m.sentence"></div>
+                    <div class="kame-small" x-show="m.when" x-text="'When to change it: ' + m.when"></div>
+                    <div class="kame-dim kame-small kame-mono" x-show="$store.kamePanel.showAdvanced || $store.kamePanel.isChanged(m)">
+                      <span x-show="$store.kamePanel.showAdvanced" x-text="m.name"></span>
+                      <span x-show="$store.kamePanel.showAdvanced &amp;&amp; m.env" x-text="m.env"></span>
+                      <span class="kame-tag" :class="$store.kamePanel.sourceOf(m) === 'default' ? 'kame-tag-quiet' : ''" :title="$store.kamePanel.sourceTip(m)" x-text="$store.kamePanel.sourceLabel(m)"></span>
                     </div>
                   </div>
                   <div class="kame-setting-control">
                     <template x-if="m.type === 'flag'">
                       <label class="toggle">
-                        <input type="checkbox" :checked="!!$store.kamePanel.value(m.name)"
-                               @change="$store.kamePanel.save(m.name, $event.target.checked)" />
+                        <input type="checkbox" :checked="!!$store.kamePanel.value(m.name)" :disabled="$store.kamePanel.busy"
+                               @change="$store.kamePanel.flagChanged(m, $event.target.checked); if ($store.kamePanel.askingFlag === m.name) $event.target.checked = false" />
                         <span class="toggler"></span>
                       </label>
                     </template>
@@ -377,43 +424,172 @@
                       <div class="kame-choices">
                         <template x-for="c in $store.kamePanel.choicesOf(m)" :key="c">
                           <button type="button" class="kame-choice" :class="String($store.kamePanel.value(m.name)) === c ? 'kame-choice-on' : ''"
-                                  @click="$store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
+                                  @click="String($store.kamePanel.value(m.name)) === c || $store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
                         </template>
                       </div>
                     </template>
                     <template x-if="m.type === 'number'">
-                      <input type="number" :min="m.low" :max="m.high" :value="$store.kamePanel.value(m.name)"
-                             @input="$store.kamePanel.draft(m.name, $event.target.value)"
-                             @change="$store.kamePanel.save(m.name, $event.target.value)" />
-                    </template>
-                    <template x-if="m.type === 'text'">
-                      <span>
-                        <textarea rows="2" :value="$store.kamePanel.value(m.name)"
-                                  @input="$store.kamePanel.draft(m.name, $event.target.value)"></textarea>
-                        <button class="btn btn-ok" @click="$store.kamePanel.save(m.name, $store.kamePanel.value(m.name))">Save</button>
+                      <span class="kame-setting-number">
+                        <span class="kame-dim kame-small" x-show="$store.kamePanel.rangeText(m)" x-text="$store.kamePanel.rangeText(m)"></span>
+                        <input type="number" :min="m.low" :max="m.high" :step="m.integral ? 1 : 'any'" :value="$store.kamePanel.value(m.name)"
+                               @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveNumber(m)" />
+                        <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveNumber(m)">Save</button>
                       </span>
                     </template>
-                    <button class="btn" x-show="$store.kamePanel.isChanged(m)" @click="$store.kamePanel.reset(m.name)">Reset</button>
+                    <template x-if="m.type === 'text'">
+                      <span class="kame-setting-number">
+                        <textarea rows="1" placeholder="empty = not used" :value="$store.kamePanel.value(m.name)"
+                                  @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveText(m)"></textarea>
+                        <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveText(m)">Save</button>
+                      </span>
+                    </template>
+                    <button class="btn" x-show="$store.kamePanel.isChanged(m)" :disabled="$store.kamePanel.busy" @click="$store.kamePanel.reset(m.name)">Reset</button>
                   </div>
-                  <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice'" x-text="$store.kamePanel.choiceSentence(m)"></div>
+                  <div class="kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceNote(m)" x-text="$store.kamePanel.choiceNote(m)"></div>
+                  <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceFoot(m)" x-text="$store.kamePanel.choiceFoot(m)"></div>
+                  <div class="kame-error kame-small kame-setting-help" x-show="$store.kamePanel.errorOf(m.name)" x-text="$store.kamePanel.errorOf(m.name)"></div>
+                  <div class="kame-confirm kame-setting-help" x-show="$store.kamePanel.askingFlag === m.name">
+                    <b class="kame-small" x-text="$store.kamePanel.flagQuestion(m)"></b>
+                    <span class="kame-small" x-text="$store.kamePanel.flagDescription(m)"></span>
+                    <button class="btn btn-ok" @click="$store.kamePanel.confirmFlag(m)">Turn it on</button>
+                    <button class="btn" @click="$store.kamePanel.askingFlag = ''">Cancel</button>
+                  </div>
                 </div>
               </template>
             </div>
           </div>
         </template>
+
+        <div class="kame-card">
+          <div class="kame-card-title">Made by KAME</div>
+          <div class="kame-dim kame-small">KAME API Rotation is designed and built by KAME. Free and MIT-licensed. If it saves your conversations from rate limits, a star on GitHub helps other people find it — it costs nothing.</div>
+          <div class="kame-actions">
+            <a class="btn" href="https://github.com/Kame696/kame-api-rotation-for-agent-zero" target="_blank" rel="noopener noreferrer" title="https://github.com/Kame696/kame-api-rotation-for-agent-zero">⭐ Star on GitHub</a>
+            <a class="btn" href="https://github.com/Kame696" target="_blank" rel="noopener noreferrer" title="https://github.com/Kame696">KAME on GitHub (Kame696)</a>
+            <a class="btn" href="https://github.com/Kame696/kame-api-rotation-for-agent-zero/issues" target="_blank" rel="noopener noreferrer" title="https://github.com/Kame696/kame-api-rotation-for-agent-zero/issues">Report a problem</a>
+          </div>
+        </div>
       </div>
 
       <!-- ===== Fallback models ===== -->
       <div class="kame-stack" x-show="$store.kamePanel.tab === 'fallback'">
+        <template x-for="card in $store.kamePanel.fallbackCards" :key="card.id">
+          <div class="kame-card">
+            <div class="kame-card-title" x-text="card.title"></div>
+            <div class="kame-dim kame-small" x-text="card.note"></div>
+
+            <template x-if="card.folded">
+              <button class="btn" @click="$store.kamePanel.showSwitches = !$store.kamePanel.showSwitches"
+                      x-text="($store.kamePanel.showSwitches || card.open) ? 'Hide these switches' : 'Show the ' + card.total + ' switches'"></button>
+            </template>
+
+            <template x-if="card.shows_fallback &amp;&amp; $store.kamePanel.tab !== 'fallback'">
+              <p><button class="btn" @click="$store.kamePanel.tab = 'fallback'">Edit your fallback models &rarr;</button></p>
+            </template>
+
+            <template x-if="card.shows_fallback &amp;&amp; $store.kamePanel.fallbackList">
+              <div class="kame-fblist">
+                <p x-text="$store.kamePanel.fallbackList.why"></p>
+                <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
+                <ol class="kame-small">
+                  <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
+                    <li><span class="kame-dim" x-text="e.n + '.'"></span> <span class="kame-mono" x-text="e.identity"></span>
+                      <span class="kame-dim" x-show="e.yours">(your model)</span>
+                      <span class="kame-dim" x-text="e.state"></span></li>
+                  </template>
+                </ol>
+                <p class="kame-dim kame-small" x-text="$store.kamePanel.fallbackList.how"></p>
+              </div>
+            </template>
+
+            <template x-if="card.shows_keys">
+              <div class="kame-howto">
+                <p>Add your keys in Agent Zero:</p>
+                <ol class="kame-small">
+                  <li>Put several keys of one provider in that provider's API key field (Settings &gt; API keys), separated by commas.</li>
+                  <li>Or type <code>/kame-keys add google KEY1,KEY2,KEY3</code> in the chat (any provider name instead of google).</li>
+                  <li>Type <code>/kame-keys</code> to see every key and how it is doing.</li>
+                </ol>
+                <p class="kame-dim kame-small">Agent Zero keeps the keys; KAME never shows one. The Overview tab shows how each one is doing.</p>
+              </div>
+            </template>
+
+            <div x-show="!card.folded || card.open || $store.kamePanel.showSwitches">
+              <template x-for="m in card.rows" :key="m.name">
+                <div class="kame-setting" :class="$store.kamePanel.isChanged(m) ? 'kame-setting-changed' : ''">
+                  <div class="kame-setting-label">
+                    <div>
+                      <span class="kame-setting-title" x-text="m.title"></span>
+                      <span class="kame-tag" :class="'kame-tag-' + m.impact" x-show="$store.kamePanel.impactTag(m)" x-text="$store.kamePanel.impactTag(m)"
+                            title="Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning."></span>
+                      <span class="kame-tag" x-show="$store.kamePanel.isChanged(m)">changed</span>
+                    </div>
+                    <div class="kame-dim kame-small" :title="m.detail || m.sentence" x-text="m.sentence"></div>
+                    <div class="kame-small" x-show="m.when" x-text="'When to change it: ' + m.when"></div>
+                    <div class="kame-dim kame-small kame-mono" x-show="$store.kamePanel.showAdvanced || $store.kamePanel.isChanged(m)">
+                      <span x-show="$store.kamePanel.showAdvanced" x-text="m.name"></span>
+                      <span x-show="$store.kamePanel.showAdvanced &amp;&amp; m.env" x-text="m.env"></span>
+                      <span class="kame-tag" :class="$store.kamePanel.sourceOf(m) === 'default' ? 'kame-tag-quiet' : ''" :title="$store.kamePanel.sourceTip(m)" x-text="$store.kamePanel.sourceLabel(m)"></span>
+                    </div>
+                  </div>
+                  <div class="kame-setting-control">
+                    <template x-if="m.type === 'flag'">
+                      <label class="toggle">
+                        <input type="checkbox" :checked="!!$store.kamePanel.value(m.name)" :disabled="$store.kamePanel.busy"
+                               @change="$store.kamePanel.flagChanged(m, $event.target.checked); if ($store.kamePanel.askingFlag === m.name) $event.target.checked = false" />
+                        <span class="toggler"></span>
+                      </label>
+                    </template>
+                    <template x-if="m.type === 'choice'">
+                      <div class="kame-choices">
+                        <template x-for="c in $store.kamePanel.choicesOf(m)" :key="c">
+                          <button type="button" class="kame-choice" :class="String($store.kamePanel.value(m.name)) === c ? 'kame-choice-on' : ''"
+                                  @click="String($store.kamePanel.value(m.name)) === c || $store.kamePanel.save(m.name, c)" x-text="$store.kamePanel.choiceLabel(m, c)"></button>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="m.type === 'number'">
+                      <span class="kame-setting-number">
+                        <span class="kame-dim kame-small" x-show="$store.kamePanel.rangeText(m)" x-text="$store.kamePanel.rangeText(m)"></span>
+                        <input type="number" :min="m.low" :max="m.high" :step="m.integral ? 1 : 'any'" :value="$store.kamePanel.value(m.name)"
+                               @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveNumber(m)" />
+                        <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveNumber(m)">Save</button>
+                      </span>
+                    </template>
+                    <template x-if="m.type === 'text'">
+                      <span class="kame-setting-number">
+                        <textarea rows="1" placeholder="empty = not used" :value="$store.kamePanel.value(m.name)"
+                                  @input="$store.kamePanel.draft(m.name, $event.target.value)" @keydown.enter.prevent="$store.kamePanel.saveText(m)"></textarea>
+                        <button class="btn btn-ok" :disabled="$store.kamePanel.busy || !$store.kamePanel.isDirty(m.name)" @click="$store.kamePanel.saveText(m)">Save</button>
+                      </span>
+                    </template>
+                    <button class="btn" x-show="$store.kamePanel.isChanged(m)" :disabled="$store.kamePanel.busy" @click="$store.kamePanel.reset(m.name)">Reset</button>
+                  </div>
+                  <div class="kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceNote(m)" x-text="$store.kamePanel.choiceNote(m)"></div>
+                  <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceFoot(m)" x-text="$store.kamePanel.choiceFoot(m)"></div>
+                  <div class="kame-error kame-small kame-setting-help" x-show="$store.kamePanel.errorOf(m.name)" x-text="$store.kamePanel.errorOf(m.name)"></div>
+                  <div class="kame-confirm kame-setting-help" x-show="$store.kamePanel.askingFlag === m.name">
+                    <b class="kame-small" x-text="$store.kamePanel.flagQuestion(m)"></b>
+                    <span class="kame-small" x-text="$store.kamePanel.flagDescription(m)"></span>
+                    <button class="btn btn-ok" @click="$store.kamePanel.confirmFlag(m)">Turn it on</button>
+                    <button class="btn" @click="$store.kamePanel.askingFlag = ''">Cancel</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+        <div class="kame-actions" x-show="$store.kamePanel.extraAdvancedCount || $store.kamePanel.showAdvanced">
+          <button class="btn" title="Settings that are already tuned or only one unusual setup needs. Hidden unless you changed them."
+                  @click="$store.kamePanel.showAdvanced = !$store.kamePanel.showAdvanced"
+                  x-text="$store.kamePanel.showAdvanced ? 'Hide advanced settings' : 'Show advanced settings (' + $store.kamePanel.extraAdvancedCount + ')'"></button>
+        </div>
+
         <div class="kame-card">
           <div class="kame-card-title">Fallback models</div>
           <div class="kame-dim kame-small">
-            Agent Zero has no fallback list of its own, so KAME keeps one. When your
-            chat model cannot answer &mdash; every key resting longer than the time
-            below, the provider has no server for it, two timeouts in a row, every
-            key refused it &mdash; and nothing has been shown yet, KAME answers with the
-            first model here that can. The next reply starts on your model again.
-            Background jobs never switch model. Empty list: nothing ever switches.
+            These models answer when your main model cannot. A chat that runs on another model never
+            falls back, and background jobs never switch model. Empty list: nothing ever switches.
           </div>
 
           <p class="kame-dim" x-show="!$store.kamePanel.rows.length">No fallback models yet. Click &ldquo;+ Add fallback model&rdquo; to choose the model KAME should try when yours cannot answer.</p>
@@ -423,7 +599,7 @@
               <li class="kame-fb-row" :class="$store.kamePanel.isDraft(row) ? 'kame-fb-draft' : ''">
                 <span class="kame-fb-n" x-text="(i + 1) + '.'"></span>
 
-                <template x-if="$store.kamePanel.hasSearch">
+                <template x-if="$store.kamePanel.hasSearch &amp;&amp; $store.kamePanel.providerChoices.length">
                   <select class="kame-fb-provider" :value="row.provider" aria-label="Provider"
                           @change="$store.kamePanel.setProvider(row, $event.target.value)">
                     <option value="">&mdash; provider &mdash;</option>
@@ -432,27 +608,29 @@
                     </template>
                   </select>
                 </template>
-                <template x-if="!$store.kamePanel.hasSearch">
+                <template x-if="!($store.kamePanel.hasSearch &amp;&amp; $store.kamePanel.providerChoices.length)">
                   <input type="text" class="kame-fb-provider" placeholder="provider" aria-label="Provider" :value="row.provider"
                          @input="row.provider = $event.target.value; $store.kamePanel.rowsDirty = true" />
                 </template>
 
                 <div class="kame-fb-model" @click.outside="row.open = false">
-                  <input type="text" placeholder="model name" aria-label="Model name" :value="row.name"
+                  <input type="text" placeholder="model name" aria-label="Model name" autocomplete="off" :value="row.name"
+                         role="combobox" aria-autocomplete="list" :aria-expanded="row.open &amp;&amp; row.results.length &gt; 0 ? 'true' : 'false'"
                          @input="$store.kamePanel.typeModel(row, $event.target.value)"
                          @focus="$store.kamePanel.search(row, true)"
-                         @keydown.escape="row.open = false" />
-                  <div class="kame-fb-results" x-show="row.open &amp;&amp; row.results.length &gt; 0">
+                         @keydown="$store.kamePanel.key(row, $event)" />
+                  <div class="kame-fb-results" role="listbox" x-show="row.open &amp;&amp; row.results.length &gt; 0">
                     <div class="kame-fb-item kame-dim" x-show="row.source === 'litellm_registry'">Catalog suggestions &mdash; availability not verified</div>
-                    <template x-for="m in $store.kamePanel.grouped(row).matched" :key="'m_' + m">
-                      <div class="kame-fb-item kame-fb-matched" @click="$store.kamePanel.pick(row, m)" x-text="m"></div>
-                    </template>
-                    <template x-for="m in $store.kamePanel.grouped(row).rest" :key="'r_' + m">
-                      <div class="kame-fb-item" @click="$store.kamePanel.pick(row, m)" x-text="m"></div>
+                    <template x-for="item in $store.kamePanel.items(row)" :key="item.index + '_' + item.name">
+                      <div class="kame-fb-item" role="option" :aria-selected="row.active === item.index ? 'true' : 'false'"
+                           :class="(item.matched ? 'kame-fb-matched ' : '') + (row.active === item.index ? 'kame-fb-active' : '')"
+                           x-effect="row.active === item.index &amp;&amp; $el.scrollIntoView &amp;&amp; $el.scrollIntoView({ block: 'nearest' })"
+                           @mousedown.prevent
+                           @click="$store.kamePanel.pick(row, item.name)" x-text="item.name"></div>
                     </template>
                   </div>
                   <div class="kame-fb-results" x-show="row.open &amp;&amp; row.results.length === 0 &amp;&amp; !row.searching">
-                    <div class="kame-fb-item kame-dim">No models found</div>
+                    <div class="kame-fb-item kame-dim" x-text="row.error ? 'Could not load models from the provider' : 'No models found'"></div>
                   </div>
                 </div>
 
@@ -475,52 +653,166 @@
           <p class="kame-dim kame-small">Each model uses the keys Agent Zero has for its provider. Up to 12 models.</p>
         </div>
 
+      </div>
+
+      <!-- ===== Events ===== -->
+      <div class="kame-stack" x-show="$store.kamePanel.tab === 'events'">
+
+        <div class="kame-card" x-show="$store.kamePanel.replies.length">
+          <div class="kame-card-title">Last replies</div>
+          <div class="kame-dim kame-small">The model that wrote each of the last replies of your conversation (each step of a reply that uses tools is a reply of its own), the time to its first word and in total. A model from your fallback list says which model it answered for.</div>
+          <template x-for="(r, i) in $store.kamePanel.replies" :key="i">
+            <p class="kame-reply">
+              <span class="kame-mono" x-text="r.model"></span>
+              <span class="kame-tone-warn" x-show="r.for" x-text="'for ' + r.for"></span>
+              <span x-text="'first word ' + $store.kamePanel.replyTime(r.first_s) + ' · ' + $store.kamePanel.replyTime(r.total_s) + ' total'"></span>
+              <span class="kame-dim" x-text="$store.kamePanel.replyAgo(r)"></span>
+            </p>
+          </template>
+        </div>
+
         <div class="kame-card">
-          <div class="kame-setting">
-            <div class="kame-setting-label">
-              <span class="kame-setting-title">Switch to the next model after (seconds)</span>
-              <div class="kame-dim kame-small">How long every key of your model may rest before the next model answers. 0 = never switch.</div>
-            </div>
-            <div class="kame-setting-control">
-              <input type="number" min="0" max="3600" :value="$store.kamePanel.value('failover_after_seconds')"
-                     @input="$store.kamePanel.draft('failover_after_seconds', $event.target.value)"
-                     @change="$store.kamePanel.save('failover_after_seconds', $event.target.value)" />
-            </div>
+          <div class="kame-card-title">Events</div>
+          <div class="kame-dim kame-small">Every decision your conversation made about your keys, newest first (Agent Zero’s background jobs — titles, summaries, compression — are on the Background jobs tab) — the failures and the rotations that answered them. Keys appear as fingerprints: a hash, never a prefix of the key itself. Provider error text is scrubbed before it is written down, because a provider can quote your own prompt back inside an error.</div>
+
+          <div class="kame-tallies">
+            <template x-for="t in [['all', 'plain'], ['did', 'good'], ['wrong', $store.kamePanel.tallies.wrong.count ? 'bad' : 'plain']]" :key="t[0]">
+              <button type="button" class="kame-tally" :class="$store.kamePanel.eventView === t[0] ? 'kame-tally-on' : ''"
+                      :aria-label="t[0] === 'wrong' ? 'What went wrong' : t[0] === 'did' ? 'What KAME did' : 'Everything'"
+                      :title="$store.kamePanel.tallies[t[0]].title" @click="$store.kamePanel.setEventView(t[0])">
+                <span class="kame-tally-n" :class="'kame-tone-ev-' + t[1]" x-text="$store.kamePanel.tallies[t[0]].count"></span>
+                <span class="kame-tally-l kame-dim" x-text="$store.kamePanel.tallies[t[0]].label"></span>
+              </button>
+            </template>
+            <button type="button" class="kame-tally" :title="$store.kamePanel.tallies.background.title"
+                    @click="$store.kamePanel.closeInspect(); $store.kamePanel.tab = 'background'">
+              <span class="kame-tally-n" x-text="$store.kamePanel.tallies.background.count"></span>
+              <span class="kame-tally-l kame-dim" x-text="$store.kamePanel.tallies.background.label"></span>
+            </button>
           </div>
+
+          <div class="kame-card kame-waiting" x-show="$store.kamePanel.stillWaiting('main').length">
+            <template x-for="(line, i) in $store.kamePanel.stillWaiting('main')" :key="i">
+              <p class="kame-small"><span class="kame-tone-warn">Still waiting </span><span x-text="line"></span></p>
+            </template>
+          </div>
+
+          <div class="kame-evlist" x-show="$store.kamePanel.shownEvents.length">
+            <template x-for="e in $store.kamePanel.shownEvents" :key="e.seq">
+              <div class="kame-evrow" :class="'kame-rail-' + $store.kamePanel.eventLabel(e).tone" :title="$store.kamePanel.rowTitle(e)"
+                   :style="$store.kamePanel.canInspect(e) ? 'cursor:pointer' : ''" @click="$store.kamePanel.inspect(e)">
+                <span class="kame-ev-when kame-dim" :title="$store.kamePanel.eventClock(e)" x-text="$store.kamePanel.eventAgo(e) || $store.kamePanel.eventClock(e) || '—'"></span>
+                <span class="kame-ev-label" :class="'kame-tone-ev-' + $store.kamePanel.eventLabel(e).tone" x-text="$store.kamePanel.eventLabel(e).word"></span>
+                <span class="kame-ev-reason" x-text="$store.kamePanel.eventLine(e)"></span>
+                <span class="kame-ev-tail kame-dim">
+                  <span class="kame-mono kame-ev-model" :title="e.identity || ''" x-text="$store.kamePanel.eventTail(e).model"></span>
+                  <span class="kame-mono" x-show="$store.kamePanel.eventTail(e).key" x-text="$store.kamePanel.eventTail(e).key"></span>
+                  <span x-show="$store.kamePanel.eventTail(e).code" x-text="$store.kamePanel.eventTail(e).code"></span>
+                  <span x-show="$store.kamePanel.eventTail(e).rest" x-text="$store.kamePanel.eventTail(e).rest"></span>
+                  <template x-if="$store.kamePanel.sizedChip(e)">
+                    <span class="kame-chip" :class="$store.kamePanel.sizedChip(e).good ? '' : 'kame-chip-weak'" :title="$store.kamePanel.sizedChip(e).title" x-text="$store.kamePanel.sizedChip(e).word"></span>
+                  </template>
+                  <span class="kame-chip kame-chip-link" x-show="$store.kamePanel.canInspect(e)">see the error</span>
+                </span>
+              </div>
+            </template>
+          </div>
+          <p class="kame-dim" x-show="!$store.kamePanel.shownEvents.length" x-text="$store.kamePanel.eventsEmpty"></p>
+
+          <p class="kame-small kame-heartbeat" :class="$store.kamePanel.heartbeatStale ? 'kame-tone-warn' : 'kame-dim'" x-text="$store.kamePanel.heartbeat"></p>
+        </div>
+
+        <div class="kame-card">
+          <div class="kame-card-title">Reading this list</div>
+          <div class="kame-dim kame-small">Each word on this list, and what it means.</div>
+          <div class="kame-legend-grid">
+            <template x-for="k in $store.kamePanel.legendKinds" :key="k.kind">
+              <div class="kame-small kame-legend-row">
+                <span class="kame-legend-word" :class="'kame-tone-ev-' + k.tone" x-text="k.word"></span>
+                <span class="kame-dim" x-text="k.text"></span>
+              </div>
+            </template>
+          </div>
+          <p class="kame-dim kame-small">Answers and requests are not listed one by one here: the Last replies card, above, shows which model answered each reply.</p>
         </div>
       </div>
 
-      <!-- ===== Events / Background jobs ===== -->
-      <template x-for="bg in [false, true]" :key="String(bg)">
-        <div x-show="$store.kamePanel.tab === (bg ? 'background' : 'events')">
-          <div class="section-description" x-text="bg
-            ? 'Agent Zero\'s calls behind the scenes: memory, chat titles, summaries and compression. Kept apart so they never bury your conversation.'
-            : 'What KAME decided for your conversation, newest first.'"></div>
-          <div class="section-description" x-show="!$store.kamePanel.events(bg).length">Nothing yet.</div>
-          <table class="kame-table" x-show="$store.kamePanel.events(bg).length">
-            <thead><tr><th>When</th><th>What</th><th x-show="bg">Job</th><th>Model</th><th>Key</th><th>Why</th><th>Rest</th></tr></thead>
-            <tbody>
-              <template x-for="e in $store.kamePanel.events(bg)" :key="e.seq">
-                <tr :class="$store.kamePanel.good(e.kind) ? 'kame-good' : ''">
-                  <td x-text="$store.kamePanel.clock(e.at)"></td>
-                  <td x-text="$store.kamePanel.kindWord(e.kind)"></td>
-                  <td x-show="bg" x-text="$store.kamePanel.jobWord(e.job)"></td>
-                  <td x-text="e.identity"></td>
-                  <td x-text="e.key"></td>
-                  <td x-text="$store.kamePanel.reasonText(e) + (e.code ? ' (' + e.code + ')' : '')"></td>
-                  <td x-text="$store.kamePanel.seconds(e.seconds)"></td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-          <details class="kame-dim" style="margin-top:8px">
-            <summary>What each kind of row means</summary>
-            <template x-for="m in $store.kamePanel.meanings" :key="m.kind">
-              <div><b x-text="m.word"></b> - <span x-text="m.text"></span></div>
+      <!-- ===== Background jobs ===== -->
+      <div class="kame-stack" x-show="$store.kamePanel.tab === 'background'">
+        <div class="kame-card">
+          <div class="kame-card-title">Auxiliary model calls</div>
+          <div class="kame-dim kame-small">The background calls Agent Zero makes on its own — chat titles, compression, memory, document questions and the rest — kept apart from your conversation. They share the same keys and the same pools as the chat (one pool per provider and model), so this is only a separate view, never a separate rotation. Click a task to see only its calls.</div>
+
+          <div class="kame-tallies" x-show="$store.kamePanel.bgTasks.length">
+            <button type="button" class="kame-tally" :class="$store.kamePanel.bgActive === 'all' ? 'kame-tally-on' : ''"
+                    title="Every background call in the buffer, newest first." @click="$store.kamePanel.setBgTask('all')">
+              <span class="kame-tally-n" x-text="$store.kamePanel.bgEvents.length"></span>
+              <span class="kame-tally-l kame-dim">all tasks</span>
+            </button>
+            <template x-for="t in $store.kamePanel.bgTasks" :key="t.name">
+              <button type="button" class="kame-tally" :class="$store.kamePanel.bgActive === t.name ? 'kame-tally-on' : ''"
+                      :title="t.count + (t.count === 1 ? ' row' : ' rows') + ' from ' + t.label + ' — click to show only these'"
+                      @click="$store.kamePanel.setBgTask(t.name)">
+                <span class="kame-tally-n" x-text="t.count"></span>
+                <span class="kame-tally-l kame-dim" x-text="t.label"></span>
+              </button>
             </template>
-          </details>
+          </div>
+
+          <div class="kame-card kame-waiting" x-show="$store.kamePanel.stillWaiting('secondary').length">
+            <template x-for="(line, i) in $store.kamePanel.stillWaiting('secondary')" :key="i">
+              <p class="kame-small"><span class="kame-tone-warn">Still waiting </span><span x-text="line"></span></p>
+            </template>
+          </div>
+
+          <div class="kame-evlist" x-show="$store.kamePanel.bgShown.length">
+            <template x-for="e in $store.kamePanel.bgShown" :key="e.seq">
+              <div class="kame-evrow" :class="'kame-rail-' + $store.kamePanel.eventLabel(e).tone" :title="$store.kamePanel.rowTitle(e)"
+                   :style="$store.kamePanel.canInspect(e) ? 'cursor:pointer' : ''" @click="$store.kamePanel.inspect(e)">
+                <span class="kame-ev-when kame-dim" :title="$store.kamePanel.eventClock(e)" x-text="$store.kamePanel.eventAgo(e) || $store.kamePanel.eventClock(e) || '—'"></span>
+                <span class="kame-ev-label" :class="'kame-tone-ev-' + $store.kamePanel.eventLabel(e).tone" x-text="$store.kamePanel.eventLabel(e).word"></span>
+                <span class="kame-ev-reason" x-text="$store.kamePanel.eventLine(e)"></span>
+                <span class="kame-ev-tail kame-dim">
+                  <span class="kame-mono kame-ev-model" :title="e.identity || ''" x-text="$store.kamePanel.eventTail(e).model"></span>
+                  <span class="kame-mono" x-show="$store.kamePanel.eventTail(e).key" x-text="$store.kamePanel.eventTail(e).key"></span>
+                  <span x-show="$store.kamePanel.eventTail(e).code" x-text="$store.kamePanel.eventTail(e).code"></span>
+                  <span x-show="$store.kamePanel.eventTail(e).rest" x-text="$store.kamePanel.eventTail(e).rest"></span>
+                  <template x-if="$store.kamePanel.sizedChip(e)">
+                    <span class="kame-chip" :class="$store.kamePanel.sizedChip(e).good ? '' : 'kame-chip-weak'" :title="$store.kamePanel.sizedChip(e).title" x-text="$store.kamePanel.sizedChip(e).word"></span>
+                  </template>
+                  <span class="kame-chip kame-chip-link" x-show="$store.kamePanel.canInspect(e)">see the error</span>
+                </span>
+              </div>
+            </template>
+          </div>
+          <p class="kame-dim" x-show="!$store.kamePanel.bgShown.length">No auxiliary model calls yet. Titles, compression, memory and the other background jobs appear here as Agent Zero runs them.</p>
         </div>
-      </template>
+      </div>
+
+      <footer class="kame-footer kame-dim kame-small">
+        <p>Backend process <span x-text="$store.kamePanel.pid"></span> · reading refreshed every <span x-text="$store.kamePanel.refreshEvery"></span></p>
+        <p>/kame for the same picture in the chat, /kame-quota per key and model, /kame-keys to add keys in bulk</p>
+        <p>KAME API Rotation is made by KAME · <a href="https://github.com/Kame696" target="_blank" rel="noopener noreferrer" title="https://github.com/Kame696">github.com/Kame696</a> · <a href="https://github.com/Kame696/kame-api-rotation-for-agent-zero" target="_blank" rel="noopener noreferrer" title="https://github.com/Kame696/kame-api-rotation-for-agent-zero">⭐ Star it on GitHub</a></p>
+      </footer>
+
+      </div>
+
+      <!-- the raw provider payload for one failure, over the page -->
+      <div class="kame-overlay" x-show="$store.kamePanel.inspecting" @click="$store.kamePanel.closeInspect()" @keydown.escape.window="$store.kamePanel.closeInspect()">
+        <div class="kame-overlay-card" @click.stop>
+          <div class="kame-overlay-head">
+            <span>
+              <b x-text="$store.kamePanel.inspectorHead && $store.kamePanel.inspectorHead.label"></b>
+              <span class="kame-mono kame-dim kame-small" x-text="$store.kamePanel.inspectorHead && $store.kamePanel.inspectorHead.identity"></span>
+              <span class="kame-mono kame-dim kame-small" x-text="$store.kamePanel.inspectorHead && $store.kamePanel.inspectorHead.clock"></span>
+            </span>
+            <button class="btn" @click="$store.kamePanel.closeInspect()">Close</button>
+          </div>
+          <p class="kame-dim kame-small">What the provider actually sent, with anything key-shaped removed before it was stored.</p>
+          <pre class="kame-payload" x-text="$store.kamePanel.inspecting && $store.kamePanel.inspecting.detail"></pre>
+        </div>
+      </div>
+
     </div>
   </template>
 </div>
@@ -552,6 +844,14 @@
   .kame-dim { opacity: 0.65; font-weight: normal; }
   .kame-error { color: var(--color-error, #e55); }
   .kame-note { opacity: 0.85; font-style: italic; }
+  .kame-banner { padding: 0.6em 0.8em; border-radius: 6px; border: 1px solid rgba(127, 127, 127, 0.35); font-size: 0.9em; }
+  .kame-banner-bad { border-color: rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+  .kame-field { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8em; padding: 0.2em 0; }
+  .kame-field-value { text-align: right; font-variant-numeric: tabular-nums; }
+  .kame-fblist { padding: 0.6em 0.8em; margin: 0.4em 0; border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 6px; }
+  .kame-fblist p { margin: 0.2em 0; }
+  .kame-footer { display: flex; flex-direction: column; gap: 0.2em; }
+  .kame-footer p { margin: 0; }
   .kame-waiting { border-color: var(--color-warning, #d90); }
   .kame-rings { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.5em 0; align-items: flex-start; }
   .kame-ring-slot { display: flex; align-items: center; gap: 0.2em; }
@@ -590,6 +890,13 @@
   .kame-setting-title { font-weight: 500; margin-right: 0.5em; }
   .kame-setting-control { display: flex; align-items: center; gap: 0.5em; justify-content: flex-end; }
   .kame-setting-help { grid-column: 1 / -1; }
+  .kame-setting-changed { border-left: 2px solid rgba(127, 127, 127, 0.6); padding-left: 0.6em; }
+  .kame-tag { display: inline-block; border: 1px solid rgba(127, 127, 127, 0.4); border-radius: 4px; padding: 0 0.4em; font-size: 0.7em; margin-left: 0.3em; white-space: nowrap; opacity: 0.85; }
+  .kame-tag-high { border-color: rgba(245, 158, 11, 0.6); color: #f59e0b; }
+  .kame-tag-escape { border-color: rgba(239, 68, 68, 0.5); color: #ef4444; }
+  .kame-tag-quiet { border-color: transparent; opacity: 0.55; }
+  .kame-setting-number { display: inline-flex; align-items: center; gap: 0.4em; }
+  .kame-setting-number input[type=number] { width: 7em; text-align: right; }
   .kame-choices { display: inline-flex; border: 1px solid var(--color-border, #666); border-radius: 6px; overflow: hidden; }
   .kame-choice { padding: 0.3em 0.8em; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 0.85em; opacity: 0.7; }
   .kame-choice-on { background: rgba(127, 127, 127, 0.25); opacity: 1; }
@@ -605,9 +912,42 @@
   .kame-fb-item { padding: 0.3em 0.6em; cursor: pointer; font-size: 0.85em; overflow-wrap: anywhere; }
   .kame-fb-item:hover { background: rgba(127, 127, 127, 0.18); }
   .kame-fb-matched { font-weight: 600; }
+  .kame-fb-active { background: rgba(127, 127, 127, 0.28); }
   .kame-fb-tools { display: inline-flex; gap: 0.3em; }
   .kame-fb-hint { flex-basis: 100%; padding-left: 2.3em; }
   .kame-fb-draft { opacity: 0.9; }
+  .kame-evlist { display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; overflow-x: hidden; margin-top: 0.7em; padding-right: 0.3em; }
+  .kame-evrow { display: flex; gap: 0.8em; align-items: baseline; padding: 0.35em 0 0.35em 0.7em; border-left: 2px solid rgba(127, 127, 127, 0.4); }
+  .kame-evrow:hover { background: rgba(127, 127, 127, 0.08); }
+  .kame-rail-bad { border-left-color: rgba(239, 68, 68, 0.6); }
+  .kame-rail-warn { border-left-color: rgba(245, 158, 11, 0.55); }
+  .kame-rail-good { border-left-color: rgba(16, 185, 129, 0.5); }
+  .kame-ev-when { width: 5.5em; flex: none; font-size: 0.72em; font-variant-numeric: tabular-nums; }
+  .kame-ev-label { width: 8.5em; flex: none; font-size: 0.85em; }
+  .kame-ev-reason { flex: 1 1 auto; min-width: 0; font-size: 0.85em; overflow-wrap: anywhere; }
+  .kame-ev-tail { flex: none; display: flex; flex-wrap: wrap; gap: 0.5em; font-size: 0.78em; justify-content: flex-end; max-width: 45%; }
+  .kame-ev-model { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kame-tone-ev-bad { color: #ef4444; }
+  .kame-tone-ev-warn { color: #d99a2b; }
+  .kame-tone-ev-good { color: #10b981; }
+  .kame-chip { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.3em; border-radius: 3px; }
+  .kame-chip-weak { color: #d99a2b; }
+  .kame-chip-link { text-decoration: underline dotted; }
+  .kame-tallies { display: flex; flex-wrap: wrap; gap: 0.3em; margin-top: 0.6em; }
+  .kame-tally { display: flex; flex-direction: column; align-items: flex-start; padding: 0.4em 0.8em; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+  .kame-tally:hover { background: rgba(127, 127, 127, 0.1); }
+  .kame-tally-on { border-color: var(--color-border, #666); background: rgba(127, 127, 127, 0.15); }
+  .kame-tally-n { font-size: 1.2em; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
+  .kame-tally-l { font-size: 0.72em; margin-top: 0.3em; }
+  .kame-heartbeat { margin-top: 0.8em; padding-top: 0.6em; border-top: 1px solid rgba(127, 127, 127, 0.25); }
+  .kame-legend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22em, 1fr)); gap: 0.5em 1.5em; margin: 0.5em 0; }
+  .kame-legend-row { display: flex; gap: 0.6em; }
+  .kame-legend-word { width: 8.5em; flex: none; }
+  .kame-reply { display: flex; flex-wrap: wrap; gap: 0.2em 0.7em; margin: 0.15em 0; }
+  .kame-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); padding: 1.5em; }
+  .kame-overlay-card { display: flex; flex-direction: column; gap: 0.6em; max-height: 80vh; width: min(60em, 100%); padding: 1em; border: 1px solid var(--color-border, #666); border-radius: 8px; background: var(--color-panel, #222); }
+  .kame-overlay-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.7em; }
+  .kame-payload { margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-all; padding: 0.7em; border-radius: 4px; background: rgba(0, 0, 0, 0.25); font-size: 0.75em; user-select: text; }
   .kame-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
   .kame-table th, .kame-table td { text-align: left; padding: 0.25em 0.4em; border-bottom: 1px solid var(--color-border, #333); vertical-align: top; }
   .kame-table tr.kame-good td { opacity: 0.8; }

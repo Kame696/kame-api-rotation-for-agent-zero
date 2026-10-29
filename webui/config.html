@@ -34,45 +34,52 @@
       <div class="section-description">When your provider is busy, every key of your model is resting, or a reply takes too long.</div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Fallback models</div>
+          <div class="field-title">Fallback models <span style="opacity:.55;font-size:.8em">●●● High</span></div>
           <div class="field-description">When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional <code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.</div>
         </div>
         <div class="field-control"><textarea rows="4" style="width:100%;font-family:monospace" placeholder="openrouter/meta-llama/llama-4-maverick&#10;groq/llama-3.3-70b-versatile" x-model="config.fallback_models" x-init="if (config.fallback_models === undefined || config.fallback_models === null) config.fallback_models = ''"></textarea></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Fallback</div>
-          <div class="field-description">One big pool where your best model comes first: every reply starts on your chat model and goes to the next model of the list only when the provider says it is busy (at once), every key is resting, or nothing comes back in time. <b>Automatic</b>: in time is about three times the model's usual first word (6 to 20 s, learned). <b>Set time</b>: the seconds below. <b>Never</b>: always wait for your keys.</div>
+          <div class="field-title">Fallback <span style="opacity:.55;font-size:.8em">●●● High</span></div>
+          <div class="field-description">Uses the fallback models in the Fallback models tab, as one big pool where your best model always comes first. Every reply starts on your best model and uses all of its keys. The reply goes to the next model of your list only when that model cannot answer: the provider says it is busy (two keys answer 'overloaded' or time out: at once, whatever the setting), every key is resting, or nothing has come back in time. Automatic: in time is about three times the model's usual first word, 6 to 20 s, learned on this computer. Set time: the seconds below. Never: always wait for this model's keys. The next reply starts on your best model again; one KAME knows is still busy or resting is passed down without spending a request. Nothing switches after part of an answer is on screen.<br><i>When to change it: Leave on Automatic. Never if you would rather always wait for the model you picked.</i></div>
         </div>
         <div class="field-control"><select x-model="config.model_switch" x-init="if (config.model_switch === undefined || config.model_switch === null) config.model_switch = (config.failover_after_seconds === undefined || config.failover_after_seconds === null || Number(config.failover_after_seconds) === 60) ? 'auto' : (Number(config.failover_after_seconds) <= 0 ? 'never' : 'timed')"><option value="auto">Automatic</option><option value="timed">Set time</option><option value="never">Never</option></select></div>
       </div>
       <div class="field" x-show="(config.model_switch === 'timed')">
         <div class="field-label">
-          <div class="field-title">Fallback after (seconds)</div>
-          <div class="field-description">When a reply has waited this long with nothing on screen (keys resting, failing or slow), the next model of your list answers it. A busy provider moves at once, whatever this number.</div>
+          <div class="field-title">Fallback after (seconds) <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">Only with Fallback set to 'Set time': when a reply has waited this long with nothing on screen (keys resting, failing or slow), it goes to the next model of your list. A busy provider goes at once, whatever this number.<br><i>When to change it: Only with 'Set time'. Lower to fall back sooner, raise to stay on your best model longer.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="3600" x-model.number="config.failover_after_seconds" x-init="if (config.failover_after_seconds === undefined || config.failover_after_seconds === null) config.failover_after_seconds = 60" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="3600" x-model.number="config.failover_after_seconds" x-init="if (config.failover_after_seconds === undefined || config.failover_after_seconds === null) config.failover_after_seconds = 60" /></div>
       </div>
-      <div class="field" x-show="advanced">
+      <div class="field">
         <div class="field-label">
-          <div class="field-title">Show which model answered</div>
-          <div class="field-description">When a reply ends, one line in the chat log: its time and the model that answered each step. Never part of what the model reads.</div>
+          <div class="field-title">Show which model answered <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">After a reply, a short notice says the model that wrote it and how long it took, and when a model from your fallback list answered. Never part of the conversation the model reads.<br><i>When to change it: Only another model, if a notice after every reply is too much.</i></div>
         </div>
         <div class="field-control"><select x-model="config.reply_notice" x-init="if (config.reply_notice === undefined || config.reply_notice === null) config.reply_notice = 'always'"><option value="always">Every reply</option><option value="switches">Only another model</option><option value="never">Never</option></select></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Give up after (seconds)</div>
-          <div class="field-description">0 (default): never give up; KAME waits for a key or uses your fallback list. A number makes it give up with an error after that long, which ends Agent Zero's task.</div>
+          <div class="field-title">Give up after (seconds) <span style="opacity:.55;font-size:.8em">●●● High</span></div>
+          <div class="field-description">Default: a chat never gives up, it waits for a key or uses your fallback list. A number here makes it give up with an error after that long, which ends Agent Zero's task; 0 never gives up.<br><i>When to change it: Change only if you would rather get an error than wait for your keys to come back.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="604800" x-model.number="config.max_total_wait_seconds" x-init="if (config.max_total_wait_seconds === undefined || config.max_total_wait_seconds === null) config.max_total_wait_seconds = 0" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="604800" x-model.number="config.max_total_wait_seconds" x-init="if (config.max_total_wait_seconds === undefined || config.max_total_wait_seconds === null) config.max_total_wait_seconds = 0" /></div>
+      </div>
+      <div class="field" x-show="advanced">
+        <div class="field-label">
+          <div class="field-title">Ignore my fallback list <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Off (default): the fallback models in the Fallback models tab take over when your keys are out; on: always wait for your keys.<br><i>When to change it: Only if you keep a fallback list but want KAME to wait for your keys anyway.</i></div>
+        </div>
+        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.never_fall_back_to_another_model" x-init="if (config.never_fall_back_to_another_model === undefined || config.never_fall_back_to_another_model === null) config.never_fall_back_to_another_model = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="section-title">Speed</div>
       <div class="section-description">How KAME keeps answers fast. Already tuned; the first two are the ones worth knowing.</div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Speed</div>
-          <div class="field-description"><b>Saver</b>: one key at a time. <b>Balanced</b>: a reply still silent after twice its usual wait races a backup key; the first key that starts working wins. <b>Faster</b>: the same a notch sooner, with three times the budget. The sentence under the buttons says what each costs.</div>
+          <div class="field-title">Speed <span style="opacity:.55;font-size:.8em">●●● High</span></div>
+          <div class="field-description">How soon KAME races a second key when a reply is late. The line under the buttons says what the chosen mode costs in extra requests.<br><i>When to change it: Leave on Balanced. Saver if every extra request costs you money; Faster if speed matters more than a few extra requests.</i></div>
         </div>
         <div class="field-control"><select x-model="config.hedge_mode" x-init="if (config.hedge_mode === undefined || config.hedge_mode === null) config.hedge_mode = 'adaptive'"><option value="off">Saver · 1x</option><option value="adaptive">Balanced · up to 1.1x</option><option value="max">Faster · up to 1.3x</option></select>
           <div class="field-description" x-show="config.hedge_mode === 'off'">One request per reply, never more: the cheapest, and a slow reply simply waits.</div>
@@ -82,138 +89,138 @@
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Wait for the first token</div>
-          <div class="field-description">How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never for a model on this computer). <b>Set time</b>: the seconds below. <b>Off</b>: no limit.</div>
+          <div class="field-title">Wait for the first token <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">How long a key may stay silent before KAME drops it and asks the next one. Automatic learns each model's usual first-word time and drops a key only when it is far past it (20 s at least, 60 s for thinking models); never for a model on this computer. Backup keys still race a slow reply much sooner. Set time: the seconds below. Off: no limit.<br><i>When to change it: Leave on Automatic. Set time only if a provider hangs in silence and Automatic is too patient for you.</i></div>
         </div>
         <div class="field-control"><select x-model="config.first_token_wait" x-init="if (config.first_token_wait === undefined || config.first_token_wait === null) config.first_token_wait = (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null || Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"><option value="auto">Automatic</option><option value="timed">Set time</option><option value="off">Off</option></select></div>
       </div>
-      <div class="field" x-show="(config.first_token_wait === 'timed') && advanced">
+      <div class="field" x-show="(config.first_token_wait === 'timed')">
         <div class="field-label">
-          <div class="field-title">First-token wait (seconds)</div>
-          <div class="field-description">Seconds a key may stay silent before the next one is tried (a quarter of it from the third try on).</div>
+          <div class="field-title">First-token wait (seconds) <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay silent before KAME asks the next one; 60 suits most providers. 0 (default) means no limit.<br><i>When to change it: Only with 'Set time'. 60 is a safe number for most providers.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="3600" x-model.number="config.stream_silence_timeout_seconds" x-init="if (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null) config.stream_silence_timeout_seconds = 0" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="3600" x-model.number="config.stream_silence_timeout_seconds" x-init="if (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null) config.stream_silence_timeout_seconds = 0" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Most keys raced for one reply</div>
-          <div class="field-description">One call plus at most this many minus one backups.</div>
+          <div class="field-title">Most parallel requests per call <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">1 turns backup requests off. 2 allows one backup per call. 3 lets a chat reply that is still silent after the first backup try a third key (calls that do not stream use one backup at most).<br><i>When to change it: Lower to 2 to cap a slow call at one backup.</i></div>
         </div>
         <div class="field-control"><input type="number" step="1" min="1" max="3" x-model.number="config.hedge_max_legs" x-init="if (config.hedge_max_legs === undefined || config.hedge_max_legs === null) config.hedge_max_legs = 3" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Keys asked together when quota runs dry</div>
-          <div class="field-description">After two long refusals in a row, ask 4, then 8, then up to this many keys at once instead of one by one. 0 = one by one.</div>
+          <div class="field-title">Keys asked at once when quota runs out <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">When two keys in a row are refused because their quota is spent, asking the rest one at a time costs almost a second each. KAME then asks 4 keys at once, then 8, then 16, and the first that answers wins; in a chat the others are cut (a call that does not stream asks at most 4 at once, and those finish on their own). Keys the provider itself said are still spent are asked all at once, and only they. A key that still had quota and lost the race may have spent one request. 0 or 1 asks one key at a time. Off when backup requests are off; never for background jobs.<br><i>When to change it: Rarely. Lower it if every request costs you money; 0 asks keys one by one.</i></div>
         </div>
         <div class="field-control"><input type="number" step="1" min="0" max="32" x-model.number="config.probe_burst_max_legs" x-init="if (config.probe_burst_max_legs === undefined || config.probe_burst_max_legs === null) config.probe_burst_max_legs = 16" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Backup budget (% of calls)</div>
-          <div class="field-description">Roughly what share of calls may carry a backup request.</div>
+          <div class="field-title">Backup budget (% of calls) <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">Roughly what share of calls may carry a backup request. The budget refills as normal calls succeed, so a slow afternoon hedges a few times and then pauses until it is earned back.<br><i>When to change it: Lower it to spend fewer extra requests on backups; raise it for faster worst cases.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="50" x-model.number="config.hedge_budget_pct" x-init="if (config.hedge_budget_pct === undefined || config.hedge_budget_pct === null) config.hedge_budget_pct = 10" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="50" x-model.number="config.hedge_budget_pct" x-init="if (config.hedge_budget_pct === undefined || config.hedge_budget_pct === null) config.hedge_budget_pct = 10" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Backup burst allowance</div>
-          <div class="field-description">How many backups can fire back to back after an idle period.</div>
+          <div class="field-title">Backup burst allowance <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">How many backups can fire back-to-back after an idle period, before the budget above has been earned back.<br><i>When to change it: Rarely. How many backups may go out back to back.</i></div>
         </div>
         <div class="field-control"><input type="number" step="1" min="1" max="10" x-model.number="config.hedge_burst" x-init="if (config.hedge_burst === undefined || config.hedge_burst === null) config.hedge_burst = 3" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Send backup when slower than usual</div>
-          <div class="field-description">For calls that do not stream: the percentile of learned times a call must exceed.</div>
+          <div class="field-title">Send backup when slower than usual <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">For calls that do not stream: the percentile of learned response times a call must exceed before a backup is sent. 90 means 'slower than 9 calls in 10'. The chat uses its own trigger: twice the model's usual time to the first word.<br><i>When to change it: Rarely. Lower = backups sooner.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="50" max="99" x-model.number="config.hedge_quantile" x-init="if (config.hedge_quantile === undefined || config.hedge_quantile === null) config.hedge_quantile = 90" /></div>
+        <div class="field-control"><input type="number" step="any" min="50" max="99" x-model.number="config.hedge_quantile" x-init="if (config.hedge_quantile === undefined || config.hedge_quantile === null) config.hedge_quantile = 90" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">First backup while still learning (seconds)</div>
-          <div class="field-description">Before a model's usual time is learned, a call slower than this still gets a backup.</div>
+          <div class="field-title">First backup while still learning <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Before KAME has learned how fast this model usually answers, a call slower than this still gets a backup. Keep it well above the slowest honest first token so a merely normal call is never doubled.<br><i>When to change it: Rarely. Used only until KAME has learned a model's normal speed.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0.5" max="120" x-model.number="config.hedge_cold_s" x-init="if (config.hedge_cold_s === undefined || config.hedge_cold_s === null) config.hedge_cold_s = 6" /></div>
+        <div class="field-control"><input type="number" step="any" min="0.5" max="120" x-model.number="config.hedge_cold_s" x-init="if (config.hedge_cold_s === undefined || config.hedge_cold_s === null) config.hedge_cold_s = 6" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">First backup while learning, thinking models (seconds)</div>
-          <div class="field-description">The same, for models that think before they answer.</div>
+          <div class="field-title">First backup while learning (thinking) <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">The same threshold, separate for models that think before they answer — a long thinking phase is normal there and must not trigger a backup.<br><i>When to change it: Rarely. Same as above, for thinking models.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="2" max="300" x-model.number="config.hedge_cold_reasoning_s" x-init="if (config.hedge_cold_reasoning_s === undefined || config.hedge_cold_reasoning_s === null) config.hedge_cold_reasoning_s = 30" /></div>
+        <div class="field-control"><input type="number" step="any" min="2" max="300" x-model.number="config.hedge_cold_reasoning_s" x-init="if (config.hedge_cold_reasoning_s === undefined || config.hedge_cold_reasoning_s === null) config.hedge_cold_reasoning_s = 30" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Skip backups for very long prompts (tokens)</div>
-          <div class="field-description">Above this size no backup and no keys asked together.</div>
+          <div class="field-title">Skip backups for very long prompts <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">A backup of a huge prompt spends your token quota twice and never hits a warm cache, so above this size backups are skipped.<br><i>When to change it: Rarely. Very long prompts are not duplicated, to save quota.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="1000" max="1000000" x-model.number="config.hedge_max_prompt_tokens" x-init="if (config.hedge_max_prompt_tokens === undefined || config.hedge_max_prompt_tokens === null) config.hedge_max_prompt_tokens = 32000" /></div>
+        <div class="field-control"><input type="number" step="1" min="1000" max="1e+06" x-model.number="config.hedge_max_prompt_tokens" x-init="if (config.hedge_max_prompt_tokens === undefined || config.hedge_max_prompt_tokens === null) config.hedge_max_prompt_tokens = 32000" /></div>
       </div>
       <div class="section-title">Your API keys</div>
       <div class="section-description">One key per account (for Gemini, one per Google project): every key brings its own quota, and KAME rotates between them.</div>
-      <div class="field">
+      <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Keep key health across restarts</div>
-          <div class="field-description">Holds are kept on disk (a hash of each key, never the key).</div>
+          <div class="field-title">Keep key health across restarts <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">On: holds are kept on disk (a hash of each key, never the key), so restarting Agent Zero does not spend calls on keys already known to be out.<br><i>When to change it: Keep on, so a restart does not spend calls on keys already known to be out.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.share_pool_health" x-init="if (config.share_pool_health === undefined || config.share_pool_health === null) config.share_pool_health = true" /><span class="toggler"></span></label></div>
       </div>
-      <div class="field">
+      <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Per-model requests-per-minute limits</div>
-          <div class="field-description">e.g. <code>google:gemini/gemini-2.5-flash=10, groq:*=30</code>. KAME also learns them from real 429s.</div>
+          <div class="field-title">Per-model requests-per-minute limits <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Tell the pacer what a provider really allows, e.g. 'google:gemini/gemini-2.5-flash=10, groq:*=30'. It is the most KAME will assume; a real per-minute refusal can still lower it, and nothing learned can raise it above this. Leave empty to let it learn from real answers and refusals.<br><i>When to change it: Only if you know a model's per-minute limit and KAME keeps hitting it.</i></div>
         </div>
         <div class="field-control"><input type="text" style="width:100%;font-family:monospace" x-model="config.pacing_rpm_overrides" x-init="if (config.pacing_rpm_overrides === undefined || config.pacing_rpm_overrides === null) config.pacing_rpm_overrides = ''" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Region per key</div>
-          <div class="field-description">For Vertex / Bedrock behind an endpoint that hides it: <code>k3f9a1=us-central1</code>.</div>
+          <div class="field-title">Region per key <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">For regional providers (Vertex, Bedrock), name a key's region, e.g. 'key:a1b2c3=us-central1' — the key as the Events tab shows it (the six characters alone also work). It sets the region of the whole model on that endpoint, so refusals there do not rest the same model elsewhere. Auto-detected from the endpoint URL when left empty.<br><i>When to change it: Only if one key must be treated as a different region (Vertex, Bedrock).</i></div>
         </div>
         <div class="field-control"><input type="text" style="width:100%;font-family:monospace" x-model="config.key_region_overrides" x-init="if (config.key_region_overrides === undefined || config.key_region_overrides === null) config.key_region_overrides = ''" /></div>
       </div>
       <div class="section-title">Rest times (advanced)</div>
       <div class="section-description">How long a refused key sits out. The provider's own numbers always win; these are the fallbacks and ceilings.</div>
-      <div class="field">
+      <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Daily quota cooldown (seconds)</div>
-          <div class="field-description">How long a key rests once a daily or account quota is really spent.</div>
+          <div class="field-title">Daily quota cooldown <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">How long a key rests after a daily or account-level refusal — a quota that is genuinely spent. The provider's own retry hint is ignored for these on purpose: it routinely says a minute when the truth is midnight. It does not govern a key the provider *refused* (a 401, a revoked key): that rests twenty seconds and is then offered last, because waiting is not what repairs one — and a key the provider names dead leaves rotation instead of resting.<br><i>When to change it: Only if your provider's daily quota resets at a known time KAME cannot read.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="1" max="86400" x-model.number="config.daily_quota_cooldown_seconds" x-init="if (config.daily_quota_cooldown_seconds === undefined || config.daily_quota_cooldown_seconds === null) config.daily_quota_cooldown_seconds = 3600" /></div>
-      </div>
-      <div class="field">
-        <div class="field-label">
-          <div class="field-title">Longest a key can be held (seconds)</div>
-          <div class="field-description">No key sits out longer than this, whatever the provider claimed.</div>
-        </div>
-        <div class="field-control"><input type="number" step="1" min="60" max="86400" x-model.number="config.max_hold_seconds" x-init="if (config.max_hold_seconds === undefined || config.max_hold_seconds === null) config.max_hold_seconds = 3600" /></div>
+        <div class="field-control"><input type="number" step="any" min="1" max="86400" x-model.number="config.daily_quota_cooldown_seconds" x-init="if (config.daily_quota_cooldown_seconds === undefined || config.daily_quota_cooldown_seconds === null) config.daily_quota_cooldown_seconds = 3600" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Short ladder for a bare RESOURCE_EXHAUSTED</div>
-          <div class="field-description">Gemini's bare 429 rests the key 1, 2, 4 ... 64 s, back to 1 s when it answers.</div>
+          <div class="field-title">Ceiling on any hold <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">No credential sits out longer than this, whatever set the rest — a provider's own stated wait, the daily cooldown above, or this plugin's own escalation. Past it the key returns to selection and is probed; a refusal that repeats is held again, so a genuinely long outage costs about one refused request per interval instead of a healthy key sitting out for however long a provider claimed.<br><i>When to change it: The longest any key is ever benched. Lower it to retry spent keys sooner.</i></div>
+        </div>
+        <div class="field-control"><input type="number" step="any" min="60" max="86400" x-model.number="config.max_hold_seconds" x-init="if (config.max_hold_seconds === undefined || config.max_hold_seconds === null) config.max_hold_seconds = 3600" /></div>
+      </div>
+      <div class="field" x-show="advanced">
+        <div class="field-label">
+          <div class="field-title">Short ladder: bare RESOURCE_EXHAUSTED <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
+          <div class="field-description">Applies to one error only: an HTTP 429 whose structured status is RESOURCE_EXHAUSTED and that carries no retry number and no quotaId (Gemini's bare refusal). On, that key rests 1s, then 2, 4, 8, 16, 32... on each consecutive repeat on the same key and model, up to the cap below, instead of the flat rest. Every other throttle keeps the flat rest. It resets to 1s the moment that key answers, or when a refusal carries a number the provider stated; a stated number is never multiplied. In real use it made fewer calls per minute than the flat rest (24 against 29) without answering less. Off restores the flat rest exactly.<br><i>When to change it: Keep on. It retries a bare 'rate limit' after 1, 2, 4… seconds instead of a fixed wait.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.unsized_throttle_backoff" x-init="if (config.unsized_throttle_backoff === undefined || config.unsized_throttle_backoff === null) config.unsized_throttle_backoff = true" /><span class="toggler"></span></label></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Rest after a throttle with no number (seconds)</div>
-          <div class="field-description">Measured: a refused key retried within 30 s answered 0 of 73 times.</div>
+          <div class="field-title">Rest after an unsized throttle <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">How long a credential rests after a per-minute or rate-limit refusal that never once named a number - no retry hint, no window. Measured on real traffic: a refused key retried within 30s answered 0 of 73 times, and over the whole recorded corpus 30s avoids 388 of 413 avoidable refused calls while delaying 6 answers - the best return of any rest tried. Set to 0 to offer the credential again immediately instead. Clamped to 0-300; past 300 this is no longer an unsized throttle's business.<br><i>When to change it: Rarely. The wait for a rate limit that states no time, when the ladder is off.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="300" x-model.number="config.unsized_throttle_rest_seconds" x-init="if (config.unsized_throttle_rest_seconds === undefined || config.unsized_throttle_rest_seconds === null) config.unsized_throttle_rest_seconds = 30" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="300" x-model.number="config.unsized_throttle_rest_seconds" x-init="if (config.unsized_throttle_rest_seconds === undefined || config.unsized_throttle_rest_seconds === null) config.unsized_throttle_rest_seconds = 30" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Where the ladder stops (seconds)</div>
-          <div class="field-description">The longest rung of the ladder above.</div>
+          <div class="field-title">Where the ladder stops <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">The longest rest the bare RESOURCE_EXHAUSTED ladder above will reach. The default, 64, runs 1, 2, 4, 8, 16, 32, 64 seconds and then holds at 64: the fastest measured recovery for this error is 23-34s, so going far past 64 only keeps a key out longer than it needed. Set it to 3600 for the uncapped doubling (1, 2, 4 ... up to an hour). The ceiling on any hold still bounds it. Clamped to 1-3600.<br><i>When to change it: Rarely. Where the 1, 2, 4… ladder stops.</i></div>
         </div>
-        <div class="field-control"><input type="number" step="1" min="1" max="3600" x-model.number="config.unsized_backoff_max_seconds" x-init="if (config.unsized_backoff_max_seconds === undefined || config.unsized_backoff_max_seconds === null) config.unsized_backoff_max_seconds = 64" /></div>
+        <div class="field-control"><input type="number" step="any" min="1" max="3600" x-model.number="config.unsized_backoff_max_seconds" x-init="if (config.unsized_backoff_max_seconds === undefined || config.unsized_backoff_max_seconds === null) config.unsized_backoff_max_seconds = 64" /></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Resume attempts per answer</div>
-          <div class="field-description">An answer cut mid-stream is continued on the next key from where it stopped, shown once. -1 continues while it makes progress; 0 starts the answer again.</div>
+          <div class="field-title">Resume attempts per turn <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Minus one (the default) continues while the answer makes progress; no-progress repetition still stops on evidence. Zero switches stitching off entirely. Explicit ceilings from one to ten retain their operator-selected limit.<br><i>When to change it: Rarely. Caps how often one cut answer is continued.</i></div>
         </div>
         <div class="field-control"><input type="number" step="1" min="-1" max="10" x-model.number="config.stream_resume_limit" x-init="if (config.stream_resume_limit === undefined || config.stream_resume_limit === null) config.stream_resume_limit = -1" /></div>
       </div>
@@ -221,97 +228,97 @@
       <div class="section-description">How KAME talks in Agent Zero's chat line and log. These exist only in the Agent Zero version.</div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Say on the status line what KAME waits for</div>
-          <div class="field-description">The chat's own status line ('A0: Calling LLM...') says which model or key KAME waits for and when the next one is back. Off: the line stays as Agent Zero writes it.</div>
-        </div>
-        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.kame_wait_notice" x-init="if (config.kame_wait_notice === undefined || config.kame_wait_notice === null) config.kame_wait_notice = true" /><span class="toggler"></span></label></div>
-      </div>
-      <div class="field">
-        <div class="field-label">
-          <div class="field-title">Log level</div>
-          <div class="field-description">How much KAME writes to the Docker log. The rotation is the same at every level.</div>
+          <div class="field-title">Log verbosity <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">How much KAME writes to the Agent Zero console.<br><i>When to change it: Only when you are looking for a problem in Agent Zero's console.</i></div>
         </div>
         <div class="field-control"><select x-model="config.kame_log_level" x-init="if (config.kame_log_level === undefined || config.kame_log_level === null) config.kame_log_level = 'normal'"><option value="silent">silent</option><option value="normal">normal</option><option value="verbose">verbose</option><option value="verbose+errors">verbose+errors</option></select></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">How keys appear in logs</div>
-          <div class="field-description">A fingerprint never leaks; prefix8 shows the first 8 characters.</div>
+          <div class="field-title">How keys appear in logs <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">A fingerprint never leaks; prefix8 shows the first 8 characters.<br><i>When to change it: Rarely. Leave it on fingerprint unless you must match a key against your own records.</i></div>
         </div>
         <div class="field-control"><select x-model="config.key_log_style" x-init="if (config.key_log_style === undefined || config.key_log_style === null) config.key_log_style = 'fingerprint'"><option value="fingerprint">fingerprint</option><option value="prefix8">prefix8</option></select></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Show the full raw error</div>
-          <div class="field-description">Every failure also logs the provider's untruncated message.</div>
+          <div class="field-title">Show the full raw error <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Every failure also logs the provider's untruncated message.<br><i>When to change it: Only when you are looking for a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.kame_log_full_errors" x-init="if (config.kame_log_full_errors === undefined || config.kame_log_full_errors === null) config.kame_log_full_errors = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
-          <div class="field-title">Collapse outage logs</div>
-          <div class="field-description">During an outage, repeats become one line every ~20 s.</div>
+          <div class="field-title">Floor for Agent Zero's unusable-response limit <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Agent Zero stops a turn after this many unparseable answers in a row; KAME raises its limit to at least this. 0 leaves it alone.<br><i>When to change it: Rarely. Raise it if a model that sometimes answers badly keeps ending your tasks.</i></div>
         </div>
-        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.kame_collapse_storm_logs" x-init="if (config.kame_collapse_storm_logs === undefined || config.kame_collapse_storm_logs === null) config.kame_collapse_storm_logs = true" /><span class="toggler"></span></label></div>
-      </div>
-      <div class="field" x-show="advanced">
-        <div class="field-label">
-          <div class="field-title">Floor for Agent Zero's unusable-response limit</div>
-          <div class="field-description">Agent Zero stops a turn after this many unparseable answers in a row; KAME raises its limit to at least this. 0 leaves it alone.</div>
-        </div>
-        <div class="field-control"><input type="number" step="1" min="0" max="100" x-model.number="config.kame_unusable_response_limit" x-init="if (config.kame_unusable_response_limit === undefined || config.kame_unusable_response_limit === null) config.kame_unusable_response_limit = 5" /></div>
+        <div class="field-control"><input type="number" step="any" min="0" max="100" x-model.number="config.kame_unusable_response_limit" x-init="if (config.kame_unusable_response_limit === undefined || config.kame_unusable_response_limit === null) config.kame_unusable_response_limit = 5" /></div>
       </div>
       <details>
         <summary class="section-title">Troubleshooting: turn parts of KAME off</summary>
         <div class="section-description">Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding out whether KAME is behind a problem. Leave them alone unless something is wrong.</div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Turn KAME off</div>
-          <div class="field-description">Every call goes to Agent Zero as if KAME were not installed (<code>KAME_ROTATION_DISABLED</code>).</div>
+          <div class="field-title">Turn KAME off <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">Every call keeps the key Agent Zero resolved and failures follow Agent Zero's own retry rules. The plugin stays installed and does nothing.<br><i>When to change it: Only to check whether KAME is behind a problem. Everything goes back to plain Agent Zero.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.rotation_disabled" x-init="if (config.rotation_disabled === undefined || config.rotation_disabled === null) config.rotation_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Give back key selection</div>
-          <div class="field-description">Cooldowns stay, but the first ready key in the order you wrote them is used (<code>KAME_SPREAD_DISABLED</code>).</div>
+          <div class="field-title">Give back key selection <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">Cooldown sizing stays, but each call carries the first healthy key in the pool's order (the order you wrote them) instead of the least-loaded one.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.spread_disabled" x-init="if (config.spread_disabled === undefined || config.spread_disabled === null) config.spread_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Stop rotating per call</div>
-          <div class="field-description">A refused key is still rested, but the error goes back to Agent Zero (<code>KAME_CAROUSEL_DISABLED</code>).</div>
+          <div class="field-title">Stop rotating per call <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">Agent Zero's own key, retry ceiling and rotation rules come back. Cooldown sizing stays. This is the switch that stops a failed call trying the next key.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.carousel_disabled" x-init="if (config.carousel_disabled === undefined || config.carousel_disabled === null) config.carousel_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Stop backups and keys asked together</div>
-          <div class="field-description">The same as speed boost 'off': one key at a time (<code>KAME_HEDGING_DISABLED</code>).</div>
+          <div class="field-title">Log every failure during an outage <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">Repeated identical failures are written in full instead of being collapsed into a periodic count. Louder logs, same rotation.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
-        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.hedging_disabled" x-init="if (config.hedging_disabled === undefined || config.hedging_disabled === null) config.hedging_disabled = false" /><span class="toggler"></span></label></div>
+        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.storm_collapse_disabled" x-init="if (config.storm_collapse_disabled === undefined || config.storm_collapse_disabled === null) config.storm_collapse_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Stop continuing cut answers</div>
-          <div class="field-description">A cut answer starts again on the next key instead of continuing (<code>KAME_STREAM_STITCH_DISABLED</code>).</div>
+          <div class="field-title">Hide the status line <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">Pool health and the recovery countdown stop appearing on the chat's status line. Rotation is unchanged.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
+        </div>
+        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.live_status_disabled" x-init="if (config.live_status_disabled === undefined || config.live_status_disabled === null) config.live_status_disabled = false" /><span class="toggler"></span></label></div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Stop continuing cut answers <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">An answer cut off mid-stream is handed back to Agent Zero, which starts it again, instead of KAME continuing it on another key.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.stream_stitch_disabled" x-init="if (config.stream_stitch_disabled === undefined || config.stream_stitch_disabled === null) config.stream_stitch_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Stop recording refusals</div>
-          <div class="field-description">No more refusals.jsonl (keys removed, keeps the last ~8 MB, decides nothing).</div>
+          <div class="field-title">Stop recording refusals <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">KAME writes each refusal a provider sends to refusals.jsonl beside its own state — status, message and body, with API keys removed first — and decides nothing from it. It is there because the field that tells a per-minute quota from a per-day one could not be read before 1.7.0.0, so it appears in no older log and no rule about it can be checked against real traffic. Writes only, never interrupts a call, and keeps the last ~8 MB (the file rotates). Turn this on to stop the writing.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.refusal_recorder_disabled" x-init="if (config.refusal_recorder_disabled === undefined || config.refusal_recorder_disabled === null) config.refusal_recorder_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       <div class="field">
         <div class="field-label">
-          <div class="field-title">Stop timing calls</div>
-          <div class="field-description">No more calls.jsonl (durations only, keeps the last ~4 MB; the speed boost also learns from them).</div>
+          <div class="field-title">Stop timing calls <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">KAME writes one line per attempt to calls.jsonl beside its own state: how long until anything came back, how long until the answer started, how long the attempt took in total, and how much of the turn had already been spent waiting for a key. It exists so “is it slow, and whose fault is it” can be answered with numbers rather than from memory — a turn that took two minutes is a quota problem or a slow model, and those look identical from outside. No key, no prompt and no answer text is written; only durations, a model name and the same key fingerprint the panel already shows. Writes only, never interrupts a call, and keeps the last ~4 MB (the file rotates). Turn this on to stop the writing.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
         </div>
         <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.call_timings_disabled" x-init="if (config.call_timings_disabled === undefined || config.call_timings_disabled === null) config.call_timings_disabled = false" /><span class="toggler"></span></label></div>
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Stop adaptive hedging <span style="opacity:.55;font-size:.8em">Off switch</span></div>
+          <div class="field-description">When hedging is active and a reply is slower than usual, KAME asks a second key (and, if that is slow too, a third) and uses whichever answers first. In the chat the race is decided by the first word: the moment one key starts answering, the others are cut. Each backup is one extra request on a key of another project, held to a budget (about 10% of calls) and stopped by itself when rate limits appear. Turn this on to stop hedging everywhere.<br><i>When to change it: Only to check whether this part of KAME is behind a problem.</i></div>
+        </div>
+        <div class="field-control"><label class="toggle"><input type="checkbox" x-model="config.hedging_disabled" x-init="if (config.hedging_disabled === undefined || config.hedging_disabled === null) config.hedging_disabled = false" /><span class="toggler"></span></label></div>
       </div>
       </details>
       <button class="btn" type="button" @click="advanced = !advanced"

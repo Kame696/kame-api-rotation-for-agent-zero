@@ -183,7 +183,8 @@ def test_the_chip_the_page_and_the_engine_say_the_same_count():
         report)
     assert out["label"] == f"{t['ready']}/{t['keys']}" == "2/3"
     assert t["phrase"] == "2 of 3 keys ready"
-    assert t["phrase"] in out["counts"] and t["phrase"] in out["line1"]
+    assert t["phrase"] in out["counts"]
+    assert out["line1"].endswith("(2 of 2 keys ready).")      # the model's own pool, as on Hermes
     assert out["physical"] == t["keys"] and out["ready"] == t["ready"]
     assert out["ring"] == t["keys"]                 # Q5: one segment per key
 
@@ -208,8 +209,8 @@ def test_three_sentences_when_everything_is_fine():
     K._KAME_PRIMARY["identity"] = "gemini:gemini-3.5-flash"
     K.set_fallback_models("openai/claude-sonnet-5")
     said = sentences(K.status_view())
-    assert said["line1"].startswith("Ready — your next reply goes to gemini-3.5-flash.")
-    assert "2 of 3 keys ready" in said["line1"]
+    assert said["line1"].startswith("Ready — your next reply goes to gemini-3.5-flash (")
+    assert "(2 of 2 keys ready)." in said["line1"]
     assert said["tone"] in ("good", "warn")
     assert said["line3"].startswith("Next reply: ")
 

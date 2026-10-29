@@ -193,6 +193,7 @@ def _set_setting(engine, name: str, value: str, agent) -> dict[str, Any]:
     table = _settings_table()
     if not name or not value:
         return _toast("Usage: /kame set <name> <value> — `/kame get` lists the names.", level="error")
+    name, value = table.canonical(name, value)      # an old name is saved under Hermes' name for the opposite switch
     ok, parsed, message = table.parse(name, value)
     if not ok:
         return _toast(message, level="error")
@@ -207,7 +208,7 @@ def _reset_setting(engine, name: str, agent) -> dict[str, Any]:
     table = _settings_table()
     if not name:
         return _toast("Usage: /kame reset <name> — or /kame reset all", level="error")
-    names = list(table.SETTINGS) if name == "all" else [name]
+    names = list(table.SETTINGS) if name == "all" else [table.canonical(name)[0]]
     for one in names:
         if one not in table.SETTINGS:
             return _toast(f"`{one}` is not a KAME setting.", level="error")

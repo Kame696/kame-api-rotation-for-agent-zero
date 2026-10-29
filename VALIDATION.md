@@ -1,3 +1,29 @@
+# Agent Zero 1.8.3.0 validation
+
+## Verified runtime
+
+Offline only, so far: 62 / 62 suites green (232 new 1.8.3.0 tests in 10 files). Among the new tests: the fallback
+list is used only for a reply that started on the main model; a request-shape 400 rests nothing and an NVIDIA 402
+rests the key for the long window; a 503 is one second and never escalated; the keys Agent Zero holds are counted
+before the first call and the report carries fingerprints only; the Fallback models tab, the Settings tab, the
+Events tab, the Background jobs tab and the Overview carry the sentences, labels and order of the Hermes page
+(checked against a frozen copy of the Hermes sources, `tests/fixtures/hermes_1829_ui_strings.json`, where each
+sentence is shared word for word, adapted with a reason, or left out with a reason); the model search finds
+Agent Zero's store when the person types.
+
+## Boundaries
+
+- **Not yet run on a real Agent Zero.** The native checks on pinned v2.12, v2.13 and v2.14, the upgrade check
+  against those checkouts and a session on a real server have not been run for 1.8.3.0. The new tabs are checked
+  in tests and in the sources, not on a live screen.
+- **Not measured:** the cost of the reply path and the idle CPU (`tools/bench_reply_path.py`,
+  `tools/bench_status.py`). This version claims no speed-up and no saving there.
+- The counters of "This Agent Zero process" start at zero whenever Agent Zero restarts.
+- The page reads the status every 3 seconds (the Hermes page reads a local file every second).
+- Hermes items with no Agent Zero twin are listed with their reasons in `decisions/0016-hermes-only-items-left-out.md`.
+
+---
+
 # Agent Zero 1.8.2.9 validation
 
 ## Verified runtime

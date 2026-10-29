@@ -335,8 +335,9 @@ check("F8 the setting ships with a documented default",
       re.search(r"^kame_wait_notice:\s*true\s*$", _yaml_src, re.M) is not None)
 
 _html = open(os.path.join(ROOT, "webui", "config.html"), encoding="utf-8").read()
-for _key, _default in (("kame_wait_notice", "true"),
-                       ("kame_collapse_storm_logs", "true"),
+# 1.8.3.0: these two are stored under Hermes' names now (the opposite switches); the old keys are only read
+for _key, _default in (("live_status_disabled", "false"),
+                       ("storm_collapse_disabled", "false"),
                        ("kame_log_level", "'normal'"),
                        ("key_log_style", "'fingerprint'"),
                        ("daily_quota_cooldown_seconds", "3600"),
@@ -349,9 +350,10 @@ check("F11 every setting in default_config.yaml is reachable from the screen "
       "(except the debug-only raw-error dump, which the log level covers)",
       all(f"config.{k}" in _html
           for k in re.findall(r"^([a-z_]+):", _yaml_src, re.M)
-          if k != "kame_log_full_errors"),
+          if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs")),
       str([k for k in re.findall(r"^([a-z_]+):", _yaml_src, re.M)
-           if k != "kame_log_full_errors" and f"config.{k}" not in _html]))
+           if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs")
+           and f"config.{k}" not in _html]))
 check("F12 the screen uses A0's own settings markup",
       'class="field-title"' in _html and 'class="section-title"' in _html
       and 'x-if="config"' in _html)

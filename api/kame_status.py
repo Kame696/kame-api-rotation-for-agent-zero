@@ -37,7 +37,7 @@ def _settings_meta():
         from usr.plugins.api_rotation_by_kame import kame_settings as table
     except Exception:
         return []
-    visible = set(getattr(table, "VISIBLE", ()))
+    advanced = set(getattr(table, "ADVANCED", ()))
     group_of = getattr(table, "group_of", lambda _name: "tuning")
     rows = []
     for name, row in table.SETTINGS.items():
@@ -48,7 +48,16 @@ def _settings_meta():
             "sentence": sentence,
             # 1.8.2.9: the shelf (Hermes' groups) and whether it is on show without "Show advanced".
             "group": group_of(name),
-            "advanced": name not in visible and group_of(name) not in ("fallback", "off"),
+            # 1.8.3.0 (A6): everything Hermes' row shows: its power tag, "When to change it", the long
+            # tooltip, the unit and range, and whether turning it on asks first.
+            "advanced": name in advanced,
+            "impact": getattr(table, "IMPACT", {}).get(name, "low"),
+            "when": getattr(table, "WHEN", {}).get(name, ""),
+            "detail": getattr(table, "DETAIL", {}).get(name, ""),
+            "units": getattr(table, "UNITS", {}).get(name, ""),
+            "integral": name in getattr(table, "INTEGRAL", ()),
+            "off_or_at_least": getattr(table, "OFF_OR_AT_LEAST", {}).get(name),
+            "consequential": name in getattr(table, "CONSEQUENTIAL", ()),
             "env_override": table.env_override(name),
             # 1.8.2.8: the words each choice is shown with, in order, and the
             # choice a number belongs to.
