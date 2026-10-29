@@ -103,7 +103,9 @@ def test_the_settings_page_has_the_three_labels_and_equals_a_fresh_run():
         out = Path(tmp) / "config.html"
         subprocess.run([sys.executable, "-B", str(ROOT / "tools" / "gen_config_page.py"), str(out)],
                        check=True, capture_output=True)
-        assert out.read_bytes() == (ROOT / "webui" / "config.html").read_bytes()
+        # A Windows checkout may turn the committed file's line ends into CRLF: compare the text, not the ends.
+        fresh = out.read_bytes().replace(b"\r\n", b"\n")
+        assert fresh == (ROOT / "webui" / "config.html").read_bytes().replace(b"\r\n", b"\n")
 
 
 def test_the_status_api_serves_the_live_labels(monkeypatch):
