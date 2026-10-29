@@ -48,9 +48,17 @@ jobs:
           echo "Agent Zero ref: $REF"
           git clone --depth 1 --branch "$REF" https://github.com/agent0ai/agent-zero.git "$RUNNER_TEMP/a0"
           echo "A0_PATH=$RUNNER_TEMP/a0" >> "$GITHUB_ENV"
+          echo "A0_REF=$REF" >> "$GITHUB_ENV"
 
       - name: Install the live harness's dependencies
         run: python -m pip install -r tests/requirements.txt pytest
 
+      # An older Agent Zero is compared with the baseline recorded for that version
+      # (tests/host_baselines/<tag>.json), not with the newest one KAME is pinned to.
       - name: Upgrade check (fingerprints, host facts, live harness)
-        run: python tools/a0_upgrade_check.py "$A0_PATH"
+        run: |
+          if [ -f "tests/host_baselines/$A0_REF.json" ]; then
+            python tools/a0_upgrade_check.py "$A0_PATH" --baseline "tests/host_baselines/$A0_REF.json"
+          else
+            python tools/a0_upgrade_check.py "$A0_PATH"
+          fi
