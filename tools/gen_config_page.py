@@ -1,6 +1,19 @@
 # Generate the 1.8.2.7 settings screen from one table, so every control carries
 # the x-init default the yaml has.
+import os
 import sys
+
+# 1.8.2.9: the speed words come from the plugin's own table (the same functions the panel
+# serves), at the default backup budget, so the page and the panel cannot say different things.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import kame_settings as table  # noqa: E402
+
+_BUDGET = table.default("hedge_budget_pct")
+SPEED_LABELS = table.choice_labels_now("hedge_mode", _BUDGET)
+SPEED_HELP = table.choice_help_now("hedge_mode", _BUDGET)
+SPEED_FOOTNOTE = table.CHOICE_FOOTNOTE["hedge_mode"]
+#: Sentences shown under a choice's control, for the chosen value only: name -> (by value, footnote).
+CHOICE_NOTES = {"hedge_mode": (SPEED_HELP, SPEED_FOOTNOTE)}
 
 rows = [
     ("fallback_models", "text", "''", "Fallback models",
@@ -21,9 +34,10 @@ rows = [
      "model of your list answers it. A busy provider moves at once, whatever this number.",
      'min="0" max="3600"', "config.model_switch === 'timed'"),
     ("hedge_mode", "choice", "'adaptive'", "Speed",
-     "<b>Balanced</b>: a reply still silent after twice its usual wait races a backup key; the first key "
-     "that starts working wins (about 10% extra requests). <b>Fastest</b>: every reply races. <b>Saver</b>: "
-     "one key at a time.", [("off", "Saver"), ("adaptive", "Balanced"), ("max", "Fastest")]),
+     "<b>Saver</b>: one key at a time. <b>Balanced</b>: a reply still silent after twice its usual wait "
+     "races a backup key; the first key that starts working wins. <b>Faster</b>: the same a notch sooner, "
+     "with three times the budget. The sentence under the buttons says what each costs.",
+     [(value, SPEED_LABELS[value]) for value in ("off", "adaptive", "max")]),
     ("first_token_wait", "choice", "'auto'", "Wait for the first token",
      "How long a key may stay silent before KAME asks the next one. <b>Automatic</b> learns each model's "
      "usual first-word time and drops a key only far past it (20 s at least, 60 s for thinking models; never "
@@ -38,8 +52,9 @@ rows = [
      "When a reply ends, one line in the chat log: its time and the model that answered each step. Never "
      "part of what the model reads.",
      [("always", "Every reply"), ("switches", "Only another model"), ("never", "Never")]),
-    ("kame_wait_notice", "flag", "true", "Say so in the chat when every key rests",
-     "A live notification at ~15 s and one chat line at ~90 s, never in the model's history.", ""),
+    ("kame_wait_notice", "flag", "true", "Say on the status line what KAME waits for",
+     "The chat's own status line ('A0: Calling LLM...') says which model or key KAME waits for "
+     "and when the next one is back. Off: the line stays as Agent Zero writes it.", ""),
     ("kame_log_level", "choice", "'normal'", "Log level",
      "How much KAME writes to the Docker log. The rotation is the same at every level.",
      ["silent", "normal", "verbose", "verbose+errors"]),
@@ -107,15 +122,17 @@ trouble = [
     ("stream_stitch_disabled", "flag", "false", "Stop continuing cut answers",
      "A cut answer starts again on the next key instead of continuing (<code>KAME_STREAM_STITCH_DISABLED</code>).", ""),
     ("refusal_recorder_disabled", "flag", "false", "Stop recording refusals",
-     "No more refusals.jsonl (keys removed, 8 MB at most, decides nothing).", ""),
+     "No more refusals.jsonl (keys removed, keeps the last ~8 MB, decides nothing).", ""),
     ("call_timings_disabled", "flag", "false", "Stop timing calls",
-     "No more calls.jsonl (durations only; the speed boost also learns from them).", ""),
+     "No more calls.jsonl (durations only, keeps the last ~4 MB; the speed boost also learns from them).", ""),
 ]
 
 
-def field(r):
+def field(r, also=""):
     name, kind, d, title, sentence, extra = r[:6]
     show = r[6] if len(r) > 6 else ""
+    # 1.8.2.9: a setting outside the first two of its group waits behind "Show advanced settings"
+    show = " && ".join(part for part in ((f"({show})" if show else ""), also) if part)
     # 1.8.2.8 (review M3): a choice whose default depends on a number saved
     # before the choice existed - the same rule as kame_settings.choice_from_config.
     if len(r) > 7 and r[7]:
@@ -137,12 +154,20 @@ def field(r):
                'placeholder="openrouter/meta-llama/llama-4-maverick&#10;groq/llama-3.3-70b-versatile" '
                f'x-model="config.{name}" {init}></textarea>')
     shown = f' x-show="{show}"' if show else ""
+    notes = ""
+    if name in CHOICE_NOTES:
+        by_value, footnote = CHOICE_NOTES[name]
+        for value, text in by_value.items():
+            notes += (f'\n          <div class="field-description" '
+                      f'x-show="config.{name} === \'{value}\'">{text}</div>')
+        notes += (f'\n          <div class="field-description" '
+                  f'x-show="config.{name} !== \'off\'">{footnote}</div>')
     return (f'      <div class="field"{shown}>\n'
             f'        <div class="field-label">\n'
             f'          <div class="field-title">{title}</div>\n'
             f'          <div class="field-description">{sentence}</div>\n'
             f'        </div>\n'
-            f'        <div class="field-control">{ctl}</div>\n'
+            f'        <div class="field-control">{ctl}{notes}</div>\n'
             f'      </div>\n')
 
 
@@ -151,7 +176,8 @@ head = """<!--
 
   1.8.2.8: the choices on show, a number only under 'Set time'; 1.8.2.7 rethought it: settings on show, the rest behind "Show advanced
   settings", the switches that turn a part of KAME off folded away. The same
-  settings can be edited in the KAME panel (central menu -> KAME).
+  settings can be edited in the API Rotation page (central menu -> API Rotation).
+  1.8.2.9: the settings are grouped the way the Hermes version groups them (kame_settings.GROUPS).
 
   Every control carries an x-init default matching default_config.yaml:
   `get_plugin_config` returns the SAVED config.json when one exists, not
@@ -161,43 +187,48 @@ head = """<!--
 -->
 <html>
 <head>
-  <title>KAME - API Rotation Settings</title>
+  <title>API Rotation Settings</title>
 </head>
 <body>
 <div x-data="{ advanced: false }">
   <template x-if="config">
     <div>
-      <div class="section-title">KAME - API key rotation</div>
+      <div class="section-title">API Rotation</div>
       <div class="section-description">
         KAME works with none of these touched. Put several keys of one provider in
         that provider's API key field, separated by commas (or
         <code>API_KEY_GOOGLE=key1,key2</code> in <code>usr/.env</code>, or
         <code>/kame-keys add google key1,key2</code> in the chat). Keys from
         different accounts each bring their own quota. The live view is in the
-        central menu: <b>KAME</b>.
+        central menu: <b>API Rotation</b>.
       </div>
 
 """
-mid = """      <button class="btn" type="button" @click="advanced = !advanced"
-              x-text="advanced ? 'Hide advanced settings' : 'Show advanced settings'"></button>
+def grouped() -> str:
+    """The settings in the shelves of kame_settings.GROUPS, with Hermes' titles and notes."""
+    by_name = {r[0]: r for r in rows + adv + trouble}
+    out = ""
+    for gid, title, note, keys in table.GROUPS:
+        names = (["fallback_models"] if gid == "extra" else []) + list(keys)
+        missing = [n for n in names if n not in by_name]
+        assert not missing, f"settings in GROUPS without a row: {missing}"
+        body = "".join(
+            field(by_name[n], "" if (n == "fallback_models" or n in table.VISIBLE or gid == "off") else "advanced")
+            for n in names)
+        if gid == "off":
+            out += ('      <details>\n'
+                    f'        <summary class="section-title">{title}</summary>\n'
+                    f'        <div class="section-description">{note}</div>\n'
+                    f'{body}      </details>\n')
+        else:
+            out += (f'      <div class="section-title">{title}</div>\n'
+                    f'      <div class="section-description">{note}</div>\n'
+                    f'{body}')
+    return out
 
-      <div x-show="advanced">
-        <div class="section-title">Advanced</div>
-        <div class="section-description">Numbers KAME already sizes from the evidence. Change one only for a measured reason.</div>
 
-"""
-tail1 = """        <details>
-          <summary class="section-title">Troubleshooting - turns parts of KAME off</summary>
-
-"""
-end = """        </details>
-      </div>
-    </div>
-  </template>
-</div>
-</body>
-</html>
-"""
-html = head + "".join(map(field, rows)) + mid + "".join(map(field, adv)) + tail1 + "".join(map(field, trouble)) + end
+button = ('      <button class="btn" type="button" @click="advanced = !advanced"\n'
+          "              x-text=\"advanced ? 'Hide advanced settings' : 'Show advanced settings'\"></button>\n")
+html = head + grouped() + button + "    </div>\n  </template>\n</div>\n</body>\n</html>\n"
 open(sys.argv[1], "w", encoding="utf-8", newline="").write(html)
 print(len(html))

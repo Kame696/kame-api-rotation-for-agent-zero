@@ -1,5 +1,7 @@
 # KAME ↔ Agent Zero compatibility
 
+**KAME 1.8.2.9 - the host facts grew from 16 to 27 (checked: 27/27 on the Agent Zero v2.12 checkout on the build machine; v2.13 and v2.14 are checked by the native CI run, not by hand).** The wait is now said on the chat's own status line, so KAME stands on four more places in Agent Zero (section 3.4): the "Calling LLM..." log item that `before_main_llm_call/_10_log_for_stream.py` keeps in `loop_data.params_temporary["log_item_generating"]`, `LogItem.update(heading=...)`, `Log.set_progress`, and the name `call_chat_model` on the call stack. The fact that the notification manager can push a toast is gone with the toast. Seven facts name the functions that make Agent Zero's background calls (chat naming, memory, compression, documents, the infection check), and one the model-settings store the fallback editor searches with (`searchModelsDetailed`, optional: the editor falls back to plain inputs). None of them is critical: every one degrades silently.
+
 **KAME 1.8.2.7 — checked against Agent Zero v2.12, v2.13 and v2.14 (2026-10-17): 15/15 patch points (v2.12's one change is the `adaptive` `unified_turn`, as before) and 16/16 host facts on each, remote native acceptance green on all three.** Four host facts are new in 1.8.2.7: Agent Zero still builds a chat model from a provider and a name (`models.get_chat_model`, `ModelConfig`: KAME's fallback list uses it), the central menu still has the `sidebar-quick-actions-dropdown-start` slot (the KAME panel entry), `ensureModalOpen` is still global (both doors into the panel), and a raised model error still ends the task (`_90_handle_critical_exception`: why this port waits or uses your fallback list instead of handing a call back as Hermes does). The baseline is re-pinned to v2.14 only after the live harness is green on it.
 
 **KAME 1.8.1.3 — compatibility re-verified against Agent Zero v2.13 (2026-09-24): 15/15 symbols after re-pinning, 12/12 host facts, live harness green. 1.8.1.4, 1.8.1.5 and 1.8.1.6 re-ran the live harness on v2.13: green. The real-key sessions below were run on v2.12 with 1.8.1.2.**
@@ -290,6 +292,25 @@ firing costs nothing.
 
 Plus one classic extension, unrelated to activation:
 `extensions/python/message_loop_prompts_after/_91_recall_wait.py`.
+
+### 3.4 What the status line stands on (1.8.2.9)
+
+The wait is written into the heading of the log item Agent Zero already shows for the chat call
+("A0: Calling LLM..."), time left only. Nothing here can stop a call: every step is in a `try`, and a
+host without a seam just never sees the line.
+
+| A0 symbol | File in A0 | What KAME does | Severity |
+|---|---|---|---|
+| `log_item_generating` | `extensions/python/before_main_llm_call/_10_log_for_stream.py` | The item is created there and kept in `loop_data.params_temporary`; KAME reads it and writes its heading. Agent Zero's stream handlers overwrite the heading when text starts, so there is no clean-up race; KAME gives the line back only if its own words are still on it. | degraded |
+| `LogItem.update(heading=...)` | `helpers/log.py` | The one write. Agent Zero truncates headings at 120 characters; KAME's words are kept under that. | degraded |
+| `Log.set_progress` | `helpers/log.py` | Second choice when there is no "Calling LLM..." item (a task runner): the log's own progress line. | note |
+| `loop_data.params_temporary` | `agent.py` | Cleared by Agent Zero every iteration, so the line is always written for the call in flight. | degraded |
+| `call_chat_model` / `call_chat_model_turn` | `agent.py` | `self` of the nearest such frame is the agent whose line is written (a subordinate agent writes its own `A1:` line); else the agent stashed at monologue start. | degraded |
+| `searchModelsDetailed`, `ensureLoaded` | `plugins/_model_config/webui/model-config-store.js` | The fallback-model editor's model search. Optional: absent, the editor uses plain inputs. | note |
+| `generate_name`, `search_memories`, `memorize`, `_extract_search_keywords`, `_analyze_memory_consolidation`, `summarize_messages`, `_compact_single_pass`, `_compact_large_history`, `document_qa`, `_answer_questions_from_content`, `_run_check` | `plugins/_chat_naming`, `_memory`, `_chat_compaction`, `_document_query`, `_infection_check`, `helpers/history.py` | KAME names a background call by the function on the stack to give it its budget (1.8.2.9). A renamed function is budgeted as an "important" utility job, never as a cosmetic one. | note |
+
+What was removed with the toast: the host fact "the notification manager can still push a live toast".
+KAME no longer sends any notification for a wait.
 
 ---
 

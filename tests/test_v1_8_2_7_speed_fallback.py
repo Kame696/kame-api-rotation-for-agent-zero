@@ -162,6 +162,9 @@ def test_speed_boost_off_never_races(monkeypatch):
 
 
 def test_a_slow_background_call_gets_one_backup(monkeypatch):
+    # 1.8.2.9 (E7): a budgeted background job races nothing; the old behaviour is kept for
+    # whoever sets KAME_AUX_UNBOUNDED=1.
+    monkeypatch.setattr(K, "_KAME_AUX_UNBOUNDED", True)
     monkeypatch.setattr(H.HEDGE_TRACKER, "threshold", lambda *a, **k: 0.05)
     first = KEYS[0]
     log = []
@@ -342,6 +345,7 @@ def test_failover_zero_never_switches(fake_models, monkeypatch):
 
 
 def test_background_calls_never_switch_model(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_AUX_UNBOUNDED", True)      # 1.8.2.9 (E7): the old, unbudgeted wait
     K.set_fallback_models("groq/b")
 
     async def sleep(*a, **k):

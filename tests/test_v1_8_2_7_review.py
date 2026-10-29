@@ -151,6 +151,7 @@ def test_m4_only_the_conversation_is_the_chat():
 
 
 def test_m4_a_background_stream_never_switches(fake_models, monkeypatch):
+    monkeypatch.setattr(K, "_KAME_AUX_UNBOUNDED", True)      # 1.8.2.9 (E7): the old, unbudgeted wait
     K.set_fallback_models("groq/b")
 
     async def sleep(*a, **k):

@@ -8,24 +8,24 @@ hung agent look identical, and the move that looks available is restarting
 Agent Zero, which throws away both the wait and the context. ADR 0002 named
 this when it removed the rotation ceiling and left it open.
 
-So the facts already in the console are now ALSO put in the chat, as one log
-item that keeps updating. These tests run with stubs (no real Agent Zero, no
-litellm, no network) and cover:
+So the facts already in the console are now ALSO put where the person is looking.
+1.2.0 did it as one log item in the chat after ninety seconds; 1.8.2.9 (owner's order) moved
+the words onto the chat's own status line ("A0: Calling LLM...") and removed the chat row
+and the toast. These tests run with stubs (no real Agent Zero, no litellm, no network) and
+cover:
 
-  A. Threshold — a short wait says nothing; only a wait past the threshold
-     opens the notice, and the switch turns it off completely.
-  B. One item — the notice is created ONCE and updated in place thereafter,
-     throttled to the refresh interval, so a 40-minute quota is one line and
-     not two hundred.
-  C. Content — counts, the pool name and an ETA; never a key, in any field.
-  D. Closing — 'resumed' after a key answers, 'stopped' on every other way out,
-     and a no-op when no notice was ever shown.
-  E. Survivability — no agent, no context, no log, or a log that raises: each
-     one disables the notice for the call and NEVER breaks rotation.
-  F. Wiring — the carousel closes the notice on all four exits; the activation
-     extension reads the setting; the setting exists with the documented
-     default; the settings screen exposes it with a matching x-init default.
-  G. Release — the version moved everywhere it is written.
+  A. The wait is on the status line, never in a chat row; the switch turns it off.
+  B. One line - the same words are not written twice.
+  C. Content - counts over keys and the time left; never a key.
+  D. Giving the line back - 'resumed' / 'stopped', and a no-op when nothing was written.
+  E. Survivability - no agent, no context, no log, or a log that raises: each one
+     leaves rotation untouched.
+  F. Wiring - the carousel closes the wait on every exit; the activation extension reads
+     the setting; the setting exists with the documented default; the settings screen
+     exposes it with a matching x-init default.
+  G. Release - the version moved everywhere it is written.
+
+(The full status-line contract is tests/test_v1_8_2_9_status_line.py.)
 
 Run:  python tests/test_v1_2_0.py
 Exit code 0 = all pass, 1 = at least one failure.
@@ -139,7 +139,7 @@ def cold_pool(keys=KEYS, rest_s=1800.0, identity=IDENT):
     for k in keys:
         K._mark_key_health(identity, k, False, rest_s, "daily")
     st = K._KameSleepState()
-    st.cold_since = time.time() - (K._KAME_WAIT_NOTICE_AFTER_S + 30.0)
+    st.cold_since = time.time() - 120.0
     return st
 
 
@@ -160,34 +160,62 @@ def all_text(log):
 
 
 # ==========================================================================
-# A. Threshold — silence is correct for a short wait.
+# A. The wait is said on the status line - and nowhere else (1.8.2.9, owner's order).
+#    1.2.0 put one log row in the chat after ninety seconds and 1.6.0.1 raised a
+#    toast after fifteen; both are gone. The words live in the heading of the
+#    chat's own "Calling LLM..." item (tests/test_v1_8_2_9_status_line.py covers
+#    them in full); here the contract of the old entry points is kept honest.
 # ==========================================================================
+class LineItem:
+    """Agent Zero's "Calling LLM..." log item: only its heading is edited."""
+
+    def __init__(self):
+        self.heading = "A0: Calling LLM..."
+        self.headings = []
+
+    def update(self, heading=None, **kw):
+        self.heading = heading
+        self.headings.append(heading)
+
+
+class LineAgent:
+    def __init__(self, log=None, context=True, item=True):
+        self.agent_name = "A0"
+        self.number = 0
+        self.item = LineItem()
+        self.context = FakeContext(log if log is not None else FakeLog()) if context else None
+        self.loop_data = types.SimpleNamespace(
+            params_temporary={"log_item_generating": self.item} if item else {})
+
+
 check("A0 the notice functions exist",
       callable(getattr(K, "_kame_wait_notice_tick", None))
       and callable(getattr(K, "_kame_wait_notice_finish", None)))
-check("A1 the threshold is a real wait, not a blink",
-      K._KAME_WAIT_NOTICE_AFTER_S >= 60.0,
-      str(K._KAME_WAIT_NOTICE_AFTER_S))
-check("A2 refreshing is a countdown, not a flood",
-      5.0 <= K._KAME_WAIT_NOTICE_REFRESH_S <= 60.0,
-      str(K._KAME_WAIT_NOTICE_REFRESH_S))
+check("A1 the toast and the ninety-second chat row are gone",
+      not hasattr(K, "_kame_toast") and not hasattr(K, "_kame_wait_notice_toast")
+      and not hasattr(K, "_KAME_WAIT_NOTICE_AFTER_S") and not hasattr(K, "_KAME_NOTICE_TOAST_AFTER_S")
+      and not hasattr(K._KameSleepState(), "notice_item") and not hasattr(K._KameSleepState(), "toast_shown"))
+check("A2 the status line is a countdown, not a flood",
+      1.0 <= K._KAME_STATUS_LINE_EVERY_S <= 10.0, str(K._KAME_STATUS_LINE_EVERY_S))
 
 _log = FakeLog()
-K.set_current_agent(FakeAgent(_log))
+_agent = LineAgent(_log)
+K.set_current_agent(_agent)
 _short = cold_pool()
 _short.cold_since = time.time() - 1.0          # one second into the wait
 tick(_short)
-check("A3 a one-second wait says nothing", _log.created == [])
-
+check("A3 a wait never opens a row in the chat, however long (Q2)", _log.created == [])
 _st = cold_pool()
 tick(_st)
-check("A4 a wait past the threshold opens the notice", len(_log.created) == 1)
+check("A4 even a wait of minutes opens no row", _log.created == [])
+check("A4b ... it is on the status line", "waiting on a key to come back" in _agent.item.heading,
+      _agent.item.heading)
 
 K.set_wait_notice(False)
-_off_log = FakeLog()
-K.set_current_agent(FakeAgent(_off_log))
+_off = LineAgent()
+K.set_current_agent(_off)
 tick(cold_pool())
-check("A5 the setting turns it off completely", _off_log.created == [])
+check("A5 the setting turns it off completely", _off.item.headings == [])
 K.set_wait_notice(True)
 check("A6 set_wait_notice accepts A0's string truthiness", (
     K.set_wait_notice("false") or K._KAME_WAIT_NOTICE is False)
@@ -195,127 +223,79 @@ check("A6 set_wait_notice accepts A0's string truthiness", (
 
 
 # ==========================================================================
-# B. One item, updated in place — the whole point of using LogItem.update.
+# B. One line, updated in place - and not twice for the same words.
 # ==========================================================================
-_log = FakeLog()
-K.set_current_agent(FakeAgent(_log))
+_agent = LineAgent()
+K.set_current_agent(_agent)
 _st = cold_pool()
 tick(_st)
-_st.notice_refreshed_at = 0.0                   # force the next tick through
 tick(_st)
-_st.notice_refreshed_at = 0.0
 tick(_st)
-check("B1 a long wait is ONE log item, not one per tick", len(_log.created) == 1,
-      f"created={len(_log.created)}")
-check("B2 the later ticks edited that item in place",
-      len(_log.items) == 1 and len(_log.items[0].updates) == 2,
-      str([len(i.updates) for i in _log.items]))
-
-_st.notice_refreshed_at = time.time()           # just refreshed
-_before = len(_log.items[0].updates)
-tick(_st)
-check("B3 ticks inside the refresh interval are dropped",
-      len(_log.items[0].updates) == _before)
+check("B1 the same words are written once", len(_agent.item.headings) == 1,
+      str(_agent.item.headings))
 
 
 # ==========================================================================
-# C. What it says — counts and a pool, never a key.
+# C. What it says - counts and time left, never a key.
 # ==========================================================================
-_log = FakeLog()
-K.set_current_agent(FakeAgent(_log))
+_agent = LineAgent()
+K.set_current_agent(_agent)
 _secret_keys = KEYS + [SECRET]
 _st = cold_pool(_secret_keys)
 tick(_st, _secret_keys)
-_txt = all_text(_log)
-check("C1 no key material reaches the chat, in any field", SECRET not in _txt)
-check("C2 it says how many keys are resting", re.search(r"\b4 of 4\b", _txt) is not None, _txt)
-check("C3 it names the pool", IDENT in _txt)
-check("C4 it gives an earliest-recovery estimate",
-      "recovery" in _txt.lower() and re.search(r"\d+\s*(m|h|s)", _txt) is not None)
-check("C5 it says no API calls are being made", "No API calls" in _txt)
-check("C6 it says stop still works", "stop" in _txt.lower())
-check("C7 it says it resumes by itself", "resumes by itself" in _txt)
-check("C8 the heading carries the elapsed time so a frozen UI is visible",
-      "KAME" in _log.created[0].get("heading", "")
-      and re.search(r"\d", _log.created[0].get("heading", "")) is not None,
-      _log.created[0].get("heading", ""))
-check("C9 it is a util item (A0's neutral UI type)",
-      _log.created[0].get("type") == "util", str(_log.created[0].get("type")))
+_txt = _agent.item.heading
+check("C1 no key material reaches the chat", SECRET not in _txt)
+check("C2 it says how many keys are ready, over keys", re.search(r"\b0 of 4 keys ready\b", _txt) is not None, _txt)
+check("C4 it gives the time left", re.search(r"next key in ~\d+ min", _txt) is not None, _txt)
+check("C5 it is Agent Zero's own words with KAME's after them", _txt.startswith("A0: Calling LLM... "), _txt)
+check("C6 the age of the wait is not on the line", "waited" not in _txt.lower() and "since" not in _txt.lower())
 
 
 # ==========================================================================
-# D. Closing the notice.
+# D. Giving the line back.
 # ==========================================================================
 K._kame_wait_notice_finish(_st, "resumed")
-_last = _log.items[0].updates[-1]
-check("D1 'resumed' says a key came back",
-      "resumed" in str(_last).lower() and "waited" in str(_last).lower())
-check("D2 closing clears the item so it cannot be written twice",
-      _st.notice_item is None)
-_n = len(_log.items[0].updates)
+check("D1 'resumed' gives Agent Zero's own heading back", _agent.item.heading == "A0: Calling LLM...",
+      _agent.item.heading)
+check("D2 closing clears the flag so it cannot be written twice", _st.line_on is False)
+_n = len(_agent.item.headings)
 K._kame_wait_notice_finish(_st, "resumed")
-check("D3 closing twice is a no-op", len(_log.items[0].updates) == _n)
-
-_log2 = FakeLog()
-K.set_current_agent(FakeAgent(_log2))
+check("D3 closing twice is a no-op", len(_agent.item.headings) == _n)
+_agent2 = LineAgent()
+K.set_current_agent(_agent2)
 _st2 = cold_pool()
 tick(_st2)
 K._kame_wait_notice_finish(_st2, "stopped")
-check("D4 'stopped' does not claim the wait succeeded",
-      "stopped" in str(_log2.items[0].updates[-1]).lower()
-      and "resumed" not in str(_log2.items[0].updates[-1]).lower())
-
+check("D4 'stopped' gives it back too", _agent2.item.heading == "A0: Calling LLM...")
 _never = K._KameSleepState()
 K._kame_wait_notice_finish(_never, "resumed")
-check("D5 closing a notice that was never shown is a no-op", _never.notice_item is None)
+check("D5 closing a wait that never wrote the line is a no-op", _never.line_on is False)
 
 
 # ==========================================================================
-# E. Survivability — a missing or hostile chat can never break rotation.
+# E. Survivability - a missing or hostile chat can never break rotation.
 # ==========================================================================
 def survives(agent, label):
     K.set_current_agent(agent)
     st = cold_pool()
     try:
         tick(st)
+        K._kame_wait_notice_finish(st, "stopped")
         ok = True
     except Exception as e:                      # noqa: BLE001 - that IS the test
         ok = False
         print("   raised:", type(e).__name__, e)
-    check(label, ok and st.notice_broken is True)
+    check(label, ok)
 
 
-survives(None, "E1 no agent at all: no raise, notice disabled for the call")
-survives(FakeAgent(context=False), "E2 no context (CLI / task runner): safe")
-survives(FakeContext(None), "E3 a context with no log: safe")
-survives(FakeAgent(FakeLog(boom=True)), "E4 a log that raises: safe")
+survives(None, "E1 no agent at all: no raise")
+survives(LineAgent(context=False, item=False), "E2 no context (CLI / task runner): safe")
+survives(LineAgent(FakeLog(), item=False), "E3 a context whose log has no progress line: safe")
+survives(LineAgent(FakeLog(boom=True)), "E4 a log that raises: safe")
 
-K.set_current_agent(FakeAgent(FakeLog(boom=True)))
-_broken = cold_pool()
-tick(_broken)
-_before_broken = _broken.notice_broken
-_broken.notice_refreshed_at = 0.0
-tick(_broken)
-check("E5 a broken notice is not retried every second",
-      _before_broken is True and _broken.notice_broken is True)
-
-
-class _BadItem(FakeItem):
-    def update(self, **kw):
-        raise RuntimeError("update exploded")
-
-
-_bad_log = FakeLog()
-_bad_log.log = lambda **kw: _BadItem()          # type: ignore[assignment]
-K.set_current_agent(FakeAgent(_bad_log))
-_st3 = cold_pool()
-tick(_st3)
-try:
-    K._kame_wait_notice_finish(_st3, "resumed")
-    _finish_safe = True
-except Exception:
-    _finish_safe = False
-check("E6 closing a notice whose update() explodes never raises", _finish_safe)
+_bad = LineAgent()
+_bad.item.update = lambda **kw: (_ for _ in ()).throw(RuntimeError("update exploded"))
+survives(_bad, "E5 an item whose update() explodes: safe")
 
 
 # ==========================================================================
@@ -329,15 +309,13 @@ check("F1 the notice is refreshed from inside the sleep slices (a live countdown
       "_kame_wait_notice_tick(" in _sleep_src)
 # v1.8.1.0 adds a fifth exit: `carousel_disabled` hands the error to Agent
 # Zero after one attempt, and closes the notice on the way out like the rest.
-check("F2 every exit from the carousel closes the notice",
-      # 1.8.1.2 adds a sixth: every key refused with a billing reason no wait fixes.
-      # 1.8.2.7 adds four: answered by a fallback model (twice: from the wait and
-      # from a refusal), the wait bound, and a fallback hop handing back.
-      # review 2026-10-17 M1: and a bounded call on a fallback model.
-      # second review N10: and a call the user stopped (CancelledError).
-      # 1.8.2.8 (D11): and a slow model answered by the next one.
-      _carousel_src.count("_kame_wait_notice_finish(") == 13,
-      str(_carousel_src.count("_kame_wait_notice_finish(")))
+# 1.8.2.9 review L1: this used to count the source occurrences of the call (a change detector that
+# stayed green while the circle step could leave a heading standing). The property - a stop or a
+# new message in the middle of ANY wait gives Agent Zero's words back - is now tested by behaviour in
+# tests/test_v1_8_2_9_review_fixes.py (exhaustion sleep, circle wait, race line).
+check("F2 the notice is closed on the exits of the carousel (behaviour: test_v1_8_2_9_review_fixes.py)",
+      _carousel_src.count("_kame_wait_notice_finish(") >= 1
+      and os.path.exists(os.path.join(ROOT, "tests", "test_v1_8_2_9_review_fixes.py")))
 check("F3 a success closes it as 'resumed'",
       '_kame_wait_notice_finish(st, "resumed")' in _carousel_src)
 check("F4 stop / nudge during the sleep closes it as 'stopped'",

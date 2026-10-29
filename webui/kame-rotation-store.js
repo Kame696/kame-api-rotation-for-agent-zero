@@ -1,14 +1,16 @@
 /**
- * KAME rotation chip — the store behind the indicator beside the composer.
+ * KAME rotation chip - the store behind the indicator beside the composer.
  *
  * v1.6.0.1. Until this release ordinary rotation was invisible: the only thing
  * the plugin ever put on screen was the wait notice, and that needs the WHOLE
  * pool cold for ninety seconds before it says anything. A key being swapped, a
- * key resting twenty seconds, a key leaving rotation — all of it happened in a
+ * key resting twenty seconds, a key leaving rotation - all of it happened in a
  * console the person watching the chat is not reading.
  *
- * Agent Zero v2.11 added WebUI plugin slots beside the model/context strip.
- * This store feeds the chip that lives in one.
+ * 1.8.2.9: the chip and the API Rotation page read the same view (`kame-view.js`
+ * over `status_view()` in the engine), so they say the same count and the same
+ * time. The ring has one segment per key; the popover groups keys by provider and
+ * by key, with the full model names that use each one.
  *
  * Two rules it does not break:
  *   1. Counts and fingerprints only. The endpoint cannot return a key, so this
@@ -17,6 +19,7 @@
  */
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
+import { chipSummary } from "/plugins/api_rotation_by_kame/webui/kame-view.js";
 
 const API_PATH = "/plugins/api_rotation_by_kame/kame_status";
 
@@ -34,148 +37,32 @@ import("/components/sidebar/bottom/preferences/preferences-store.js")
     });
   })
   .catch(() => {
-    /* older or restructured Agent Zero — the chip simply always shows */
+    /* older or restructured Agent Zero - the chip simply always shows */
   });
 
-const EMPTY = {
-  available: false,
-  active: false,
-  layer: 3,
-  version: "",
-  pools: [],
-  totals: { keys: 0, ready: 0, resting: 0, retired: 0 },
-  stats: {},
-};
-
-function formatSeconds(value) {
-  const s = Number(value);
-  if (!Number.isFinite(s) || s <= 0) return "";
-  if (s < 60) return `${Math.round(s)}s`;
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  return `${(s / 3600).toFixed(1).replace(/\.0$/, "")}h`;
-}
-
-/**
- * The one number worth putting in a chip.
- *
- * Ready over total, because that is the answer to "can it answer me right now".
- * Not "healthy over total" — a key resting twenty seconds off a throttle is
- * perfectly healthy and cannot take this turn, and conflating the two is how a
- * panel ends up reassuring somebody whose agent is stuck.
- */
-function buildView(data) {
-  const d = data && typeof data === "object" ? data : EMPTY;
-  const totals = d.totals || EMPTY.totals;
-  const keys = Math.max(Number(totals.keys) || 0, 0);
-  const ready = Math.max(Number(totals.ready) || 0, 0);
-  const resting = Math.max(Number(totals.resting) || 0, 0);
-  const retired = Math.max(Number(totals.retired) || 0, 0);
-
-  // Soonest recovery across every pool, so the chip can answer "how long".
-  let eta = null;
-  for (const pool of d.pools || []) {
-    const value = Number(pool?.eta);
-    if (Number.isFinite(value) && value > 0 && (eta === null || value < eta)) eta = value;
+/** The chat the person is looking at, so "what is it doing now" is that chat's. */
+function selectedContextId() {
+  try {
+    const chats = globalThis.Alpine?.store?.("chats");
+    return String(chats?.selectedContext?.id || chats?.selected || "") || "";
+  } catch {
+    return "";
   }
-
-  let tone = "ok";
-  let headline = "All keys ready";
-  if (!d.available || !d.active) {
-    tone = "idle";
-    // Layer 3 is a SAFE end state — KAME binds nothing and Agent Zero runs
-    // exactly as it would with no plugin — but it is also the single most
-    // useful thing to see when somebody reports "the plugin does nothing", so
-    // it is said out loud rather than rendered as a healthy zero.
-    headline = d.available && d.layer === 3
-      ? "Not attached — Agent Zero is running natively"
-      : "Waiting for the first call";
-  } else if (retired > 0) {
-    tone = "bad";
-    headline = `${retired} credential${retired === 1 ? "" : "s"} left rotation`;
-  } else if (keys > 0 && ready === 0) {
-    tone = "bad";
-    headline = eta ? `Every key resting — earliest back in ${formatSeconds(eta)}` : "Every key resting";
-  } else if (resting > 0) {
-    tone = "warn";
-    headline = `${resting} of ${keys} resting${eta ? ` — next back in ${formatSeconds(eta)}` : ""}`;
-  } else if (keys === 0) {
-    tone = "idle";
-    headline = "No pool seen yet — KAME learns one on the first call";
-  }
-
-  const pools = (d.pools || []).map((pool) => ({
-    identity: String(pool?.identity || ""),
-    total: Number(pool?.total) || 0,
-    ready: Number(pool?.ready) || 0,
-    resting: Number(pool?.resting) || 0,
-    retired: Number(pool?.retired) || 0,
-    etaLabel: formatSeconds(pool?.eta),
-    keys: (pool?.keys || []).map((row) => ({
-      id: String(row?.id || ""),
-      state: String(row?.state || "ready"),
-      leftLabel: formatSeconds(row?.seconds_left),
-      // "refusal 2 of 3" — so a reader can tell a key being tried from a key
-      // given up on without having to know the threshold.
-      strikesLabel:
-        Number(row?.strikes) > 0 ? `refusal ${row.strikes} of ${row.limit}` : "",
-    })),
-  }));
-
-  // v1.8.1.0: the last few decisions, newest first — the same timeline
-  // `/kame events` prints. KAME's own phrases and fingerprints only.
-  const GOOD = new Set(["switch", "recovery", "wait", "setting", "model_switch", "backup"]);
-  const events = (Array.isArray(d.events) ? d.events : []).slice(0, 6).map((row) => {
-    const when = new Date((Number(row?.at) || 0) * 1000);
-    return {
-      id: String(row?.seq ?? ""),
-      time: Number(row?.at) ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "",
-      kind: String(row?.kind || ""),
-      key: String(row?.key || ""),
-      reason: String(row?.reason || ""),
-      rest: formatSeconds(row?.seconds),
-      good: GOOD.has(String(row?.kind || "")),
-    };
-  });
-
-  // v1.8.2.7: the model that answered, when KAME's fallback list did (shown
-  // for ten minutes after the switch).
-  const sw = (d.speed && d.speed.last_model_switch) || {};
-  const swAge = Date.now() / 1000 - (Number(sw.at) || 0);
-  const modelSwitch = sw.to && swAge >= 0 && swAge < 600
-    ? `Answered by ${sw.to} (${sw.reason || "your model could not answer"})`
-    : "";
-
-  return {
-    events,
-    hasEvents: events.length > 0,
-    modelSwitch,
-    available: !!d.available,
-    active: !!d.active,
-    version: String(d.version || ""),
-    tone,
-    headline,
-    keys,
-    ready,
-    resting,
-    retired,
-    ringLabel: keys ? `${ready}/${keys}` : "–",
-    // 0-100 of the ring that is filled. An empty pool draws an empty ring
-    // rather than a full one, because "nothing known" must not look like
-    // "everything fine".
-    ringPercent: keys ? Math.round((ready / keys) * 100) : 0,
-    ariaLabel: keys
-      ? `KAME rotation: ${ready} of ${keys} API keys ready`
-      : "KAME rotation: no key pool seen yet",
-    pools,
-    hasPools: pools.length > 0,
-  };
 }
 
 const model = {
-  view: buildView(null),
+  data: null,
+  now: Date.now(),
   open: false,
   loadSeq: 0,
   _timer: null,
+  _tick: null,
+  _ticks: 0,
+
+  // The view is derived, not stored: the clock moves it (a time left counts down) without a request.
+  get view() {
+    return chipSummary(this.data, this.now);
+  },
 
   async onMount(watch) {
     await this.refresh();
@@ -189,16 +76,25 @@ const model = {
     }
     // A slow safety net only. The live path is `apply_snapshot_before`, which
     // fires on every WebSocket push; this exists so a pool that changes while
-    // nothing else is happening — every key resting out a daily cap, with no
-    // traffic to trigger a snapshot — still ticks down on screen.
+    // nothing else is happening - every key resting out a daily cap, with no
+    // traffic to trigger a snapshot - still ticks down on screen.
     this._timer = setInterval(() => void this.refresh(), 15000);
+    // While the popover is open the times left count down each second and the data is re-read every 5.
+    this._tick = setInterval(() => {
+      if (!this.open) return;
+      this.now = Date.now();
+      this._ticks += 1;
+      if (this._ticks % 5 === 0) void this.refresh();
+    }, 1000);
   },
 
   cleanup() {
     this.open = false;
     this.loadSeq += 1;
     if (this._timer) clearInterval(this._timer);
+    if (this._tick) clearInterval(this._tick);
     this._timer = null;
+    this._tick = null;
   },
 
   toggle() {
@@ -209,8 +105,12 @@ const model = {
   async refresh() {
     const seq = ++this.loadSeq;
     try {
-      const data = await callJsonApi(API_PATH, {});
-      if (seq === this.loadSeq) this.view = buildView(data);
+      const context = selectedContextId();
+      const data = await callJsonApi(API_PATH, context ? { context_id: context } : {});
+      if (seq === this.loadSeq) {
+        this.data = data;
+        this.now = Date.now();
+      }
     } catch (error) {
       // A failed poll must not blank a panel that was showing something true a
       // second ago. The previous view stands until a good answer replaces it.

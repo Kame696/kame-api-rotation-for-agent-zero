@@ -85,7 +85,13 @@ OPTIONAL = (
     "kame_latency.py",
     "kame_region.py",
     "kame_stitch.py",
+    # 1.8.2.9: the budget of a background job. Missing, background jobs keep the 1.8.2.8 wait.
+    "kame_aux.py",
     "api/kame_settings_set.py",
+    # 1.8.2.9: the buttons on the page, the fallback list editor, and the one view both screens read.
+    "api/kame_pool_action.py",
+    "api/kame_fallback_set.py",
+    "webui/kame-view.js",
     "webui/main.html",
     "webui/kame-panel.html",
     "webui/kame-panel-store.js",

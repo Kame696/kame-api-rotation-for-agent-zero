@@ -1,4 +1,4 @@
-"""Agent Zero port of the Hermes 1.8.2.7 `core/hedging.py` (verbatim except where it
+"""Agent Zero port of the Hermes 1.8.2.9 `core/hedging.py` (verbatim except where it
 reads its settings: see :data:`SETTINGS`).
 
 Adaptive hedging — send a backup request when the primary is slow.
@@ -31,8 +31,9 @@ changes from the design pass:
 * **Settings-driven.** Quantile, budget percent, burst, max legs and both
   cold thresholds read from settings at decision time, so a panel edit
   applies without a restart. ``hedge_mode`` picks off / adaptive / max:
-  ``max`` fires legs from dispatch for latency-critical work, auto-
-  downgrading for ten minutes when 429 pressure rises.
+  ``max`` is shown as "Faster" (1.8.2.9): Balanced with its dials turned a
+  notch, bounded by construction, stepping back to Balanced for ten minutes
+  when a key of the model is refused for quota.
 
 Key design constraints (unchanged from v2):
 
@@ -61,7 +62,8 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-__all__ = ["HedgeTracker", "HEDGE_TRACKER", "reasoning_model", "bucket_key", "configure", "SETTINGS"]
+__all__ = ["HedgeTracker", "HEDGE_TRACKER", "reasoning_model", "bucket_key", "configure", "SETTINGS",
+           "SpeedLedger", "SPEED_LEDGER", "speed_multipliers"]
 
 #: Agent Zero port (1.8.2.7): the numbers the Hermes tracker reads from its
 #: settings module, set by `kame_engine` from the plugin settings. Same names
@@ -97,8 +99,23 @@ _SAMPLE_WINDOW_S = 1800.0
 #: A hedge leg refused with a per-minute 429 cools hedging for this long.
 _HEDGE_COOLDOWN_S = 60.0
 
-#: ``max`` mode auto-downgrades for this long when the 429 rate rises.
+#: ``max`` mode (shown as "Faster") steps back to Balanced for this long on a model after a
+#: quota refusal on any of its keys (1.8.2.9, decisions/0007).
 _MAX_MODE_PENALTY_S = 600.0
+
+#: 1.8.2.9. "Faster" is Balanced with its dials turned a notch, bounded by construction: a
+#: healthy reply still sends ONE request (the old top mode sent two on every reply and never
+#: looked at the budget); the first backup goes out at 1.5x the model's median first word
+#: (Balanced 2x), the budget is three times Balanced's (30% by default, never over 100%), a
+#: non-streamed call hedges at 0.75 of the learned threshold.
+_FASTER_MULTIPLIER = 1.5
+_FASTER_NONSTREAM = 0.75
+_FASTER_BUDGET_X = 3.0
+
+#: Refusals that say "this model's quota is spent or near it": the ones that step Faster back.
+#: 503 / overloaded and timeouts are deliberately absent: a busy model is another mechanism's
+#: job and racing is exactly what helps there.
+QUOTA_KINDS = frozenset({"per_minute", "rate_limit", "daily", "insufficient_quota"})
 
 #: 1.8.2.5. A stream's first backup goes out at this many times the model's
 #: median time-to-first-word (the second at twice that).
@@ -223,6 +240,25 @@ class HedgeTracker:
     def _mode() -> str:
         return str(SETTINGS.get("hedge_mode") or "adaptive")
 
+    # -- 1.8.2.9: Faster ------------------------------------------------------
+
+    def _faster(self, identity: str, now: float) -> bool:
+        """Is the bounded "Faster" in force for this model right now?
+
+        The stored value is still ``max``. It stops being in force for one model for ten
+        minutes after a quota refusal on any of that model's keys (``note_quota_refusal``)
+        and comes back by itself, with no probe and no request."""
+        return self._mode() == "max" and now >= self._max_downgraded_until.get(identity, 0.0)
+
+    def _budget_pct(self, faster: bool) -> float:
+        pct = self._setting("hedge_budget_pct", 10.0)
+        return min(100.0, pct * _FASTER_BUDGET_X) if faster else pct
+
+    @staticmethod
+    def _bucket_id(key: str, faster: bool) -> str:
+        """Faster keeps its own bucket, so a mode change never inherits the other's tokens."""
+        return key + "|faster" if faster else key
+
     # -- bucket plumbing ----------------------------------------------------
 
     def _bucket_for(self, key: str, *, budget_pct: float, burst: float) -> _TokenBucket:
@@ -276,6 +312,10 @@ class HedgeTracker:
             else:
                 samples.append((now, latency_s))
                 self._bucket_for(key, budget_pct=budget_pct, burst=burst).refill(1)
+                if self._mode() == "max":
+                    # 1.8.2.9: Faster earns tokens three times as fast, in its own bucket
+                    self._bucket_for(self._bucket_id(key, True), budget_pct=self._budget_pct(True),
+                                     burst=burst).refill(1)
             if len(samples) > _MAX_SAMPLES:
                 samples[:] = samples[-_MAX_SAMPLES:]
 
@@ -296,6 +336,8 @@ class HedgeTracker:
             "hedge_cold_reasoning_s" if reasoning else "hedge_cold_s",
             30.0 if reasoning else 6.0,
         )
+        # 1.8.2.9: Faster hedges a non-streamed call at three quarters of the learned time
+        factor = _FASTER_NONSTREAM if (not stream and self._faster(identity, now)) else 1.0
         with self._lock:
             samples = self._samples.get(key, [])
             recent = [l for t, l in samples if now - t < _SAMPLE_WINDOW_S]
@@ -304,7 +346,7 @@ class HedgeTracker:
                 # a different context, not of this one: they are never
                 # fallback material (a stale threshold hedges wrong on both
                 # sides — too eager for a faster pool, too shy for slower).
-                return cold if cold > 0 else None
+                return cold * factor if cold > 0 else None
             recent.sort()
             pct = self._setting("hedge_quantile", 90.0) / 100.0
             idx = min(len(recent) - 1, int(len(recent) * pct))
@@ -313,8 +355,8 @@ class HedgeTracker:
             # pathological sample window cannot turn hedging off entirely
             # or make it fire on every call
             if cold > 0:
-                return min(max(learned, cold * 0.5), cold * 4.0)
-            return learned
+                return min(max(learned, cold * 0.5), cold * 4.0) * factor
+            return learned * factor
 
     def percentile(self, identity: str, *, now: Optional[float] = None,
                    pct: float = 0.90, stream: bool = False, reasoning: bool = False) -> Optional[float]:
@@ -358,22 +400,17 @@ class HedgeTracker:
         max_tokens = self._setting("hedge_max_prompt_tokens", 32000.0)
         if est_prompt_tokens and est_prompt_tokens > max_tokens:
             return False
-        if mode == "max":
-            if now < self._max_downgraded_until.get(identity, 0.0):
-                pass  # downgraded: fall through to the adaptive rules
-            else:
-                # max mode: fire from dispatch, only the saturation and
-                # prompt-size guards above apply, and the budget is not
-                # consulted — but it is not refilled either, so an
-                # auto-downgrade restores order quickly.
-                return True
+        # 1.8.2.9: no 'fire from dispatch' any more. Faster uses the same rules as Balanced with
+        # its own dials (threshold x 0.75, budget x 3, own bucket); the old 'max' sent a second
+        # request on every reply and the budget was never consulted.
         threshold = self.threshold(identity, stream=stream, reasoning=reasoning, now=now)
         if threshold is None:
             return False
         if elapsed_s < threshold:
             return False
-        key = bucket_key(identity, stream, reasoning)
-        budget_pct = self._setting("hedge_budget_pct", 10.0)
+        faster = self._faster(identity, now)
+        key = self._bucket_id(bucket_key(identity, stream, reasoning), faster)
+        budget_pct = self._budget_pct(faster)
         burst = self._setting("hedge_burst", 3.0)
         with self._lock:
             return self._bucket_for(key, budget_pct=budget_pct, burst=burst).try_consume()
@@ -392,17 +429,20 @@ class HedgeTracker:
         attempts on every main model take more than twice the median — and a
         p90 sits *inside* that tail, so a backup timed on it goes out after
         most of the wait has already been paid. Before ``_MIN_SAMPLES``
-        exist, the cold-start number of the class. ``max`` mode starts the
-        first backup at once.
+        exist, the cold-start number of the class. 1.8.2.9: Faster (``max``) goes
+        out at ``_FASTER_MULTIPLIER`` times the median (cold start: half the
+        class's number); it no longer starts the first backup at once.
         """
         now = time.monotonic() if now is None else now
         cold = self._setting(
             "hedge_cold_reasoning_s" if reasoning else "hedge_cold_s",
             30.0 if reasoning else 6.0,
         )
+        faster = self._faster(identity, now)
+        if faster:
+            cold = cold / 2.0
         cold = max(cold, _STREAM_MIN_TRIGGER_S)
-        if self.fires_from_dispatch(identity, now=now):
-            return 0.0, cold
+        multiplier = _FASTER_MULTIPLIER if faster else _STREAM_MULTIPLIER
         key = bucket_key(identity, True, reasoning)
         with self._lock:
             # The last ``_MAX_SAMPLES`` first-word times, whatever their age:
@@ -414,7 +454,7 @@ class HedgeTracker:
             first = cold
         else:
             median = recent[len(recent) // 2]
-            first = min(max(_STREAM_MIN_TRIGGER_S, _STREAM_MULTIPLIER * median), cold * 4.0)
+            first = min(max(_STREAM_MIN_TRIGGER_S, multiplier * median), cold * 4.0)
         return first, first * 2.0
 
     def first_word_stats(self, identity: str, *, reasoning: bool) -> Optional[Tuple[float, float]]:
@@ -463,7 +503,7 @@ class HedgeTracker:
     ) -> bool:
         """Every guard of :meth:`should_hedge` except the timing, which the
         caller already decided (a stream's triggers are its own). Consumes a
-        budget token when it says yes, outside ``max`` mode."""
+        budget token when it says yes (Faster: from its own, larger bucket)."""
         now = time.monotonic() if now is None else now
         mode = self._mode()
         if mode == "off" or under_pressure or healthy_count < 2:
@@ -473,27 +513,46 @@ class HedgeTracker:
         max_tokens = self._setting("hedge_max_prompt_tokens", 32000.0)
         if est_prompt_tokens and est_prompt_tokens > max_tokens:
             return False
-        if self.fires_from_dispatch(identity, now=now):
-            return True
-        key = bucket_key(identity, stream, reasoning)
-        budget_pct = self._setting("hedge_budget_pct", 10.0)
+        faster = self._faster(identity, now)
+        key = self._bucket_id(bucket_key(identity, stream, reasoning), faster)
+        budget_pct = self._budget_pct(faster)
         burst = self._setting("hedge_burst", 3.0)
         with self._lock:
             return self._bucket_for(key, budget_pct=budget_pct, burst=burst).try_consume()
 
     def fires_from_dispatch(self, identity: str, *, now: Optional[float] = None) -> bool:
-        """Whether ``max`` mode is in force for this identity right now.
+        """Always ``False`` since 1.8.2.9, kept for callers.
 
-        1.8.2.4: the setting promises "fires backups from the start", but the
-        transport waited for the threshold before asking, so ``max`` only
-        skipped the budget. The transport now asks this first and, when it
-        is true, considers the backup without waiting.
-        """
+        Until 1.8.2.8 the top speed setting sent a second request at the first instant of EVERY
+        reply, without consulting the budget (2x, up to 3x). Faster now waits for the same kind
+        of late first word as Balanced, only a notch sooner (decisions/0007)."""
+        return False
+
+    def note_quota_refusal(self, identity: str, *, now: Optional[float] = None) -> None:
+        """A key of this model was refused for quota (per-minute, rate limit, daily, credit).
+
+        On ANY leg - the main request, a backup, a raced model. Faster steps back to Balanced
+        for this model for ten minutes (``_MAX_MODE_PENALTY_S``); every further refusal pushes
+        the end out again, and it returns by itself afterwards. Only a dict write, and only on
+        a failure: a reply that goes well never reaches it."""
         now = time.monotonic() if now is None else now
-        if self._mode() != "max":
-            return False
         with self._lock:
-            return now >= self._max_downgraded_until.get(identity, 0.0)
+            self._max_downgraded_until[identity] = now + _MAX_MODE_PENALTY_S
+
+    def faster_paused_for(self, identity: str, *, now: Optional[float] = None) -> float:
+        """Seconds Faster is still stepped back on this model (0 when it is in force)."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            return max(0.0, self._max_downgraded_until.get(identity, 0.0) - now)
+
+    def faster_paused_until(self, *, now: Optional[float] = None,
+                            wall: Optional[float] = None) -> Dict[str, float]:
+        """``{identity: epoch}`` of every model Faster is stepped back on right now."""
+        now = time.monotonic() if now is None else now
+        wall = time.time() if wall is None else wall
+        with self._lock:
+            return {identity: round(wall + (until - now), 1)
+                    for identity, until in self._max_downgraded_until.items() if until > now}
 
     # -- diagnostics and pressure --------------------------------------------
 
@@ -507,9 +566,9 @@ class HedgeTracker:
         """A hedge leg was refused with a per-minute 429.
 
         Penalises the budget (a wasted hedge), cools hedging for this
-        identity for a minute, and auto-downgrades ``max`` mode for ten
-        minutes — hedging into a rate-limited pool is the one way hedging
-        makes things worse.
+        identity for a minute, and steps ``max`` (Faster) back to Balanced
+        for ten minutes — hedging into a rate-limited pool is the one way
+        hedging makes things worse.
         """
         now = time.monotonic() if now is None else now
         with self._lock:
@@ -550,3 +609,81 @@ class HedgeTracker:
 
 #: Module-level singleton.
 HEDGE_TRACKER = HedgeTracker()
+
+
+def speed_multipliers(pct: float = 10.0) -> Tuple[float, float]:
+    """``(Balanced, Faster)``: the most requests per reply each mode may use over a day, from
+    the backup budget ``pct`` (1.8.2.9, decisions/0007): Balanced ``1 + pct/100``, Faster
+    ``1 + min(100, 3 x pct)/100``. Saver is always 1x. Same formula as Hermes."""
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        pct = 10.0
+    if not math.isfinite(pct) or pct < 0:
+        pct = 10.0
+    return 1.0 + pct / 100.0, 1.0 + min(100.0, _FASTER_BUDGET_X * pct) / 100.0
+
+
+#: 1.8.2.9. What the speed ledger counts, in the order its rows keep them.
+LEDGER_KINDS = ("replies", "backup", "race", "burst", "circle")
+
+
+class SpeedLedger:
+    """Replies and the extra requests KAME sent for speed, per minute for the last hour.
+
+    ``backup``: a backup key started on a slow reply. ``race``: the next model started beside
+    a slow reply (also the widen leg and the start probe). ``burst``: the extra keys of keys
+    asked together. ``circle``: a request to the best model while it is known busy (reported,
+    not counted as extra: it replaces the walk down the list). Framework-free, one lock,
+    integer adds: a counter must never cost a reply. Same view as Hermes' ``speed_view``.
+    """
+
+    _KEEP_MINUTES = 60
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._minutes: Dict[int, list] = {}
+        self._total = [0] * len(LEDGER_KINDS)
+
+    def note(self, kind: str, n: int = 1, now: Optional[float] = None) -> None:
+        try:
+            index = LEDGER_KINDS.index(kind)
+            n = int(n)
+            minute = int((time.time() if now is None else now) // 60)
+        except (ValueError, TypeError, OverflowError):
+            return
+        if n <= 0:
+            return
+        with self._lock:
+            row = self._minutes.get(minute)
+            if row is None:
+                row = self._minutes[minute] = [0] * len(LEDGER_KINDS)
+                for old in [m for m in self._minutes if m < minute - self._KEEP_MINUTES]:
+                    self._minutes.pop(old, None)
+            row[index] += n
+            self._total[index] += n
+
+    @staticmethod
+    def _pack(values) -> Dict[str, Any]:
+        replies, backup, race, burst, circle = values
+        extra = backup + race + burst
+        return {"replies": replies, "backup": backup, "race": race, "burst": burst, "circle": circle,
+                "extra_pct": round(100.0 * extra / replies, 1) if replies else None}
+
+    def view(self, now: Optional[float] = None) -> Dict[str, Any]:
+        """``{"hour": pack, "since_start": pack}``; ``extra_pct`` is ``None`` without replies."""
+        minute = int((time.time() if now is None else now) // 60)
+        with self._lock:
+            rows = [list(r) for m, r in self._minutes.items() if m > minute - self._KEEP_MINUTES]
+            total = list(self._total)
+        hour = [sum(column) for column in zip(*rows)] if rows else [0] * len(LEDGER_KINDS)
+        return {"hour": self._pack(hour), "since_start": self._pack(total)}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._minutes.clear()
+            self._total = [0] * len(LEDGER_KINDS)
+
+
+#: Module-level singleton, fed by the engine.
+SPEED_LEDGER = SpeedLedger()

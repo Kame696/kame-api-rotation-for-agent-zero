@@ -167,7 +167,7 @@ Compatible with Agent Zero v1.14+ through the v1.x line AND Agent Zero V2 (the
 transport-layer refactor). v1.0.4 auto-detects which is installed and adapts.
 """
 
-import asyncio, collections, contextvars, hashlib, json, math, os, secrets, threading, time, re
+import asyncio, collections, contextvars, hashlib, json, math, os, secrets, sys, threading, time, re
 from typing import Any, List
 # v1.0.9: KAME no longer imports litellm, openai or logging. It used to call
 # `acompletion()` itself and silence litellm's loggers; now Agent Zero makes the
@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.2.8"
+KAME_VERSION = "1.8.2.9"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -434,25 +434,6 @@ _KAME_SHORT_GRACE_S = 180.0
 _KAME_STRETCH_MAX_FACTOR = 8.0
 _KAME_STRETCH_CAPS = {"per_minute": 300.0, "tokens_per_minute": 300.0, "per_hour": 3600.0}
 
-# --- v1.6.0.1: the wait, said before ninety seconds have passed --------------
-#
-# The chat item in `_kame_wait_notice_tick` waits ninety seconds because it
-# writes a permanent row into the conversation, and a row for every twenty-
-# second throttle would bury the conversation in bookkeeping. That threshold is
-# right for what it guards and wrong as the only surface: with a real pool the
-# whole thing is rarely cold for ninety seconds at once, so in practice the
-# notice almost never appeared and the owner's reasonable conclusion was that
-# nothing was working.
-#
-# Agent Zero's notification manager is the better home for the early part of a
-# wait: `NotificationType.PROGRESS`, a stable id so it UPDATES in place instead
-# of stacking, and `add_notification` marks the WebUI state dirty, so it is
-# pushed over the WebSocket rather than waiting for a poll. Fifteen seconds is
-# long enough that a normal rotation never raises one — a rotation is
-# milliseconds — and short enough that a person who has started to wonder is
-# answered before they reach for the restart.
-_KAME_NOTICE_TOAST_AFTER_S = 15.0
-
 # --- v1.6.0.1: a refusal is not a clock -------------------------------------
 #
 # KAME's cooldowns divide in two, and until this release both got the same hour:
@@ -530,27 +511,21 @@ _KAME_LONG_HEARTBEAT_S = 300.0  # 5 min
 # while the soonest recovery is still near (avoids per-cycle spam).
 _KAME_SLEEP_LOG_MIN_INTERVAL_S = 5.0
 
-# --- v1.2.0: the wait, said where the user is actually looking ---
+# --- v1.2.0 / 1.8.2.9: the wait, said where the user is actually looking ---
 #
 # Everything above writes to the console. That is the right place for an
 # operator reading a Docker log and the wrong place for the person watching the
 # chat: to them a pool that is waiting out a daily quota is an agent that has
-# stopped, with no way to tell it from a hang. ADR 0002 removed the rotation
-# ceiling and named this as what it leaves open — "the user typically restarts
-# A0 in that scenario" — and a restart is not a decision the user made, it is
-# one the silence made for them.
+# stopped, with no way to tell it from a hang.
 #
-# So the same facts the console already gets are put into the chat as ONE log
-# item that keeps updating: how many keys are resting, when the earliest is
-# expected, how long the wait has run, and that stop cancels. Counts and
-# fingerprints only, never a key, so the line is safe in a screenshot.
+# 1.2.0 put the facts in the chat as one log item after ninety seconds and 1.6.0.1
+# raised a toast after fifteen. Both are gone (1.8.2.9, owner's order): the wait now
+# lives on the chat's own status line, the "A0: Calling LLM..." heading of the log
+# item Agent Zero already shows for the call, and in the chip. Time left only, the
+# count of physical keys the chip shows, and nothing a person has to dismiss.
 _KAME_WAIT_NOTICE = True
-# A short wait says nothing at all. Under this, the pool recovers before anybody
-# has time to wonder, and a notice would be noise on every rotation.
-_KAME_WAIT_NOTICE_AFTER_S = 90.0
-# How often the one item is refreshed once it is on screen. It is an update to
-# an existing item, not a new message, so this is a countdown rather than spam.
-_KAME_WAIT_NOTICE_REFRESH_S = 10.0
+# How often the heading may change: a countdown, not a flood of updates.
+_KAME_STATUS_LINE_EVERY_S = 2.0
 
 # --- v1.0.1: key id display style (configurable) ---
 # "fingerprint" (default): anonymized stable hash id, never leaks the secret.
@@ -919,6 +894,19 @@ def _kame_sync_hedging():
         _KH.configure(hedge_mode=_kame_hedge_mode(), **_KAME_HEDGE_VALUES)
 
 
+#: 1.8.2.9: the kinds of refusal that step "Faster" back to Balanced for the model.
+_KAME_QUOTA_KINDS = _KH.QUOTA_KINDS if _KH is not None else frozenset()
+
+
+def _kame_ledger(kind, n=1) -> None:
+    """1.8.2.9: one add to the speed ledger (replies, backup, race, burst, circle). Never raises."""
+    try:
+        if _KH is not None:
+            _KH.SPEED_LEDGER.note(kind, n)
+    except Exception:
+        pass
+
+
 def set_hedge_number(name, value) -> None:
     """v1.8.2.7: one of the Hermes speed-boost numbers (budget, burst, quantile, cold, prompt)."""
     row = _KAME_HEDGE_NUMBERS.get(name)
@@ -1055,6 +1043,58 @@ def parse_fallback_models(raw) -> list:
         out.append({"provider": provider, "name": name, "api_base": base,
                     "label": f"{provider}/{name}", "identity": ident})
     return out[:12]
+
+
+_FALLBACK_CAP = 12
+
+
+def merge_fallback_rows(rows, existing="") -> dict:
+    """1.8.2.9 (U5): the saved list text for the rows the editor sends, merged with what is saved.
+
+    ``rows`` is ``[{provider, name, api_base?}]`` in the order shown. A row with a provider AND a
+    model becomes one ``provider/name[ @ api_base]`` line; a row whose provider and model match a
+    saved line keeps that line as written (casing, a hand-written ``@ api_base``) unless the row
+    carries an endpoint of its own. Every saved item `parse_fallback_models` cannot read (a
+    comment, a note) is kept after the list, untouched. At most 12 entries are saved; the reply
+    counts the half-filled rows and the ones left out. Pure; never raises."""
+    saved = {}
+    junk = []
+    for item in re.split(r"[\n,;]+", str(existing or "")):
+        text = item.strip()
+        if not text:
+            continue
+        parsed = parse_fallback_models(text)
+        if parsed:
+            saved.setdefault((parsed[0]["provider"], parsed[0]["name"].lower()), (text, parsed[0]["api_base"]))
+        else:
+            junk.append(text)
+    lines, seen = [], set()
+    incomplete = left_out = 0
+    for row in rows if isinstance(rows, (list, tuple)) else []:
+        row = row if isinstance(row, dict) else {}
+        provider = str(row.get("provider") or "").strip().lower()
+        name = str(row.get("name") or row.get("model") or "").strip()
+        base = str(row.get("api_base") or "").strip()
+        if (not provider or not name or not re.fullmatch(r"[a-z0-9_.\-]+", provider)
+                or re.search(r"[\n\r,;]", name) or re.search(r"[\n\r,;]", base)):
+            # a separator inside a name or an endpoint would split into extra entries on save (review L4)
+            incomplete += 1
+            continue
+        slot = (provider, name.lower())
+        if slot in seen:
+            continue
+        seen.add(slot)
+        if len(lines) >= _FALLBACK_CAP:
+            left_out += 1
+            continue
+        old = saved.get(slot)
+        if old and not base:
+            lines.append(old[0])
+        else:
+            lines.append(f"{provider}/{name}" + (f" @ {base}" if base else ""))
+    text = "\n".join(lines + junk)
+    return {"text": text, "entries": parse_fallback_models(text), "saved": len(lines),
+            "incomplete": incomplete, "left_out": left_out, "kept": len(junk)}
 
 
 def set_fallback_models(raw) -> None:
@@ -1235,6 +1275,65 @@ def reset_counts() -> None:
         _KAME_TALLY.clear()
 
 
+def _kame_zero_key(kd) -> None:
+    """One key row starts again as if it had never been tried. Call under `_KAME_LOCK`."""
+    for field in ("sick_until", "last_sick_at", "consecutive_rl",
+                  "consecutive_server", "consecutive_refusals",
+                  "consecutive_denials", "consecutive_unsized",
+                  "retired_at", "short_streak", "last_hold_until"):
+        kd[field] = 0
+    for field in ("rest_label", "hold_kind", "hold_scope",
+                  "last_hold_kind", "last_hold_window"):
+        kd[field] = ""
+    kd["model_until"] = 0
+    kd["model_kind"] = kd["model_scope"] = ""
+    kd["_hold_projection"] = 0
+
+
+def wake_model(identity) -> int:
+    """1.8.2.9 (U2, "Wake this model"): the keys of ONE model start again, and the model is no
+    longer known busy. Returns how many keys. Never touches a key or a setting.
+
+    The holds kept on disk for those keys go too (as `note_answer` does after a good answer);
+    the other models' keys keep their rests, except that a key shared with another model of the
+    same provider loses its account-wide hold, which is what "this key is fine again" means.
+    """
+    keys = []
+    with _KAME_LOCK:
+        for ident, state in _KAME_KEY_HEALTH.items():
+            if not _kame_names_match(ident, identity):
+                continue
+            provider = str(ident).split(":", 1)[0]
+            for key, kd in (state.get("keys") or {}).items():
+                _kame_zero_key(kd)
+                keys.append((ident, key))
+                _KAME_ACCOUNT_HOLDS.pop((provider, key), None)
+                _KAME_STATED_RL.pop((ident, key), None)
+        for ident in [i for i in _KAME_NO_ANSWER_SINCE if _kame_names_match(i, identity)]:
+            _KAME_NO_ANSWER_SINCE.pop(ident, None)
+    _kame_clear_busy(identity)
+    if _KJ is not None:
+        for ident, key in keys:
+            try:
+                _KJ.note_answer(ident, key)
+            except Exception:
+                pass
+    _kame_event("setting", reason=f"{len(keys)} key(s) of {_kame_model_label(identity)} start again from zero")
+    return len(keys)
+
+
+def forget_busy(identity) -> bool:
+    """1.8.2.9 (U2, "Try this model now"): the model is not known busy any more, so the next
+    reply starts on it. Its keys are not touched. True when it was known busy."""
+    now = time.time()
+    with _KAME_LOCK:
+        was_busy, _stamp = _kame_busy_state(identity, now)
+    _kame_clear_busy(identity)
+    if was_busy:
+        _kame_event("setting", reason=f"{_kame_model_label(identity)} will be asked again now")
+    return was_busy
+
+
 def reset_pool() -> int:
     """Every key starts again as if it had never been tried. Returns how many.
 
@@ -1249,20 +1348,11 @@ def reset_pool() -> int:
         for state in _KAME_KEY_HEALTH.values():
             for kd in (state.get("keys") or {}).values():
                 count += 1
-                for field in ("sick_until", "last_sick_at", "consecutive_rl",
-                              "consecutive_server", "consecutive_refusals",
-                              "consecutive_denials", "consecutive_unsized",
-                              "retired_at", "short_streak", "last_hold_until"):
-                    kd[field] = 0
-                for field in ("rest_label", "hold_kind", "hold_scope",
-                              "last_hold_kind", "last_hold_window"):
-                    kd[field] = ""
-                kd["model_until"] = 0
-                kd["model_kind"] = kd["model_scope"] = ""
-                kd["_hold_projection"] = 0
+                _kame_zero_key(kd)
         _KAME_ACCOUNT_HOLDS.clear()
         _KAME_STATED_RL.clear()
         _KAME_NO_ANSWER_SINCE.clear()
+        _KAME_PROBED_AT.clear()   # 1.8.2.9: a pool that starts again has not been asked while busy
         # Serialize reset with health writes: a concurrent refusal must not be
         # removed from disk after it was already applied to memory.
         if _KJ is not None:
@@ -1346,6 +1436,8 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_HEDGE_COLD_S", lambda v: set_hedge_number("hedge_cold_s", v)),
         ("KAME_HEDGE_COLD_REASONING_S", lambda v: set_hedge_number("hedge_cold_reasoning_s", v)),
         ("KAME_HEDGE_MAX_PROMPT_TOKENS", lambda v: set_hedge_number("hedge_max_prompt_tokens", v)),
+        # v1.8.2.9: 1 = background jobs wait like the chat (the 1.8.2.8 behaviour).
+        ("KAME_AUX_UNBOUNDED", lambda v: set_aux_unbounded(v)),
     )
     for name, setter in readers:
         raw = os.environ.get(name)
@@ -1652,7 +1744,7 @@ def _build_report() -> dict:
                     "missing": [], "degraded": []}
 
 
-def pool_report() -> dict:
+def pool_report(context_id=None) -> dict:
     """Everything KAME can say about its own pools, for a screen.
 
     v1.6.0.1. The reason this exists is that ordinary rotation was invisible.
@@ -1775,7 +1867,294 @@ def pool_report() -> dict:
         "host": host_seams(),
         # v1.8.2.8: the last replies - which model wrote each, how long it took.
         "replies": replies_report(),
+        # v1.8.2.9: requests per model in the last 24 h, the chat's against background jobs.
+        "quota_use": quota_use_view(now),
+        # 1.8.2.9 (E9): the ONE view the chip, the status line, the menu and the page read.
+        "view": _kame_safe_status_view(context_id, now),
         "data_dir": (str(_KJ.data_dir()) if (_KJ is not None and _KJ.data_dir() is not None) else ""),
+        "generated_at": now,
+    }
+
+
+def _kame_safe_status_view(context_id, now) -> dict:
+    """review L6: a view that fails must not take the whole status report (and every 1.8.2.8 field
+    the Events and Background tabs read) down with it."""
+    try:
+        return status_view(context_id, now)
+    except Exception:
+        return {}
+
+
+# --- 1.8.2.9 (E9): ONE view for every surface -------------------------------------------------
+#
+# The status line, the chip above the message box, the menu and the page all read the numbers in
+# `status_view()` - never their own. Until 1.8.2.8 the toast counted one pool ("1 of 1 keys"), the
+# chip summed every pool ("4 of 6 resting") and the toast title was the AGE of a wait while its
+# body was the time LEFT. Here a key is a PHYSICAL key (provider + secret + endpoint): four models
+# that share one key are one key, and a key is counted once whatever number of models use it.
+# Field names are Hermes' panel snapshot names, so the page logic ports function for function.
+# Counts and fingerprints only - never a key.
+
+#: identity -> the endpoint (api_base) the model was last called with: part of what makes a key physical
+_KAME_IDENTITY_BASE = {}
+#: the identity of the conversation's own model (not a list model that answered for it)
+_KAME_PRIMARY = {"identity": ""}
+
+#: Hermes' key codes (`core/carousel.py` key_states): r ready, f answering now, s resting,
+#: d out for today (daily / credit), x credential refused and still tried, o out of rotation
+_KEY_STATE_WORD = {"r": "ready", "f": "answering", "s": "resting", "d": "out_today",
+                   "x": "rejected", "o": "retired"}
+_KEY_DAY_KINDS = frozenset({"daily", "insufficient_quota"})
+
+
+def _kame_note_call(ctx, owner, identity) -> None:
+    """Remember what the view needs from a call that starts: the endpoint, which model is the
+    conversation's own, and the Agent Zero chat it belongs to. Never raises."""
+    try:
+        base = _kame_api_base(owner, ctx)
+        with _KAME_LOCK:
+            _KAME_IDENTITY_BASE[identity] = base
+        if ctx.get("main_chat") and not _KAME_FALLBACK_HOP.get():
+            _KAME_PRIMARY["identity"] = identity
+        agent = _kame_frame_agent()
+        chat = getattr(getattr(agent, "context", None), "id", None)
+        fl = ctx.get("flight")
+        if chat and isinstance(fl, dict):
+            fl["context"] = str(chat)
+    except Exception:
+        pass
+
+
+def _kame_key_code(sick_until, kind, retired, now) -> str:
+    resting = sick_until > now
+    if retired:
+        return "o"
+    if kind in _KAME_RETIRING_KINDS:
+        return "x"
+    if resting and kind in _KEY_DAY_KINDS:
+        return "d"
+    return "s" if resting else "r"
+
+
+def _kame_view_order(identities) -> list:
+    """The conversation's own model first, then the fallback list in the user's order, then the rest."""
+    ordered, left = [], list(identities)
+
+    def take(want):
+        for ident in list(left):
+            if _kame_names_match(ident, want):
+                left.remove(ident)
+                ordered.append(ident)
+                return
+
+    if _KAME_PRIMARY["identity"]:
+        take(_KAME_PRIMARY["identity"])
+    for entry in _KAME_FALLBACK_MODELS:
+        take(entry["identity"])
+    return ordered + sorted(left)
+
+
+def _kame_key_view(now=None) -> dict:
+    """``{pools, key_groups, totals}`` over every model KAME has a key table for."""
+    now = time.time() if now is None else float(now)
+    with _KAME_LOCK:
+        table = {
+            ident: [(k, float(kd.get("sick_until") or 0), str(kd.get("hold_kind") or ""),
+                     bool(kd.get("retired_at")), float(kd.get("last_used") or 0))
+                    for k, kd in (state.get("keys") or {}).items()]
+            for ident, state in _KAME_KEY_HEALTH.items()
+        }
+        bases = dict(_KAME_IDENTITY_BASE)
+        live = {}
+        for fl in _KAME_IN_FLIGHT.values():
+            if fl.get("key") and fl.get("job") == "chat":
+                live.setdefault(fl.get("identity"), set()).add(fl["key"])
+    pools, groups, physical = [], {}, {}
+    for identity in _kame_view_order(list(table)):
+        rows = sorted(table[identity], key=lambda r: _key_short_id(r[0]))
+        provider = identity.split(":", 1)[0]
+        base = bases.get(identity, "")
+        label = _kame_model_label(identity)
+        key_states, healthy, soonest, last_used = [], 0, None, 0.0
+        for key, sick_until, kind, retired, used in rows:
+            code = _kame_key_code(sick_until, kind, retired, now)
+            fingerprint = _key_short_id(key)
+            if code == "r" and fingerprint in live.get(identity, ()):
+                code = "f"
+            until = sick_until if sick_until > now else None
+            key_states.append([fingerprint, code, until, kind])
+            if code in ("r", "f"):
+                healthy += 1
+            elif until is not None and (soonest is None or until - now < soonest):
+                soonest = until - now
+            last_used = max(last_used, used)
+            slot = (provider, key, base)
+            physical.setdefault(slot, []).append(code)
+            row = groups.setdefault((slot, "r" if code == "f" else code, kind if code != "r" else ""), {
+                "provider": provider, "fingerprint": fingerprint, "api_base": base,
+                "models": [], "code": "r" if code == "f" else code, "until_epoch": until, "kind": kind,
+            })
+            if label not in row["models"]:
+                row["models"].append(label)
+            if until is not None and (row["until_epoch"] is None or until < row["until_epoch"]):
+                row["until_epoch"] = until      # the soonest the key is back for any of its models
+        pools.append({
+            "identity": identity, "label": label, "keys": len(rows), "healthy": healthy,
+            "in_flight": sum(1 for s in key_states if s[1] == "f"),
+            "resting": len(rows) - healthy,
+            "soonest_s": round(soonest, 1) if (soonest is not None and not healthy) else None,
+            "idle_for_s": round(now - last_used, 1) if last_used else None,
+            "key_states": key_states,
+        })
+    for entry in _KAME_FALLBACK_MODELS:      # a list model KAME has not served yet: a ring with no keys
+        if not any(_kame_names_match(p["identity"], entry["identity"]) for p in pools):
+            pools.append({"identity": entry["identity"], "label": entry["name"], "keys": 0, "healthy": 0,
+                          "in_flight": 0, "soonest_s": None, "idle_for_s": None, "key_states": []})
+    pools = sorted(pools, key=lambda p: _kame_view_order_index(p["identity"]))
+    key_groups = sorted(groups.values(), key=lambda g: (g["provider"], g["fingerprint"], g["code"]))
+    for g in key_groups:
+        g["state"] = _KEY_STATE_WORD[g["code"]]
+        g["models"] = sorted(g["models"])
+    totals = {"keys": len(physical), "ready": 0, "resting": 0, "out_today": 0, "rejected": 0, "retired": 0}
+    for codes in physical.values():
+        if any(c in ("r", "f") for c in codes):
+            totals["ready"] += 1
+            continue
+        totals["resting"] += 1       # not ready: resting, out for today, refused or out of rotation
+        if "d" in codes:
+            totals["out_today"] += 1
+        elif "x" in codes:
+            totals["rejected"] += 1
+        elif all(c == "o" for c in codes):
+            totals["retired"] += 1
+    totals["phrase"] = _kame_totals_phrase(totals)
+    return {"pools": pools, "key_groups": key_groups, "totals": totals}
+
+
+def _kame_view_order_index(identity) -> int:
+    names = ([_KAME_PRIMARY["identity"]] if _KAME_PRIMARY["identity"] else []) + \
+        [e["identity"] for e in _KAME_FALLBACK_MODELS]
+    for i, want in enumerate(names):
+        if _kame_names_match(identity, want):
+            return i
+    return len(names)
+
+
+def _kame_every_words(seconds) -> str:
+    """``every hour`` / ``every 12 min`` / ``every 20 s``: how often a repeated decision came."""
+    s = float(seconds)
+    if s >= 5400:
+        hours = int(round(s / 3600.0))
+        return "every hour" if hours == 1 else f"every {hours} h"
+    if s >= 3300:
+        return "every hour"
+    return "every " + _kame_fmt_left(s)
+
+
+def _kame_group_moves(events) -> list:
+    """Repeated decisions as one row: consecutive events (newest first) with the same kind, the
+    same key (or model, when the event names no key) and the same reason become
+    ``{text, count, first_at, last_at, every_s, repeat}``; the page reads it as
+    "6 times, every hour"."""
+    out = []
+    for ev in events:
+        who = ev.get("key") or _kame_model_label(ev.get("identity", ""))
+        sig = (ev.get("kind", ""), who, ev.get("reason", ""))
+        if out and out[-1]["_sig"] == sig:
+            row = out[-1]
+            row["count"] += 1
+            row["first_at"] = ev.get("at", row["first_at"])
+            continue
+        out.append({
+            "_sig": sig,
+            "text": " ".join(part for part in (str(ev.get("kind", "")).replace("_", " "), who,
+                                                ev.get("reason", "")) if part),
+            "kind": ev.get("kind", ""), "identity": ev.get("identity", ""), "key": ev.get("key", ""),
+            "reason": ev.get("reason", ""), "job": ev.get("job", ""), "count": 1,
+            "first_at": ev.get("at"), "last_at": ev.get("at"),
+        })
+    for row in out:
+        row.pop("_sig", None)
+        gap = (row["last_at"] - row["first_at"]) if row["count"] > 1 and row["last_at"] and row["first_at"] else 0
+        row["every_s"] = round(gap / (row["count"] - 1), 1) if gap > 0 else None
+        row["repeat"] = (f"{row['count']} times, {_kame_every_words(row['every_s'])}"
+                         if row["every_s"] else (f"{row['count']} times" if row["count"] > 1 else ""))
+    return out
+
+
+def _kame_activity(key_view, context_id, now) -> dict:
+    """What the selected chat (else the newest conversation call) is doing right now."""
+    with _KAME_LOCK:
+        flights = [dict(f) for f in _KAME_IN_FLIGHT.values() if f.get("job") == "chat"]
+    if context_id:
+        flights = [f for f in flights if f.get("context") == str(context_id)]
+    out = {"kind": "idle", "identity": None, "model": None, "attempt": None, "healthy": None,
+           "keys": None, "key": None, "started_at": None, "eta_s": None, "racing": [], "probe": None,
+           "waiting_since": None, "text": None}
+    if not flights:
+        return out
+    fl = max(flights, key=lambda f: float(f.get("started") or 0))
+    pool = next((p for p in key_view["pools"] if p["identity"] == fl.get("identity")), None)
+    eta = None if fl.get("eta_until") is None else max(0.0, round(float(fl["eta_until"]) - now, 1))
+    out.update({
+        "kind": "waiting" if fl.get("waiting") else "calling",
+        "identity": fl.get("identity"), "model": _kame_model_label(fl.get("identity")),
+        "attempt": fl.get("attempt"), "healthy": pool["healthy"] if pool else None,
+        "keys": pool["keys"] if pool else None, "key": fl.get("key"),
+        "started_at": fl.get("started"), "eta_s": eta, "racing": list(fl.get("racing") or []),
+        "probe": fl.get("probe"), "waiting_since": fl.get("waiting_since"), "text": fl.get("status"),
+    })
+    return out
+
+
+def _kame_fallback_view(now) -> dict:
+    entries = []
+    for role, entry in ([("primary", {"identity": _KAME_PRIMARY["identity"]})] if _KAME_PRIMARY["identity"] else []) + \
+            [("fallback", e) for e in _KAME_FALLBACK_MODELS]:
+        identity = entry["identity"]
+        with _KAME_LOCK:
+            busy, probed = _kame_busy_state(identity, now)
+            until = max([u for i, u in _KAME_BUSY_UNTIL.items() if _kame_names_match(i, identity)] or [0.0])
+            kind = next((k for i, k in _KAME_BUSY_KIND.items() if _kame_names_match(i, identity)), "busy")
+        entries.append({
+            "identity": identity, "label": _kame_model_label(identity), "role": role,
+            "busy_kind": kind if busy else None, "busy_until": until if busy else None,
+            "probe_at": (probed + _KAME_PROBE_EVERY_S) if (busy and probed is not None) else None,
+        })
+    mode = _KAME_MODEL_SWITCH
+    if not _KAME_FALLBACK_MODELS:
+        state, why = "no_chain", ("Switching: off - no fallback models are set, so KAME waits for your keys. "
+                                  "Add some in the Fallback models tab and switching is automatic.")
+    elif mode == "never":
+        state, why = "off_by_zero", "Fallback: off - 'Fallback' is set to Never, so KAME waits for your keys."
+    elif mode == "timed":
+        state, why = "on", (f"Switching: after your time - once you have waited {int(_KAME_FAILOVER_AFTER_S)} s "
+                            "with nothing on screen, KAME answers with the next model below, and your model "
+                            "comes back as soon as it can answer.")
+    else:
+        state, why = "on", ("Switching: automatic - when your provider is busy, KAME answers with the next model "
+                            "below at once; when your keys are resting, after a few seconds (KAME learns how long "
+                            "your model usually takes). Your model comes back as soon as it can answer, and the "
+                            "first model in the list is always tried first.")
+    return {"state": state, "why": why, "warning": "", "entries": entries}
+
+
+def status_view(context_id=None, now=None) -> dict:
+    """The ONE view every surface reads (see the block comment above). Pure: builds, never writes."""
+    now = time.time() if now is None else float(now)
+    keys = _kame_key_view(now)
+    events = _KJ.EVENTS.recent(50) if _KJ is not None else []
+    return {
+        "pools": keys["pools"],
+        "key_groups": keys["key_groups"],
+        "totals": keys["totals"],
+        "activity": _kame_activity(keys, context_id, now),
+        "fallback": _kame_fallback_view(now),
+        "events": events,
+        "moves": _kame_group_moves(events),
+        "replies": replies_report(),
+        "speed": speed_report(),
+        "quota_use": quota_use_view(now),
         "generated_at": now,
     }
 
@@ -3254,6 +3633,13 @@ def _kame_decide_failure(identity, key, exc, elapsed=None):
         # you when a rejected key will start working.
         return applied, kind, getattr(exc, "status_code", None) or _evidence_status(exc), "", "kame"
     result = _kame_rest_for_failure(identity, key, exc, elapsed=elapsed)
+    if result[1] in _KAME_QUOTA_KINDS and _KH is not None:
+        # 1.8.2.9: a quota or rate-limit refusal on ANY leg of this model (the main request, a
+        # backup, a raced model) steps Faster back to Balanced for ten minutes.
+        try:
+            _KH.HEDGE_TRACKER.note_quota_refusal(identity)
+        except Exception:
+            pass
     if result[1] == "per_minute" and _KP is not None:
         # v1.8.2.7 (Hermes 1.8.2.3): the one event that teaches this key's real RPM.
         try:
@@ -4116,11 +4502,11 @@ class _KameSleepState:
     unified_turn carousels without duplicating the logic)."""
     __slots__ = ("sleep_count", "cooldown_overhead_s", "long_cool_logged",
                  "last_sleep_log_at", "last_long_heartbeat_at",
-                 # v1.2.0 — the chat-side wait notice (see _kame_wait_notice_tick)
-                 "cold_since", "notice_item", "notice_refreshed_at", "notice_broken",
-                 # v1.6.0.1 — the live toast, which arrives long before the
-                 # ninety-second chat item and is pushed over the WebSocket
-                 "toast_refreshed_at", "toast_shown", "toast_broken")
+                 # v1.2.0 - when the wait began (the age of a wait is shown on the page only)
+                 "cold_since",
+                 # 1.8.2.9 - the call this run belongs to, and whether it has written the
+                 # status line (so every way out of the carousel knows to give it back)
+                 "ctx", "line_on")
 
     def __init__(self):
         self.sleep_count = 0
@@ -4129,12 +4515,8 @@ class _KameSleepState:
         self.last_sleep_log_at = 0.0
         self.last_long_heartbeat_at = 0.0
         self.cold_since = 0.0
-        self.notice_item = None
-        self.notice_refreshed_at = 0.0
-        self.notice_broken = False
-        self.toast_refreshed_at = 0.0
-        self.toast_shown = False
-        self.toast_broken = False
+        self.ctx = None
+        self.line_on = False
 
 
 def _kame_pool_counts(identity: str, all_keys: list):
@@ -4150,196 +4532,202 @@ def _kame_pool_counts(identity: str, all_keys: list):
     return healthy, total
 
 
-#: One stable id, so every update REPLACES the previous notification rather
-#: than stacking a new one beside it. `add_notification` looks an existing id up
-#: and overwrites it in place, which is the whole reason a live wait can be
-#: narrated without turning into a wall of toasts.
-_KAME_TOAST_ID = "kame-rotation-wait"
+# --- 1.8.2.9 (E10): the wait lives on the status line --------------------------------------
+#
+# Agent Zero shows "A0: Calling LLM..." as the heading of the log item it makes for every
+# chat call (`before_main_llm_call/_10_log_for_stream.py`, kept in
+# `loop_data.params_temporary["log_item_generating"]`). KAME writes what it waits for into
+# that heading and gives Agent Zero's own words back when the wait ends; Agent Zero's stream
+# handlers overwrite it the moment text arrives. One time (time LEFT) and one count (physical
+# keys, from the same view the chip and the page read). No toast, no extra chat row.
 
-
-def _kame_toast(kind: str, title: str, message: str, seconds: int = 4) -> bool:
-    """Push one live notification, updating the previous one in place.
-
-    v1.6.0.1. Best-effort by construction and returns False rather than raising:
-    a wait that is not narrated is a worse experience, a wait that is not
-    survived is a bug, and that ordering has been this plugin's rule since the
-    chat notice was written.
-
-    Counts only — the caller composes the text and no caller passes a key.
-    """
+def _kame_frame_agent():
+    """The Agent whose chat call is running: ``self`` of the nearest ``call_chat_model`` /
+    ``call_chat_model_turn`` frame (a subordinate agent is its own ``A1``, ``A2``...), else the
+    agent stashed at monologue start. ``None`` outside a chat (a CLI run, a test). Never raises."""
     try:
-        from helpers.notification import (
-            NotificationManager, NotificationType, NotificationPriority,
-        )
-        NotificationManager.send_notification(
-            type=NotificationType(kind),
-            priority=NotificationPriority.NORMAL,
-            message=message,
-            title=title,
-            display_time=seconds,
-            group="kame",
-            id=_KAME_TOAST_ID,
-        )
-        return True
+        frame = sys._getframe(1)
+        depth = 0
+        while frame is not None and depth < 80:
+            if frame.f_code.co_name in _KAME_CHAT_FRAMES:
+                agent = frame.f_locals.get("self")
+                if agent is not None and hasattr(agent, "context"):
+                    return agent
+            frame = frame.f_back
+            depth += 1
     except Exception:
-        # Older Agent Zero, a renamed helper, or no manager yet. The chat item
-        # and the console still say everything this said.
-        return False
+        pass
+    try:
+        return _KAME_CURRENT_AGENT.get()
+    except Exception:
+        return None
 
 
-def _kame_wait_notice_toast(st, identity, all_keys, waited: float) -> None:
-    """The early half of the wait, on a surface that is pushed, not polled."""
-    if st.toast_broken:
-        return
-    now = time.time()
-    if waited < _KAME_NOTICE_TOAST_AFTER_S:
-        return
-    if st.toast_shown and (now - st.toast_refreshed_at) < _KAME_WAIT_NOTICE_REFRESH_S:
-        return
-    healthy, total = _kame_pool_counts(identity, all_keys)
-    resting = total - healthy
-    eta = _next_recovery_seconds(identity, all_keys)
-    when = f" · next back in ~{_fmt_duration(eta)}" if eta else ""
-    ok = _kame_toast(
-        "progress",
-        f"KAME — waiting for a key ({_fmt_duration(waited)})",
-        f"{resting} of {total} keys resting on {identity}{when}. "
-        f"No requests are being made while they cool; this resumes by itself.",
-        # Just past the refresh cadence, so the toast is continuously replaced
-        # while the wait lasts and disappears on its own if the process dies
-        # mid-wait rather than hanging on screen for ever.
-        seconds=int(_KAME_WAIT_NOTICE_REFRESH_S) + 5,
-    )
-    if not ok:
-        st.toast_broken = True
-        return
-    st.toast_shown = True
-    st.toast_refreshed_at = now
+def _kame_fmt_left(seconds, now=None) -> str:
+    """The ONE formatter of a time LEFT: ``45 s``, ``12 min``, ``1 h 05 min``, and past three
+    hours the clock time it ends (``back at 15:40``) - never decimals of hours."""
+    try:
+        s = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "a while"
+    if s < 59.5:
+        return f"{max(1, int(round(s)))} s"
+    if s < 3570:
+        return f"{int(round(s / 60.0))} min"
+    if s < 3 * 3600:
+        hours, minutes = divmod(int(round(s / 60.0)), 60)
+        return f"{hours} h {minutes:02d} min"
+    now = time.time() if now is None else now
+    return "back at " + time.strftime("%H:%M", time.localtime(now + s))
+
+
+def _kame_in_words(seconds, tilde=False, now=None) -> str:
+    """``in 12 s`` / ``in ~45 min`` / ``back at 15:40``: a time left, ready to follow a verb."""
+    text = _kame_fmt_left(seconds, now)
+    if text.startswith("back at"):
+        return text
+    return f"in {'~' if tilde else ''}{text}"
+
+
+def _kame_totals_phrase(totals) -> str:
+    """``1 of 3 keys ready``: the one count every surface says, over physical keys."""
+    totals = totals or {}
+    return f"{int(totals.get('ready') or 0)} of {int(totals.get('keys') or 0)} keys ready"
+
+
+def _kame_wait_line(totals, eta) -> str:
+    text = f"waiting on a key to come back - {_kame_totals_phrase(totals)}"
+    if eta is not None:
+        text += ", next key " + _kame_in_words(eta, tilde=True)
+    return text
+
+
+def _kame_flight_wait(ctx, since, eta) -> None:
+    """What the chip and the page read about a wait: since when, and when it may end."""
+    try:
+        fl = ctx.get("flight") if isinstance(ctx, dict) else None
+        if isinstance(fl, dict):
+            fl["waiting"] = True
+            fl["waiting_since"] = since
+            fl["eta_until"] = (time.time() + float(eta)) if eta is not None else None
+    except Exception:
+        pass
+
+
+def _kame_write_heading(text) -> None:
+    """Write ``text`` (or Agent Zero's own words, when ``None``) into the heading of the chat's
+    "Calling LLM..." item; at most one update per `_KAME_STATUS_LINE_EVERY_S` and only when the
+    words changed. Without that item (an older host, a task runner) the log's own progress line
+    is used. Never raises."""
+    try:
+        agent = _kame_frame_agent()
+        if agent is None:
+            return
+        name = getattr(agent, "agent_name", None) or f"A{int(getattr(agent, 'number', 0) or 0)}"
+        now = time.time()
+        item = None
+        try:
+            item = agent.loop_data.params_temporary.get("log_item_generating")
+        except Exception:
+            item = None
+        holder = item
+        if holder is None:
+            holder = getattr(getattr(agent, "context", None), "log", None)
+            if holder is None or not callable(getattr(holder, "set_progress", None)):
+                return
+        state = getattr(holder, "_kame_line", None)
+        written = None
+        if text is None:
+            if not state or state[0] is None:
+                return              # nothing of ours is on the line: leave Agent Zero's alone
+            if item is not None:
+                # Agent Zero's stream handlers may have taken the heading over (text started): theirs stays.
+                if getattr(item, "heading", state[2]) == state[2]:
+                    item.update(heading=f"{name}: Calling LLM...")
+            else:
+                holder.set_progress("", active=False)
+        else:
+            if state and state[0] == text:
+                return
+            if state and state[0] is not None and now - state[1] < _KAME_STATUS_LINE_EVERY_S:
+                return
+            written = f"{name}: Calling LLM... {text}"
+            if len(written) > 120:      # Agent Zero's heading limit: never let it cut our words
+                written = written[:117] + "..."
+            if item is not None:
+                item.update(heading=written)
+            else:
+                holder.set_progress(written)
+        try:
+            holder._kame_line = [text, now, written]
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _kame_status_line(ctx, text, st=None) -> None:
+    """Say on the status line what a conversation waits for; ``None`` gives the line back.
+    The words are kept on the call (the chip and the page read them) and, when the setting is on,
+    written into Agent Zero's "Calling LLM..." heading. Never raises."""
+    try:
+        if isinstance(ctx, dict):
+            ctx["status_text"] = text
+            fl = ctx.get("flight")
+            if isinstance(fl, dict):
+                fl["status"] = text
+                if text is None:
+                    fl["waiting"] = False
+                    fl["waiting_since"] = None
+                    fl["eta_until"] = None
+        if st is not None and text is not None:
+            st.line_on = True
+    except Exception:
+        pass
+    if _KAME_WAIT_NOTICE:
+        _kame_write_heading(text)
 
 
 def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> None:
-    """Show — and keep refreshing — one chat log item while the pool is cold.
+    """Every key rests: say what the conversation waits for, and for how long, on its status line.
 
-    Everything else KAME says about a wait goes to the console, which the person
-    watching the chat is not reading. To them a pool waiting out a daily quota
-    looks exactly like a hung agent, and the only move that looks available is
-    restarting Agent Zero — which throws away the wait and the context with it.
-
-    So the facts already in the console are put where the decision is made, as a
-    SINGLE item that updates in place: how many keys are resting, when the first
-    one is expected back, how long this has run, and that stop still works. The
-    item carries counts and a pool name only, so it is safe on screen and in a
-    screenshot, and it is UI-only — `context.log` never enters the model's
-    history, so nothing here can change what the agent thinks it was told.
-
-    Best-effort by construction: any failure marks the notice broken for the
-    rest of this call and rotation carries on untouched. A wait that is not
-    narrated is a worse experience; a wait that is not survived is a bug.
+    Called from inside the sleep slices, so the time left counts down. Only the conversation
+    speaks here - a background job (a chat title, a memory) that waits does not rewrite the line of
+    the chat it is not part of. Counts come from the same view as the chip. Best-effort by
+    construction: a line that cannot be written never touches rotation.
     """
-    if not _KAME_WAIT_NOTICE:
-        return
-    now = time.time()
     if not st.cold_since:
-        st.cold_since = now
-    waited = now - st.cold_since
-
-    # v1.6.0.1: the live toast comes first and much earlier. It is a separate
-    # surface with its own failure flag, so a chat item that cannot be written
-    # (a CLI run, a task runner, a test) does not also silence the toast, and
-    # vice versa.
-    _kame_wait_notice_toast(st, identity, all_keys, waited)
-
-    if st.notice_broken:
+        st.cold_since = time.time()
+    ctx = st.ctx
+    if ctx is not None and not _kame_main(ctx):
         return
-    if waited < _KAME_WAIT_NOTICE_AFTER_S:
-        return
-    if st.notice_item is not None and (now - st.notice_refreshed_at) < _KAME_WAIT_NOTICE_REFRESH_S:
-        return
-
     try:
-        agent = _KAME_CURRENT_AGENT.get()
-        log = getattr(getattr(agent, "context", None), "log", None)
-        if log is None:
-            st.notice_broken = True     # no chat to talk to (CLI, tests, a task runner)
-            return
-
-        healthy, total = _kame_pool_counts(identity, all_keys)
         eta = _next_recovery_seconds(identity, all_keys)
-        if eta is None:
-            eta_line = "A key is free now — resuming."
-        else:
-            eta_line = (
-                f"Earliest key expected back in ~{_fmt_duration(eta)} "
-                f"(around {time.strftime('%H:%M:%S', time.localtime(now + eta))})."
-            )
-        resting = total - healthy
-        content = (
-            f"{resting} of {total} keys are resting on {identity}. {eta_line}\n"
-            f"Waited {_fmt_duration(waited)} so far. No API calls are being made "
-            f"while they cool.\n"
-            f"This resumes by itself the instant a key answers. Press stop to cancel."
-        )
-        kvps = {
-            "pool": identity,
-            "model": f"{call_type}|{model_short}",
-            "keys resting": f"{resting} of {total}",
-            "earliest recovery": "now" if eta is None else f"~{_fmt_duration(eta)}",
-            "waited": _fmt_duration(waited),
-        }
-        heading = f"KAME — waiting for an API key ({_fmt_duration(waited)})"
-
-        if st.notice_item is None:
-            st.notice_item = log.log(
-                type="util", heading=heading, content=content, kvps=kvps
-            )
-        else:
-            st.notice_item.update(heading=heading, content=content, kvps=kvps)
-        st.notice_refreshed_at = now
+        view = _kame_key_view()
+        totals = view["totals"]
+        # review M2: the keys of the model being waited on, not every key KAME holds
+        pool = next((p for p in view["pools"] if _kame_names_match(p["identity"], identity)), None)
+        if pool is not None and pool.get("keys"):
+            totals = {"ready": int(pool.get("healthy") or 0), "keys": int(pool["keys"])}
+        _kame_flight_wait(ctx, st.cold_since, eta)
+        _kame_status_line(ctx, _kame_wait_line(totals, eta), st)
     except Exception:
-        st.notice_broken = True
+        pass
 
 
 def _kame_wait_notice_finish(st, outcome: str) -> None:
-    """Close the wait notice: 'resumed' after a key answered, 'stopped' otherwise.
+    """Give the status line back: called on every way out of the carousel, so the chat never keeps
+    a "waiting" heading that is no longer true. A no-op when KAME never wrote one (the common
+    case: the pool recovered before anybody could wonder). ``outcome`` is 'resumed' or 'stopped'."""
+    _kame_status_release(st)
 
-    Called on every way out of the carousel, so the chat never keeps a "waiting"
-    item that is no longer true. A no-op when no notice was ever shown (the
-    common case: the pool recovered before anybody could wonder)."""
-    # v1.6.0.1: close the toast too, and close it FIRST — it is the surface most
-    # likely to have been shown, because it starts at fifteen seconds rather
-    # than ninety. A "waiting" toast left on screen after the wait ended is
-    # worse than never having shown one.
-    if st.toast_shown:
-        st.toast_shown = False
-        _waited = _fmt_duration(time.time() - st.cold_since) if st.cold_since else "?"
-        if outcome == "resumed":
-            _kame_toast("success", "KAME — a key came back",
-                        f"A key answered after {_waited}. Continuing.", seconds=4)
-        else:
-            _kame_toast("info", "KAME — stopped waiting",
-                        f"The wait ended after {_waited} without a key coming back.",
-                        seconds=6)
 
-    item = st.notice_item
-    if item is None:
+def _kame_status_release(st) -> None:
+    """The status line goes back to Agent Zero if this run ever wrote it."""
+    if not st.line_on:
         return
-    st.notice_item = None
-    try:
-        waited = _fmt_duration(time.time() - st.cold_since) if st.cold_since else "?"
-        if outcome == "resumed":
-            item.update(
-                heading=f"KAME — a key came back after {waited}",
-                content=f"A key answered after {waited} of waiting. Continuing.",
-                kvps={"waited": waited, "outcome": "resumed"},
-            )
-        else:
-            item.update(
-                heading=f"KAME — stopped waiting after {waited}",
-                content=f"The wait ended after {waited} without a key coming back.",
-                kvps={"waited": waited, "outcome": "stopped"},
-            )
-    except Exception:
-        st.notice_broken = True
+    st.line_on = False
+    _kame_status_line(st.ctx, None)
 
 
 async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st):
@@ -4398,6 +4786,8 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
     if not st.cold_since:
         st.cold_since = _now_t
 
+    # 1.8.2.9: the status line says so from the first second, not after the first slice
+    _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short)
     _slept = 0.0
     while _slept < wait:
         _slice = min(1.0, wait - _slept)
@@ -4429,6 +4819,8 @@ def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ct
         return
     try:
         progress = ctx.get("progress") or {}
+        main = _kame_main(ctx)
+        extra = {} if main else {"channel": "secondary", "task": ctx.get("aux_task") or "utility"}
         _KJ.record_call(
             identity=identity, key=key, attempt=attempt, outcome=outcome, kind=kind,
             status=status, started_at=started_wall, ended_at=time.time(),
@@ -4438,8 +4830,18 @@ def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ct
             elapsed_before_s=max(0.0, (time.perf_counter() - call_started_perf)
                                  - (time.time() - started_wall)),
             pool_waited_before_s=getattr(st, "cooldown_overhead_s", None),
-            rest_s=rest, rest_source=rest_source, call_id=call_id,
+            rest_s=rest, rest_source=rest_source, call_id=call_id, **extra,
         )
+    except TypeError:   # an older kame_journal.py beside this engine
+        try:
+            _KJ.record_call(
+                identity=identity, key=key, attempt=attempt, outcome=outcome, kind=kind,
+                status=status, started_at=started_wall, ended_at=time.time(),
+                first_sign_at=(ctx.get("progress") or {}).get("first_sign_at"),
+                first_text_at=(ctx.get("progress") or {}).get("first_text_at"),
+                rest_s=rest, rest_source=rest_source, call_id=call_id)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -4530,6 +4932,132 @@ def _kame_clear_busy(identity) -> None:
         for ident in [i for i in _KAME_BUSY_UNTIL if _kame_names_match(i, identity)]:
             _KAME_BUSY_UNTIL.pop(ident, None)
             _KAME_BUSY_WINDOW.pop(ident, None)
+            _KAME_BUSY_KIND.pop(ident, None)
+        for ident in [i for i in _KAME_PROBED_AT if _kame_names_match(i, identity)]:
+            _KAME_PROBED_AT.pop(ident, None)
+
+
+# --- v1.8.2.9 (E1): a busy model is asked on a clock, not once per key ------------------
+#
+# Until 1.8.2.8 a model KAME knew busy was either skipped for its whole window or hammered
+# once per key round trip. Now every busy model - the best one or a list model - is asked at
+# most once per `_KAME_PROBE_EVERY_S` across every conversation, and the wait between two
+# asks is said on the status line.
+
+_KAME_PROBE_EVERY_S = 20.0
+_KAME_PROBED_AT = {}                 # identity -> wall time of the last ask while it was known busy
+_KAME_STARTED_AT = time.time()       # E8: the tally starts here when that is less than a day ago
+
+
+def _kame_busy_state(identity, now):
+    """``(busy, probed_at)`` for a model under either spelling. Reads only; the caller
+    holds ``_KAME_LOCK`` when it needs the answer to stay true."""
+    busy = False
+    for ident, until in list(_KAME_BUSY_UNTIL.items()):
+        if now < until and _kame_names_match(ident, identity):
+            busy = True
+            break
+    if not busy:
+        return False, None
+    stamp = None
+    for ident, at in list(_KAME_PROBED_AT.items()):
+        if _kame_names_match(ident, identity):
+            stamp = at if stamp is None else max(stamp, at)
+    return True, stamp
+
+
+def _kame_stamp_is_due(stamp, now) -> bool:
+    return stamp is None or now < stamp or now - stamp >= _KAME_PROBE_EVERY_S
+
+
+def _kame_probe_due(identity, now=None) -> bool:
+    """True when the model is not known busy, or it was last asked 20 s ago or more."""
+    now = time.time() if now is None else now
+    busy, stamp = _kame_busy_state(identity, now)
+    return (not busy) or _kame_stamp_is_due(stamp, now)
+
+
+def _kame_claim_probe(identity, now=None) -> bool:
+    """Atomic: the ask of a busy model goes to exactly one conversation per 20 s. A model
+    that is not busy needs no claim (True, nothing stamped)."""
+    now = time.time() if now is None else now
+    with _KAME_LOCK:
+        busy, stamp = _kame_busy_state(identity, now)
+        if not busy:
+            return True
+        if not _kame_stamp_is_due(stamp, now):
+            return False
+        _KAME_PROBED_AT[identity] = now
+        return True
+
+
+def _kame_pool_of(identity):
+    """``(pool identity, its keys)`` as KAME already knows them, under either spelling."""
+    with _KAME_LOCK:
+        state = _KAME_KEY_HEALTH.get(identity)
+        if state is not None:
+            return identity, list(state.get("keys") or {})
+        for ident, state in _KAME_KEY_HEALTH.items():
+            if _kame_names_match(ident, identity):
+                return ident, list(state.get("keys") or {})
+    return identity, []
+
+
+def _kame_entry_free(identity, keys=None, now=None) -> bool:
+    """A list model that can be asked now: usable keys, and not known busy unless it is due
+    another look (Hermes decisions/0032 B4)."""
+    now = time.time() if now is None else now
+    pool_id, known = _kame_pool_of(identity)
+    use = known if keys is None else keys
+    return bool(_kame_entry_usable(pool_id if keys is None else identity, use)
+                and _kame_probe_due(identity, now))
+
+
+def _kame_pool_wait(identity, keys) -> float:
+    """Seconds until a key of this pool is ready (0 when one is, or nothing is known)."""
+    if not keys or _pool_has_ready_key(identity, keys):
+        return 0.0
+    eta = _next_recovery_seconds(identity, keys)
+    return float(eta) if eta else 0.0
+
+
+def _kame_skip_left(identity, now_m=None) -> float:
+    now_m = time.monotonic() if now_m is None else now_m
+    left = 0.0
+    for ident, until in list(_KAME_FALLBACK_SKIP.items()):
+        if _kame_names_match(ident, identity):
+            left = max(left, until - now_m)
+    return left
+
+
+def _kame_circle_due_in(ctx, now=None, primary_only=False):
+    """``(seconds, label)``: how long until the first model of ``[best] + the list`` can be
+    asked again, and which one it is. ``(0.0, label)`` when one can be asked now.
+    ``primary_only``: the list may not be asked beside this reply (G1); only the best model counts."""
+    now = time.time() if now is None else now
+    now_m = time.monotonic()
+    primary = ctx["identity"]
+    rows = [(primary, _kame_model_label(primary), list(ctx.get("all_keys") or []), True)]
+    for entry in ([] if primary_only else list(_KAME_FALLBACK_MODELS)):
+        if not _kame_names_match(entry["identity"], primary):
+            rows.append((entry["identity"], entry["label"], None, False))
+    best = None
+    for ident, label, keys, is_primary in rows:
+        wait = 0.0
+        busy, stamp = _kame_busy_state(ident, now)
+        if busy and stamp is not None and not _kame_stamp_is_due(stamp, now):
+            wait = stamp + _KAME_PROBE_EVERY_S - now
+        pool_id, known = (ident, keys) if is_primary else _kame_pool_of(ident)
+        pool = _kame_pool_wait(pool_id, known if keys is None else keys)
+        if pool > 0 and not is_primary:
+            # a list model whose keys return inside the hop bound is simply asked: its own call waits
+            pool = max(0.0, pool - max(_KAME_HOP_BOUND_MIN_S, _kame_switch_threshold(pool_id)))
+        wait = max(wait, pool)
+        if not is_primary:
+            wait = max(wait, _kame_skip_left(ident, now_m))
+        if best is None or wait < best[0]:
+            best = (wait, label)
+    return (float(best[0]), best[1]) if best else (0.0, "")
 
 
 def _kame_entry_busy(entry, now=None) -> bool:
@@ -4547,12 +5075,26 @@ def _kame_entry_busy(entry, now=None) -> bool:
     return False
 
 
+def _kame_slow_number(ctx, identity, reasoning) -> float:
+    """The slow bound of ONE model for this prompt: "Set time" = the user's number,
+    "Automatic" = 3 x the median of that model's own first-word times, clamped (not
+    the p95: a model slow today fills its tail with it). 1.8.2.9 split it out so the
+    bound of each raced model can be read (E3)."""
+    if _KAME_MODEL_SWITCH == "timed":
+        return float(_KAME_FAILOVER_AFTER_S) if _KAME_FAILOVER_AFTER_S > 0 else 0.0
+    floor, ceiling, cold = _KAME_SLOW_S[bool(reasoning)]
+    extra = _kame_est_prompt_tokens(ctx.get("messages")) / _KAME_SLOW_TOKENS_PER_S  # review R9
+    stats = _kame_first_word_stats(identity, reasoning)
+    if not stats:
+        return cold + extra
+    return float(min(ceiling, max(floor, 3.0 * stats[0])) + extra)
+
+
 def _kame_slow_after(ctx, identity, reasoning) -> float:
     """Seconds without a first sign of work after which the reply falls back to the
     next model of the list; 0 = wait as before. Only the conversation's own reply,
-    only when it could fall back (a list entry not known busy), "Set time" = the
-    user's number, "Automatic" = 3 x the median of this model's own first-word
-    times, clamped (not the p95: a model slow today fills its tail with it)."""
+    only when it could fall back (a list entry that can be asked: usable keys, and not
+    known busy unless it is due another look)."""
     try:
         if ctx.get("call_type") != "Chat" or not _kame_main(ctx) or not _kame_nothing_shown(ctx):
             return 0.0
@@ -4563,20 +5105,50 @@ def _kame_slow_after(ctx, identity, reasoning) -> float:
         usable = [e for e in _KAME_FALLBACK_MODELS
                   if not _kame_names_match(e["identity"], identity)
                   and now_m >= _KAME_FALLBACK_SKIP.get(e["identity"], 0.0)
-                  and not _kame_entry_busy(e, now_t)
+                  and _kame_entry_free(e["identity"], None, now_t)
                   and not (hop and e["identity"] == hop.get("origin"))]
         if not usable:
             return 0.0
-        if _KAME_MODEL_SWITCH == "timed":
-            return float(_KAME_FAILOVER_AFTER_S) if _KAME_FAILOVER_AFTER_S > 0 else 0.0
-        floor, ceiling, cold = _KAME_SLOW_S[bool(reasoning)]
-        extra = _kame_est_prompt_tokens(ctx.get("messages")) / _KAME_SLOW_TOKENS_PER_S  # review R9
-        stats = _kame_first_word_stats(identity, reasoning)
-        if not stats:
-            return cold + extra
-        return float(min(ceiling, max(floor, 3.0 * stats[0])) + extra)
+        return _kame_slow_number(ctx, identity, reasoning)
     except Exception:
         return 0.0
+
+
+#: 1.8.2.9 (E3, Hermes decisions/0032 B): a raced model keeps the reply waiting only to
+#: its own late point, and ONE more model of the list joins at the slow bound.
+_KAME_WIDEN_MAX = 1
+_KAME_RACE_MAX_CROSS = 3     # cross legs per reply: the usual 2 plus the one that joins at the bound
+
+
+def _kame_late_point(slow_s) -> float:
+    """How long a raced model may stay silent before the reply stops waiting for it:
+    half its own slow bound, at least `_KAME_CROSS_MIN_S`."""
+    return max(_KAME_CROSS_MIN_S, 0.5 * float(slow_s or 0.0))
+
+
+def _kame_extended_bound(ctx, identity, reasoning, race, live, slow, slow_at) -> float:
+    """The primary's slow bound once raced models are in: the latest of their OWN late points
+    (and the bound it already had), never later than 1.8.2.8 waited - the last raced start plus
+    the whole bound."""
+    r3 = max(race.started[l] for l in live) + slow
+    late = slow_at
+    for l in live:
+        entry = race.cross_legs[l]
+        s_x = _kame_slow_number(ctx, entry["identity"], reasoning) or slow
+        late = max(late, race.started[l] + _kame_late_point(s_x))
+    return min(r3, late)
+
+
+def _kame_cross_allowed(ctx) -> bool:
+    """1.8.2.9 (G1): on Agent Zero's Responses transport with native function tools a
+    Gemini function-call turn needs its own signature, so no other model may be asked
+    beside the reply. The sequential switch to the next model is unchanged."""
+    kwargs = ctx.get("kwargs") or {}
+    if kwargs.get("responses_input_items") or kwargs.get("previous_response_id"):
+        return False
+    if kwargs.get("a0_responses_function_tools"):
+        return False
+    return str(kwargs.get("a0_api_mode") or "").lower() != "responses"
 
 
 #: v1.8.2.8 (D12): when the next model of the list joins a silent reply.
@@ -4601,6 +5173,8 @@ def _kame_cross_entry(ctx, identity, reasoning, slow):
     try:
         if not slow or _KAME_FALLBACK_HOP.get() is not None or _kame_hedge_mode() == "off":
             return None
+        if not _kame_cross_allowed(ctx):   # 1.8.2.9 (G1): no other model beside a Responses-tools reply
+            return None
         now_m = time.monotonic()
         stats = _kame_first_word_stats(identity, reasoning)
         after = float(min(_KAME_CROSS_COLD_S if not stats else max(_KAME_CROSS_MIN_S, 3.0 * stats[0]),
@@ -4611,7 +5185,7 @@ def _kame_cross_entry(ctx, identity, reasoning, slow):
             if _kame_names_match(entry["identity"], identity) \
                     or now_m < _KAME_FALLBACK_SKIP.get(entry["identity"], 0.0):
                 continue
-            if _kame_entry_busy(entry):
+            if not _kame_entry_free(entry["identity"]):   # 1.8.2.9 (B4): busy only if not due
                 continue
             at = after + step * len(out)
             if out and at >= 0.85 * slow:
@@ -4745,6 +5319,7 @@ class _KameRace:
                 make("tokens_callback", True))
 
     def start(self, owner, leg, key):
+        _kame_count_request(self.ctx, self.ctx.get("identity"))   # 1.8.2.9 (E8)
         progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
         leg_ctx = dict(self.ctx)
         leg_ctx["progress"] = progress
@@ -4756,16 +5331,19 @@ class _KameRace:
         self.tasks[leg] = asyncio.ensure_future(self.ctx["attempt"](owner, key, leg_ctx))
         return self.tasks[leg]
 
-    def start_cross(self, owner, leg, entry):
+    def start_cross(self, owner, leg, entry, probe=False):
         """v1.8.2.8 (Hermes D12): a leg that asks the NEXT MODEL of the list - a whole
         KAME call on that model, inside a fallback hop, its words shown only if it
-        shows work first. Its failure is its own: never judged on this pool's keys."""
+        shows work first. Its failure is its own: never judged on this pool's keys.
+        ``probe`` (1.8.2.9): the model was known busy and this ask is its probe."""
         ctx = self.ctx
+        _kame_ledger("race")   # 1.8.2.9: the next model beside the reply is an extra request
         progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
         rc, rsc, tc = self.shims(leg, progress)
 
         async def run():
-            token = _KAME_FALLBACK_HOP.set({"origin": ctx["identity"], "to": entry["identity"]})
+            token = _KAME_FALLBACK_HOP.set({"origin": ctx["identity"], "to": entry["identity"],
+                                            "probe": bool(probe)})
             main_token = _KAME_RACED_MAIN.set(True)
             try:
                 model = _kame_fallback_model(owner, entry)
@@ -4813,6 +5391,10 @@ def _kame_judge_leg(identity, key, exc, elapsed, ctx, attempt_no, call_id, start
         except Exception:
             pass
         ctx.setdefault("race_judged", []).append((key, kind, sc, exc))
+        if ctx.get("probe_primary") and not ctx.get("probe_noted") and _kame_busy_failure(identity, key, kind, sc):
+            # 1.8.2.9 (E2): the start probe was answered "busy": that IS proof, the window doubles.
+            ctx["probe_noted"] = True
+            _kame_note_busy(identity)
         if kind in ("auth", "revoked"):
             PrintStyle.warning(
                 f"[KAME] {ctx.get('call_type', '')}|{ctx.get('model_short', '')} {_key_display_auth(key)} "
@@ -5023,6 +5605,7 @@ def _kame_after_answer(identity, ctx, call_started_perf) -> None:
     _kame_clear_busy(identity)
     if not _kame_main(ctx):
         return
+    _kame_ledger("replies")   # 1.8.2.9: one answered reply of the conversation
     try:
         now_perf = time.perf_counter()
         total = now_perf - float(call_started_perf)
@@ -5235,15 +5818,23 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     all_keys = ctx["all_keys"]
     stream = ctx["call_type"] == "Chat"
     reasoning = _kame_reasoning_call(ctx)
+    # 1.8.2.9 (E7): a background job never asks keys together, never races a backup (a job that
+    # KAME does not budget, review H2, is still a background job: it only keeps the old wait).
     hedging_on = (_KH is not None and _kame_hedge_mode() != "off" and not _KAME_CAROUSEL_DISABLED
-                  and len(all_keys) >= 2)
+                  and len(all_keys) >= 2 and ctx.get("aux_task") is None)
     silence = _kame_silence_for(owner, ctx, attempt_no)
     slow = _kame_slow_after(ctx, identity, reasoning) if stream else 0.0
     cross = list(_kame_cross_entry(ctx, identity, reasoning, slow) or []) if slow else []
+    # 1.8.2.9 (E2): the start probe asks the next free model at once, beside the busy best model.
+    probe_cross = (list(ctx.get("probe_cross") or [])
+                   if (stream and ctx.get("probe_primary") and not burst_keys) else [])
+    if probe_cross:
+        cross = probe_cross
     if hedging_on and stream:
         _kame_seed_triggers(identity, reasoning)
-    if not hedging_on and not burst_keys and not silence and not slow:
+    if not hedging_on and not burst_keys and not silence and not slow and not cross:
         t0 = time.monotonic()
+        _kame_count_request(ctx, identity)   # 1.8.2.9 (E8)
         try:
             result = await ctx["attempt"](owner, key, ctx)
         except BaseException as exc:
@@ -5285,6 +5876,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     for i, k in enumerate(legs):
         race.start(owner, i, k)
     if burst_keys:
+        _kame_ledger("burst", len(legs) - 1)   # the keys beyond the first are the extra requests
         with _KAME_LOCK:
             _KAME_SPEED_STATS["probe_bursts"] += 1
         _kame_event("backup", identity, reason=f"pool running dry: {len(legs)} keys asked together",
@@ -5305,6 +5897,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     empties = []   # legs that answered with nothing, kept in case nobody does better
     slow_at = None    # monotonic time of the slow bound (review R3: may move for a raced model)
     slow_extended = False
+    widened = 0       # 1.8.2.9 (E3): models added at the slow bound (at most _KAME_WIDEN_MAX)
+    said_waiting = False
     try:
         while True:
             running = race.running()
@@ -5428,26 +6022,79 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
             if cross and time.monotonic() >= race.started[0] + cross[0][1] and \
                     not any(p.get("first_sign_at") for p in race.progress.values()):
                 entry, _at = cross.pop(0)
-                race.start_cross(owner, len(race.tasks), entry)
-                _kame_event("model_switch", identity,
-                            reason=f"no first word after {_fmt_duration(time.monotonic() - race.started[0])}: "
-                                   f"{entry['label']} (a next model of your list) races it")
+                if probe_cross:
+                    probe = bool(ctx.get("probe_cross_claimed"))   # claimed when the probe was allowed
+                else:
+                    probe = _kame_claim_entry(entry)     # 1.8.2.9: a busy model is asked only if due
+                    if probe is None:
+                        continue                         # another conversation took this model's ask
+                race.start_cross(owner, len(race.tasks), entry, probe)
+                _fl = ctx.get("flight")
+                if isinstance(_fl, dict):   # data for the status line (phase C): who is racing the reply
+                    _fl["racing"] = [e["label"] for e in race.cross_legs.values()]
+                    if probe_cross:
+                        _fl["probe"] = _kame_model_label(identity)
+                if not probe_cross:
+                    # 1.8.2.9 (E10): the chat's status line names who races the slow model
+                    ctx["race_line"] = True
+                    _kame_status_line(ctx, f"{_kame_model_label(identity)} is slow - "
+                                           f"{_kame_model_label(entry['identity'])} races it", st)
+                if probe_cross:
+                    _kame_event("model_switch", identity,
+                                reason=f"your best model was busy: asked again beside {entry['label']}, "
+                                       "the first to answer is shown")
+                else:
+                    _kame_event("model_switch", identity,
+                                reason=f"no first word after {_fmt_duration(time.monotonic() - race.started[0])}: "
+                                       f"{entry['label']} (a next model of your list) races it")
                 continue
             # v1.8.2.8 (Hermes D11): the model is slow right now - no leg shows
             # any sign of work by its slow bound. The next model answers.
-            if slow and not slow_extended and time.monotonic() >= slow_at:
-                live = [l for l in race.cross_legs if not race.tasks[l].done()]
-                if live:
-                    slow_extended = True
-                    slow_at = max(race.started[l] for l in live) + slow
-                    continue
             if slow and time.monotonic() >= slow_at and \
                     not any(p.get("first_sign_at") for p in race.progress.values()):
+                now_m = time.monotonic()
+                live = [l for l in race.cross_legs if not race.tasks[l].done()]
+                if live and not slow_extended:
+                    # 1.8.2.9 (E3 B1): a raced model keeps the reply waiting only to ITS late point,
+                    # never past what 1.8.2.8 waited (the last raced start + the whole bound).
+                    slow_extended = True
+                    later = _kame_extended_bound(ctx, identity, reasoning, race, live, slow, slow_at)
+                    if later > now_m:
+                        slow_at = later
+                        continue
+                if (widened < _KAME_WIDEN_MAX and len(race.cross_legs) < _KAME_RACE_MAX_CROSS
+                        and not race.burst and _kame_hedge_mode() != "off" and _kame_cross_allowed(ctx)):
+                    # B2: ONE more model of the list joins at the bound; nothing is cut.
+                    entry = _kame_free_entry_outside(ctx, identity, race)
+                    probe = _kame_claim_entry(entry) if entry is not None else None
+                    if entry is not None and probe is not None:
+                        widened += 1
+                        slow_extended = True
+                        race.start_cross(owner, len(race.tasks), entry, probe)
+                        _kame_event("model_switch", identity,
+                                    reason=f"no first word after {_fmt_duration(now_m - race.started[0])}: "
+                                           f"{entry['label']} (one more model of your list) joins")
+                        live = [l for l in race.cross_legs if not race.tasks[l].done()]
+                        slow_at = max(now_m, _kame_extended_bound(ctx, identity, reasoning, race, live,
+                                                                 slow, now_m))
+                        continue
+                if _kame_free_entry_outside(ctx, identity, race) is None:
+                    # B3: nothing else could answer - the legs that run are waited for, none is cut,
+                    # nothing is marked slow. The first to show work wins.
+                    if not said_waiting:
+                        said_waiting = True
+                        _kame_event("model_switch", identity,
+                                    reason=f"no first word after {_fmt_duration(now_m - race.started[0])}: "
+                                           "no other model of your list can answer, still waiting")
+                    slow = 0.0
+                    slow_at = None
+                    continue
                 waited = time.monotonic() - race.started[0]
                 await race.cancel_all()
-                _kame_note_busy(identity, first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S)
+                _kame_note_busy(identity, first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S, kind="slow")
                 for entry in race.cross_legs.values():   # the models raced in were silent too
-                    _kame_note_busy(entry["identity"], first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S)
+                    _kame_note_busy(entry["identity"], first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S,
+                                 kind="slow")
                 raise _KameSlowModel(f"{identity.split(':', 1)[-1]} is slow right now "
                                      f"(no first word after {_fmt_duration(waited)})")
             # v1.8.2.7 (Hermes `stream_silence_timeout_seconds`, "wait for the
@@ -5477,6 +6124,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
             leg = len(race.tasks)
             race.start(owner, leg, more[0])
             _KH.HEDGE_TRACKER.note_hedge(identity)
+            _kame_ledger("backup")
             with _KAME_LOCK:
                 _KAME_SPEED_STATS["backups"] += 1
             _kame_event("backup", identity, more[0],
@@ -5492,16 +6140,19 @@ def _kame_cross_won(ctx, identity, race):
     model alone like a busy one so the next replies go straight on."""
     entry = race.cross_legs.get(race.winner) or {}
     ctx["answered_by"] = entry.get("identity")
-    _kame_note_busy(identity)
+    if not ctx.get("probe_primary"):
+        # 1.8.2.9 (E2): losing the START probe is not proof the model is still busy.
+        _kame_note_busy(identity)
     for leg, other in race.cross_legs.items():   # raced in before the winner and still silent
         if leg != race.winner and not race.progress.get(leg, {}).get("first_sign_at"):
             _kame_note_busy(other["identity"])
+    why = "your provider is busy" if ctx.get("probe_primary") else "slower than usual"
     with _KAME_LOCK:
         _KAME_SPEED_STATS["model_switches"] = _KAME_SPEED_STATS.get("model_switches", 0) + 1
         _KAME_LAST_MODEL_SWITCH.update({"from": identity, "to": entry.get("label", ""),
-                                        "reason": "slower than usual: raced", "at": time.time()})
+                                        "reason": f"{why}: raced", "at": time.time()})
     _kame_event("model_switch", identity,
-                reason=f"slower than usual: {entry.get('label', 'the next model')} answered first, "
+                reason=f"{why}: {entry.get('label', 'the next model')} answered first, "
                        f"{_fmt_duration(time.monotonic() - race.started[0])} after the request")
 
 
@@ -5640,6 +6291,7 @@ _KAME_SLOW_FIRST_S = 120.0
 _KAME_SLOW_MAX_S = 600.0
 _KAME_BUSY_UNTIL = {}
 _KAME_BUSY_WINDOW = {}
+_KAME_BUSY_KIND = {}      # identity -> "busy" (the provider said so) or "slow" (no first word)
 #: "Automatic" switch: about three times the usual first word, within these.
 _KAME_AUTO_SWITCH_MIN_S = 6.0
 _KAME_AUTO_SWITCH_MAX_S = 20.0
@@ -5686,7 +6338,7 @@ def _kame_busy_failure(identity, key, kind, status=None) -> bool:
     return False
 
 
-def _kame_note_busy(identity, first=None, ceiling=None) -> None:
+def _kame_note_busy(identity, first=None, ceiling=None, kind="busy") -> None:
     """Open, or double, the busy (or slow) window. It doubles when the model is caught
     again within one window of the last one ending, not only 30 s."""
     first = _KAME_BUSY_FIRST_S if first is None else first
@@ -5699,6 +6351,10 @@ def _kame_note_busy(identity, first=None, ceiling=None) -> None:
             if (window and now < until + max(_KAME_BUSY_FIRST_S, window)) else first
         _KAME_BUSY_WINDOW[identity] = window
         _KAME_BUSY_UNTIL[identity] = now + window
+        _KAME_BUSY_KIND[identity] = kind    # 1.8.2.9: the page says busy or slow
+        # 1.8.2.9: the failure that proves a model busy is its last ask; it is asked again
+        # on the probe clock (`_KAME_PROBE_EVERY_S`), not once per key round trip.
+        _KAME_PROBED_AT[identity] = now
 
 
 def _kame_is_busy(identity, busy_keys) -> bool:
@@ -5780,26 +6436,56 @@ def _kame_can_switch(ctx) -> bool:
 _KAME_NO_SWITCH = object()
 
 
-async def _kame_switch_model(owner, ctx, reason, cause=None):
+def _kame_walk_arm(ctx, tried_any=None) -> None:
+    """The 1.8.2.8 delay before the list is walked again (30 s after a walk that asked a
+    model, 5 s after one that asked none). 1.8.2.9: only for a walk that did NOT end
+    because every model is busy or resting - that wait is the probe clock's."""
+    if tried_any is None:
+        tried_any = bool(ctx.pop("circle_tried", False))
+    ctx.pop("circle", None)
+    ctx["fallback_next_walk"] = time.monotonic() + (_KAME_FALLBACK_RETRY_S if tried_any else 5.0)
+
+
+async def _kame_switch_model(owner, ctx, reason, cause=None, aux=None):
     """Answer this call with the next model of the list, or ``_KAME_NO_SWITCH``.
 
     Inside a call that already runs on a list model, raises ``_KameSwitchModel``
     so the outer call moves on to the entry after it.
+
+    1.8.2.9 (E1): a model known busy is not built, asked or counted unless it is due another
+    look and this call wins the claim (the request IS the probe). A walk that ends only
+    because every model is busy, resting or just failed sets ``ctx["circle"]`` instead of
+    arming the 30 s delay: the carousel then waits on the probe clock. ``aux`` (E7) is a
+    background job that stopped: it walks the list once with what is left of its budget.
     """
+    ctx.pop("circle", None)
+    ctx.pop("circle_tried", None)
     if _KAME_FALLBACK_HOP.get() is not None:
-        if _kame_main(ctx) and _kame_nothing_shown(ctx):
+        if aux is None and _kame_main(ctx) and _kame_nothing_shown(ctx):
             raise _KameSwitchModel(reason, cause)
         return _KAME_NO_SWITCH
-    if not _kame_can_switch(ctx):
+    if aux is None:
+        if not _kame_can_switch(ctx):
+            return _KAME_NO_SWITCH
+    elif not (_KAME_FALLBACK_MODELS and _kame_switch_on() and not _KAME_CAROUSEL_DISABLED
+              and ctx.get("entry_name")):
         return _KAME_NO_SWITCH
     now_m = time.monotonic()
-    if now_m < ctx.get("fallback_next_walk", 0.0):
+    if aux is None and now_m < ctx.get("fallback_next_walk", 0.0):
         return _KAME_NO_SWITCH
     origin = ctx["identity"]
     tried_any = False
+    blocked = False     # busy, resting or just failed: waiting on the probe clock helps
+    other = False       # could not be built, or an ordinary error: the 1.8.2.8 delay applies
     for entry in list(_KAME_FALLBACK_MODELS):
         ident = entry["identity"]
-        if now_m < _KAME_FALLBACK_SKIP.get(ident, 0.0):
+        now_m = time.monotonic()
+        now_t = time.time()
+        if _kame_skip_left(ident, now_m) > 0:
+            blocked = True
+            continue
+        if not _kame_probe_due(ident, now_t):
+            blocked = True      # known busy and asked a moment ago: no request, no model built
             continue
         try:
             model = _kame_fallback_model(owner, entry)
@@ -5807,27 +6493,43 @@ async def _kame_switch_model(owner, ctx, reason, cause=None):
             _kame_event("surfaced", ident, reason="fallback model could not be built: skipped",
                         detail=f"{type(exc).__name__}: {exc}")
             _KAME_FALLBACK_SKIP[ident] = now_m + 300.0
+            other = True
             continue
         ident = _kame_identity_of(model)
-        if ident == origin or now_m < _KAME_FALLBACK_SKIP.get(ident, 0.0):
+        if ident == origin:
+            continue
+        if _kame_skip_left(ident, now_m) > 0:
+            blocked = True
             continue
         try:
             keys = _get_all_api_keys(model)
         except Exception:
             keys = []
         if not _kame_entry_usable(ident, keys):
+            blocked = True
             continue
         method = getattr(model, ctx["entry_name"], None)
         if method is None:
             continue
+        probe = False
+        if _kame_busy_state(ident, now_t)[0]:
+            if not _kame_claim_probe(ident, now_t):
+                blocked = True   # another conversation took this model's ask
+                continue
+            probe = True
+            _kame_ledger("circle")
         tried_any = True
         kwargs = dict(ctx.get("kwargs") or {})
         # The previous answer's provider-side state belongs to the configured
         # model; the fallback model reads the whole conversation instead.
         kwargs.pop("previous_response_id", None)
         kwargs.pop("responses_input_items", None)
-        _kame_event("model_switch", origin, reason=f"{reason}: answering with {entry['label']}")
-        token = _KAME_FALLBACK_HOP.set({"origin": origin, "to": ident})
+        if aux is None:
+            _kame_event("model_switch", origin, reason=f"{reason}: answering with {entry['label']}")
+        hop = {"origin": origin, "to": ident, "probe": probe}
+        if aux is not None:
+            hop["aux"] = dict(aux)
+        token = _KAME_FALLBACK_HOP.set(hop)
         try:
             result = await method(
                 system_message="", user_message="", messages=list(ctx["messages"]),
@@ -5837,7 +6539,10 @@ async def _kame_switch_model(owner, ctx, reason, cause=None):
                 rate_limiter_callback=ctx.get("rate_limiter_callback"),
                 **kwargs)
         except _KameSwitchModel as exc:
-            _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
+            blocked = True
+            # A model now known busy is on the probe clock; any other reason keeps the 30 s skip.
+            if aux is None and not _kame_busy_state(ident, time.time())[0]:
+                _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
             _kame_event("model_switch", ident, reason=f"{entry['label']} cannot answer either ({exc.reason}): next")
             continue
         except Exception as exc:
@@ -5845,12 +6550,17 @@ async def _kame_switch_model(owner, ctx, reason, cause=None):
                 raise
             if (ctx.get("progress") or {}).get("any") or (ctx.get("progress") or {}).get("reasoning"):
                 raise  # it started answering, then failed: that error is the answer
-            _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
+            if aux is None:
+                _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
+            other = True
             _kame_event("surfaced", ident, reason=f"{entry['label']} failed: next model",
                         code=_evidence_status(exc), detail=str(exc))
             continue
         finally:
             _KAME_FALLBACK_HOP.reset(token)
+        if aux is not None:
+            _kame_event("model_switch", origin, reason=f"{reason}: answered by {entry['label']}")
+            return result
         with _KAME_LOCK:
             _KAME_SPEED_STATS["model_switches"] += 1
             _KAME_LAST_MODEL_SWITCH.clear()
@@ -5860,8 +6570,346 @@ async def _kame_switch_model(owner, ctx, reason, cause=None):
             PrintStyle.warning(f"[KAME] Chat|{ctx.get('model_short', '')} ↪ answered by "
                                f"{entry['label']} ({reason})")
         return result
-    ctx["fallback_next_walk"] = time.monotonic() + (_KAME_FALLBACK_RETRY_S if tried_any else 5.0)
+    if aux is not None:
+        return _KAME_NO_SWITCH
+    if blocked and not other:
+        ctx["circle"] = True
+        ctx["circle_tried"] = tried_any
+    else:
+        _kame_walk_arm(ctx, tried_any)
     return _KAME_NO_SWITCH
+
+
+def _kame_start_probe_allowed(ctx, identity) -> bool:
+    """1.8.2.9 (E2): at the start of a conversation reply, a busy best model that is due another
+    look is asked on its best key AT THE SAME TIME as the first free model of the list: whoever
+    speaks first is shown. True only when everything below holds; then the ask is claimed (one
+    per busy model per 20 s across every conversation) and the race is prepared on ``ctx``."""
+    try:
+        if ctx.get("call_type") != "Chat" or not _kame_main(ctx) or not _kame_nothing_shown(ctx):
+            return False
+        if _kame_hedge_mode() == "off" or _KAME_MODEL_SWITCH == "never" or _KAME_CAROUSEL_DISABLED:
+            return False
+        if not _KAME_FALLBACK_MODELS or _KAME_FALLBACK_HOP.get() is not None or not _kame_cross_allowed(ctx):
+            return False
+        now = time.time()
+        if not _kame_busy_state(identity, now)[0] or not _kame_probe_due(identity, now):
+            return False
+        reasoning = _kame_reasoning_call(ctx)
+        slow = _kame_slow_number(ctx, identity, reasoning) or 30.0
+        first = _kame_cross_entry(ctx, identity, reasoning, slow)
+        if not first:
+            return False
+        entry = first[0][0]
+        if not _kame_claim_probe(identity, now):
+            return False
+        entry_busy = _kame_busy_state(entry["identity"], now)[0]
+        if entry_busy and not _kame_claim_probe(entry["identity"], now):
+            return False
+        ctx["probe_primary"] = True
+        ctx["probe_cross"] = [(entry, 0.0)]
+        ctx["probe_cross_claimed"] = bool(entry_busy)
+        return True
+    except Exception:
+        return False
+
+
+def _kame_claim_entry(entry, now=None):
+    """``False`` when the list model is not busy (just ask it), ``True`` when it is busy and this
+    call won the claim (the request is the probe), ``None`` when another conversation took it."""
+    now = time.time() if now is None else now
+    if not _kame_busy_state(entry["identity"], now)[0]:
+        return False
+    return True if _kame_claim_probe(entry["identity"], now) else None
+
+
+def _kame_free_entry_outside(ctx, identity, race, now=None):
+    """The first list model that could still answer and is not in this race, or None."""
+    now = time.time() if now is None else now
+    now_m = time.monotonic()
+    hop = _KAME_FALLBACK_HOP.get()
+    taken = [e for e in race.cross_legs.values()]
+    for entry in _KAME_FALLBACK_MODELS:
+        if _kame_names_match(entry["identity"], identity):
+            continue
+        if any(_kame_names_match(entry["identity"], t["identity"]) for t in taken):
+            continue
+        if _kame_skip_left(entry["identity"], now_m) > 0:
+            continue
+        if hop and entry["identity"] == hop.get("origin"):
+            continue
+        if not _kame_entry_free(entry["identity"], None, now):
+            continue
+        return entry
+    return None
+
+
+async def _kame_circle_step(owner, ctx, identity, all_keys, last_exc=None, last_kind=""):
+    """1.8.2.9 (E1): every model of ``[best] + the list`` is busy or resting. Instead of asking the
+    best model's next key at once (dozens of asks a minute), wait on the probe clock, say so on the
+    status line, then ask the best model first - one request - and the list after it. Returns a
+    result when a list model answered, or ``None`` when the caller should ask the best model now."""
+    since = ctx.setdefault("circle_since", time.time())
+    while True:
+        if _KAME_MAX_TOTAL_WAIT_S > 0 and time.time() - since >= _KAME_MAX_TOTAL_WAIT_S:
+            _kame_status_line(ctx, None)
+            _kame_event("surfaced", identity,
+                        reason=f"stopped waiting after {_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} "
+                               "(max_total_wait_seconds)")
+            if last_exc is not None:
+                raise _kame_with_retry_hint(last_exc, last_kind)
+            raise RuntimeError(
+                f"KAME: every model is busy; stopped waiting after "
+                f"{_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} (max_total_wait_seconds). "
+                "They come back on their own; retrying later will very likely succeed.")
+        crossing = _kame_cross_allowed(ctx)
+        began = time.monotonic()
+        waited = 0.0
+        due, label = _kame_circle_due_in(ctx, primary_only=not crossing)
+        try:
+            while due > 0 and waited < _KAME_PROBE_EVERY_S:
+                _kame_flight_wait(ctx, since, due)
+                _kame_status_line(ctx, f"waiting on {label} - busy, asked again {_kame_in_words(due)}")
+                piece = min(1.0, due + 0.05)
+                await asyncio.sleep(piece)
+                waited += piece
+                await _kame_honor_intervention()
+                due, label = _kame_circle_due_in(ctx, primary_only=not crossing)
+        except BaseException:
+            # review M1: a stop or a new message in the middle of the wait gives Agent Zero's words back
+            _kame_status_line(ctx, None)
+            raise
+        _kame_status_line(ctx, None)
+        # The best model first: one ask, one key.
+        if _kame_claim_probe(identity):
+            ctx["circle_probe"] = True
+            _kame_ledger("circle")
+            ctx.pop("circle", None)
+            ctx.pop("circle_tried", None)
+            return None
+        if crossing:
+            switched = await _kame_switch_model(owner, ctx, "your provider is busy", last_exc)
+            if switched is not _KAME_NO_SWITCH:
+                return switched
+            if not ctx.get("circle"):
+                return None        # the walk armed its own delay: the best model's keys go on
+        if time.monotonic() - began < 1.0:
+            await asyncio.sleep(1.0)   # nothing was askable and no time passed: never spin
+            await _kame_honor_intervention()
+
+
+# --- v1.8.2.9 (E7): background jobs get a budget ----------------------------------------
+
+class KameAuxTimeout(TimeoutError):
+    """A background job (chat naming, memory, compression ...) used up its budget. Agent Zero
+    catches every such call and goes on without it; the keys are kept for the chat."""
+
+
+_KAB = _kame_optional("kame_aux")
+_KAME_AUX_UNBOUNDED = False            # KAME_AUX_UNBOUNDED=1 brings 1.8.2.8 back
+_KAME_AUX_MEMO = {}                    # (identity, class) -> wall time until which a stopped job answers "stopped"
+_KAME_AUX_ROUND_S = 10.0               # an important job starts a new pass over the keys at most this often
+_KAME_AUX_STOPPED = collections.Counter()   # task -> jobs stopped, for the readout
+
+
+def set_aux_unbounded(raw) -> None:
+    """KAME_AUX_UNBOUNDED=1 (environment): background calls wait like the chat, as in 1.8.2.8."""
+    global _KAME_AUX_UNBOUNDED
+    flag = _kame_flag(raw)
+    if flag is not None:
+        _KAME_AUX_UNBOUNDED = flag
+
+
+#: Agent Zero's own jobs by the function that makes the call (nearest frame wins).
+_KAME_AUX_FRAMES = {
+    "generate_name": "title_generation", "change_name": "title_generation",
+    "search_memories": "memory_recall",
+    "_extract_search_keywords": "memory_consolidation",
+    "_analyze_memory_consolidation": "memory_consolidation",
+    "summarize_messages": "compression", "summarize": "compression",
+    "_compact_single_pass": "compression", "_compact_large_history": "compression",
+    "_kame_summarize_messages": "compression", "_kame_bulk_summarize": "compression",
+    "document_qa": "document_query", "_answer_questions_from_content": "document_query",
+    "_run_check": "infection_check",
+}
+#: `memorize` exists in two extensions; the module that holds it says which job it is.
+_KAME_AUX_MEMORIZE = {"_50_memorize_fragments": "memorize_fragments",
+                      "_51_memorize_solutions": "memorize_solutions"}
+
+
+def _kame_aux_task():
+    """``(task, known)`` of the background call running now, read from the call stack the same way
+    `_kame_is_main_chat` reads it. A job nobody recognises is ``("utility", False)``: it is NOT
+    budgeted (review H2) - only the frames of the table were read and are known to catch the
+    stop; an agent tool, a mail handler or a third-party plugin may not, and would end a turn."""
+    try:
+        import sys as _sys
+        frame = _sys._getframe(1)
+    except Exception:
+        return "utility", False
+    depth = 0
+    while frame is not None and depth < 80:
+        name = frame.f_code.co_name
+        task = _KAME_AUX_FRAMES.get(name)
+        if task:
+            return task, True
+        if name == "memorize":
+            where = f"{frame.f_globals.get('__name__', '')} {frame.f_code.co_filename}"
+            for stem, job in _KAME_AUX_MEMORIZE.items():
+                if stem in where:
+                    return job, True
+        frame = frame.f_back
+        depth += 1
+    if "Compress" in (_KAME_CALL_CONTEXT.get() or ""):
+        return "compression", True
+    return "utility", False
+
+
+class _KameAux:
+    """What one background call has spent: requests and seconds."""
+
+    def __init__(self, budget, task, known):
+        self.budget, self.task, self.known = budget, task, known
+        self.started = time.monotonic()
+        self.requests = 0           # the requests that count toward a cosmetic job's cap
+        self.sent = 0               # the requests really sent, for the words (review N2)
+        self.round_at = self.started    # when the job's latest pass over the keys began (review N6)
+        self.paced = False
+        self.busy_last = False      # review H1: the last attempt ended on the provider's "busy"
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def remaining(self) -> float:
+        return max(0.0, self.budget.total_s - self.elapsed())
+
+    def spent(self) -> bool:
+        # review N6: an important job is bounded by TIME (total_s), not by a count of requests or of
+        # waits; only chat naming keeps its few requests
+        capped = self.budget.klass == "cosmetic" and self.requests >= self.budget.max_requests
+        return capped or self.elapsed() >= self.budget.total_s
+
+
+def _kame_aux_begin(ctx):
+    """The budget of this call, or ``None`` for the chat, for ``KAME_AUX_UNBOUNDED``, when the
+    module is missing and for a job the stack does not name (review H2). Sets ``ctx["aux_task"]``
+    and ``ctx["aux_known"]`` for every background call, and ``ctx["aux"]`` for a budgeted one."""
+    if _KAME_AUX_UNBOUNDED or _KAB is None or _KAME_CAROUSEL_DISABLED or _kame_main(ctx):
+        return None
+    task, known = _kame_aux_task()
+    ctx["aux_task"], ctx["aux_known"] = task, known
+    if not known:
+        return None     # review H2: a job nobody vetted keeps the 1.8.2.8 wait (no budget, still no backups)
+    budget = _KAB.budget_for(task, known, None, _KAME_MAX_TOTAL_WAIT_S)
+    hop = _KAME_FALLBACK_HOP.get()
+    carried = hop.get("aux") if hop else None
+    if carried:     # a stopped job asking the list: what is left of the same budget
+        budget = _KAB.Budget(budget.klass, max(_KAB.FLOOR_S, float(carried["deadline"]) - time.monotonic()),
+                             max(1, int(carried["requests"])), budget.may_wait)
+    aux = _KameAux(budget, task, known)
+    ctx["aux"] = budget
+    return aux
+
+
+async def _kame_aux_stop(owner, ctx, aux, identity, memo=True, walk=True, rest=False):
+    """A background job is over budget. An important one goes down KAME's own list once with what
+    is left of its budget (the summary matters more than the wait); a cosmetic one never does.
+    Otherwise say so and raise `KameAuxTimeout`. The stop is remembered for 30 s (the next call of the
+    same class is turned away without a request). An important job writes that memo only when the stop
+    found every key resting past what was left of its budget (``rest``, review N1/H1): a busy provider
+    or a spent request count says nothing about the keys, and the next important job must be asked."""
+    hop = _KAME_FALLBACK_HOP.get()
+    if hop is not None and hop.get("aux"):
+        raise _KameSwitchModel("background job budget spent")
+    klass = aux.budget.klass
+    if walk and klass == "important" and aux.budget.may_wait:
+        switched = await _kame_switch_model(
+            owner, ctx, "background job stopped", None,
+            aux={"deadline": time.monotonic() + max(_KAB.FLOOR_S, aux.remaining()),
+                 "requests": max(1, aux.budget.max_requests - aux.requests)})
+        if switched is not _KAME_NO_SWITCH:
+            return switched
+    elapsed = aux.elapsed()
+    if memo:
+        if rest or klass != "important":
+            _KAME_AUX_MEMO[(identity, klass)] = time.time() + _KAB.MEMO_S
+        with _KAME_LOCK:
+            _KAME_AUX_STOPPED[aux.task] += 1
+        _kame_event("gave_up", identity, reason=(
+            f"background job {aux.task} stopped after {aux.sent} tries in {int(elapsed)}s - "
+            "its keys are kept for your chat"))
+    raise KameAuxTimeout(_KAB.stop_message(aux.task, _kame_model_label(identity), aux.sent, elapsed))
+
+
+# --- v1.8.2.9 (E8): where the quota went -------------------------------------------------
+
+_KAME_REQUESTS = {}          # hour -> {identity: [main, side]}
+_KAME_REQUEST_TASKS = {}     # hour -> {(identity, task): n}   (background requests only)
+
+
+def _kame_count_request(ctx, identity=None, now=None) -> None:
+    """One request sent to a model, counted as the chat's (`main`) or a background job's (`side`).
+    Counts only; never a key, a prompt or an answer. Never raises."""
+    try:
+        now = time.time() if now is None else now
+        identity = identity or ctx.get("identity") or ""
+        main = _kame_main(ctx)
+        task = ctx.get("aux_task") or ("chat" if main else "utility")
+        hour = int(now // 3600)
+        with _KAME_LOCK:
+            row = _KAME_REQUESTS.setdefault(hour, {}).setdefault(identity, [0, 0])
+            row[0 if main else 1] += 1
+            if not main:
+                tasks = _KAME_REQUEST_TASKS.setdefault(hour, {})
+                tasks[(identity, task)] = tasks.get((identity, task), 0) + 1
+            for table in (_KAME_REQUESTS, _KAME_REQUEST_TASKS):
+                for old in [h for h in table if h < hour - 24]:
+                    table.pop(old, None)
+    except Exception:
+        pass
+
+
+def quota_use_view(now=None) -> dict:
+    """The last 24 hours of requests per model: ``{since, models: {identity: {main, side, tasks}},
+    stopped, suggestion}`` (the Hermes `quota_use` shape)."""
+    now = time.time() if now is None else now
+    horizon = now - 24 * 3600.0
+    models = {}
+    with _KAME_LOCK:
+        for hour, rows in _KAME_REQUESTS.items():
+            if (hour + 1) * 3600 <= horizon:
+                continue
+            for identity, (main, side) in rows.items():
+                row = models.setdefault(identity, {"main": 0, "side": 0, "tasks": {}})
+                row["main"] += main
+                row["side"] += side
+        for hour, rows in _KAME_REQUEST_TASKS.items():
+            if (hour + 1) * 3600 <= horizon:
+                continue
+            for (identity, task), n in rows.items():
+                row = models.setdefault(identity, {"main": 0, "side": 0, "tasks": {}})
+                row["tasks"][task] = row["tasks"].get(task, 0) + n
+        stopped = {task: n for task, n in _KAME_AUX_STOPPED.items() if n}
+    since = max(_KAME_STARTED_AT, horizon)
+    return {"since": since, "models": models, "stopped": stopped,
+            "suggestion": _kame_quota_suggestion(models, since)}
+
+
+def _kame_quota_suggestion(models, since):
+    """One read-only sentence, or ``None`` (see `kame_aux.suggest`). The best model is the one that
+    has both chat and background requests; the model named is always one of the owner's own list."""
+    try:
+        if _KAB is None or not _KAME_FALLBACK_MODELS:
+            return None
+        ranked = sorted((row["side"], ident) for ident, row in models.items()
+                        if row.get("main") and row.get("side"))
+        if not ranked:
+            return None
+        primary = ranked[-1][1]
+        chain = [e["identity"] for e in _KAME_FALLBACK_MODELS]
+        return _KAB.suggest(models, primary, chain, lambda ident: _kame_model_label(ident), since)
+    except Exception:
+        return None
 
 
 #: v1.8.2.7 (Hermes 1.8.2.6 "still waiting"): every call KAME is running, so
@@ -5893,6 +6941,23 @@ def speed_report() -> dict:
     out["hedge_mode"] = _KAME_HEDGE_MODE
     out["fallback_models"] = [dict(e) for e in _KAME_FALLBACK_MODELS]
     out["failover_after_seconds"] = _KAME_FAILOVER_AFTER_S
+    # 1.8.2.9 (Hermes `_speed_view`): the mode in force, what it may spend, where Faster is
+    # stepped back, and what the last hour really spent.
+    mode = _kame_hedge_mode()
+    out["mode"] = mode
+    out["cap_pct"] = 0
+    out["paused_until"] = {}
+    out["hour"] = {"replies": 0, "backup": 0, "race": 0, "burst": 0, "circle": 0, "extra_pct": None}
+    out["since_start"] = dict(out["hour"])
+    if _KH is not None:
+        try:
+            balanced, faster = _KH.speed_multipliers(_KH.SETTINGS.get("hedge_budget_pct", 10.0))
+            out["cap_pct"] = {"off": 0, "adaptive": round((balanced - 1.0) * 100),
+                              "max": round((faster - 1.0) * 100)}.get(mode, 0)
+            out["paused_until"] = _KH.HEDGE_TRACKER.faster_paused_until()
+            out.update(_KH.SPEED_LEDGER.view())
+        except Exception:
+            pass
     return out
 
 
@@ -5922,6 +6987,7 @@ async def _kame_carousel(self, ctx):
 
     _call_started_at = time.perf_counter()
     st = _KameSleepState()          # sleep_count + cooldown_overhead_s + log throttles
+    st.ctx = ctx                    # 1.8.2.9: the status line belongs to this call
     _empty_counts = {}              # v1.0.6: per-key empty-answer count this call
     _empty_budget = _KAME_EMPTY_RETRY_BUDGET
 
@@ -5938,6 +7004,7 @@ async def _kame_carousel(self, ctx):
     _denied = {}            # key -> status, for keys that refused this model on this call
     _busy_keys = set()      # v1.8.2.8: keys that failed on the provider's side (busy)
     _busy_noted = [False]   # the busy window opened once per call
+    _aux_walked = False     # 1.8.2.9 review H1: an important job tried the list once while the model was busy
 
     def _absorb_race(skip=None):
         """The refusals a race judged on its own legs feed the 'every key refused'
@@ -5959,23 +7026,50 @@ async def _kame_carousel(self, ctx):
             # provider's answer too; a busy model moves after the first round.
             if _kame_busy_failure(identity, _rk, _rkind, _rsc):
                 _busy_keys.add(_rk)
-        if len(_busy_keys) >= 2 and not _busy_noted[0]:
+        if len(_busy_keys) >= 2 and not _busy_noted[0] and not ctx.get("probe_noted"):
             _busy_noted[0] = True
             _kame_note_busy(identity)
         _fl = ctx.get("flight")
         if judged and isinstance(_fl, dict):
             _fl["refusals"] = int(_fl.get("refusals") or 0) + len([j for j in judged if j[0] != skip])
 
+    # 1.8.2.9 (E7): a background call (title, memory, compression ...) has a budget; the chat has none.
+    _aux = _kame_aux_begin(ctx)
+    if _aux is not None:
+        _memo_until = _KAME_AUX_MEMO.get((identity, _aux.budget.klass), 0.0)
+        if _memo_until > time.time() and _KAME_FALLBACK_HOP.get() is None:
+            # the host's own retry of a job that was just stopped costs no request
+            await _kame_aux_stop(self, ctx, _aux, identity, memo=False, walk=False)
+        _gone = (not _pool_has_ready_key(identity, all_keys)) and _next_recovery_seconds(identity, all_keys) is not None
+        _back_in = _next_recovery_seconds(identity, all_keys) if _gone else 0.0
+        if _gone and (not _aux.budget.may_wait or (_back_in or 0.0) > _aux.remaining()):
+            _stopped = await _kame_aux_stop(self, ctx, _aux, identity, rest=True)
+            return _stopped
+
     # v1.8.2.8 (owner, live test on Hermes): every reply starts on the best
     # model; one KAME still knows busy (inside its busy window) is passed down
     # the list at once, without spending a request on it.
-    if _KAME_MODEL_SWITCH != "never" and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0):
-        _switched = await _kame_switch_model(self, ctx, "your provider is busy", None)
-        if _switched is not _KAME_NO_SWITCH:
-            return _switched
+    # 1.8.2.9 (E2): when the best model is due another look it is asked beside the first free
+    # model of the list, whoever speaks first is shown; (E1) a list call that IS a probe goes on.
+    _hop_now = _KAME_FALLBACK_HOP.get()
+    if (_KAME_MODEL_SWITCH != "never" and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0)
+            and not (_hop_now and _hop_now.get("probe"))):
+        if not _kame_start_probe_allowed(ctx, identity):
+            _switched = await _kame_switch_model(self, ctx, "your provider is busy", None)
+            if _switched is not _KAME_NO_SWITCH:
+                return _switched
+            if ctx.get("circle"):
+                _switched = await _kame_circle_step(self, ctx, identity, all_keys)
+                if _switched is not None:
+                    return _switched
 
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
+        if attempt_no > 1:
+            for _flag in ("probe_primary", "probe_cross", "probe_noted"):
+                ctx.pop(_flag, None)             # the start probe is the first attempt only
+        if _aux is not None and _aux.spent():
+            return await _kame_aux_stop(self, ctx, _aux, identity)
 
         # v1.8.2.7: a call running on a model of the fallback list is bounded.
         # Without this, a storm of short refusals there (busy server, 1 s each)
@@ -6008,12 +7102,34 @@ async def _kame_carousel(self, ctx):
             _thr = _kame_switch_threshold(identity, ctx)
             _waited = time.perf_counter() - _call_started_at
             _busy_now = _KAME_MODEL_SWITCH != "never" and _kame_is_busy(identity, _busy_keys)
+            if _aux is not None:
+                # 1.8.2.9 (E7): a background job waits for a key only when that fits its budget.
+                if (not _aux.budget.may_wait) or (_eta_fo or 0.0) > _aux.remaining():
+                    return await _kame_aux_stop(self, ctx, _aux, identity, rest=True)
+                if not _aux.paced and not _aux.busy_last:     # busy has its own cadence (N3)
+                    # review N6: a new pass over the keys does not begin sooner than _KAME_AUX_ROUND_S
+                    # after the last one began (the job waits, it does not stop)
+                    _aux.paced = True
+                    _gap = _KAME_AUX_ROUND_S - (time.monotonic() - _aux.round_at)
+                    if _gap > 0:
+                        if _gap >= _aux.remaining():
+                            return await _kame_aux_stop(self, ctx, _aux, identity)
+                        await asyncio.sleep(_gap)
             if _thr > 0 and (_busy_now or _eta_fo is None or _eta_fo > _thr or _waited + (_eta_fo or 0) > _thr):
                 _switched = await _kame_switch_model(
                     self, ctx, "your provider is busy" if _busy_now else "every key resting", _last_exc)
                 if _switched is not _KAME_NO_SWITCH:
                     _kame_wait_notice_finish(st, "resumed")
                     return _switched
+                if ctx.get("circle"):
+                    if _busy_now:
+                        # 1.8.2.9 (E1): every model is busy: wait on the probe clock, not on the keys
+                        _switched = await _kame_circle_step(self, ctx, identity, all_keys, _last_exc, _last_kind)
+                        if _switched is not None:
+                            _kame_wait_notice_finish(st, "resumed")
+                            return _switched
+                        continue
+                    _kame_walk_arm(ctx)
             # v1.8.2.7: the bound the user set on waiting (0 = wait for ever).
             if _KAME_MAX_TOTAL_WAIT_S > 0 and st.cold_since and \
                     time.time() - st.cold_since >= _KAME_MAX_TOTAL_WAIT_S:
@@ -6046,6 +7162,15 @@ async def _kame_carousel(self, ctx):
                 _kame_wait_notice_finish(st, "stopped")
                 raise
             continue
+        # 1.8.2.9 (E10): a key is ready - the wait is over, Agent Zero's own words come back
+        # now, not when the first text arrives; and the page learns which key this call uses.
+        _kame_status_release(st)
+        if ctx.pop("race_line", None):
+            _kame_status_line(ctx, None)
+        _fl_now = ctx.get("flight")
+        if isinstance(_fl_now, dict):
+            _fl_now["attempt"] = attempt_no
+            _fl_now["key"] = _key_short_id(key)
         if _last_failed_key is not None and key != _last_failed_key:
             # v1.8.1.0: the half of the story the timeline used to miss —
             # which key took over.
@@ -6087,6 +7212,14 @@ async def _kame_carousel(self, ctx):
 
         _attempt_t0 = time.perf_counter()
         _attempt_wall = time.time()
+        _circle_probe = bool(ctx.pop("circle_probe", False))   # 1.8.2.9: this attempt IS the probe
+        if _aux is not None:
+            _aux.requests += 1       # 1.8.2.9 (E7): counts toward a cosmetic job's cap only
+            _aux.sent += 1
+            if _aux.paced:           # a new pass over the keys begins (review N6)
+                _aux.paced = False
+                _aux.round_at = time.monotonic()
+            _aux.busy_last = False
         _absorb_race()   # nothing judged before this attempt may be lost
         _kame_prepare_continuation(self, ctx, identity)
         try:
@@ -6134,6 +7267,7 @@ async def _kame_carousel(self, ctx):
             # review R4: when the next model won the race, its own call already
             # recorded the answer; nothing of it is this pool's key's.
             _by_next = bool(ctx.get("answered_by"))
+            _kame_status_release(st)     # 1.8.2.9: a line KAME wrote (a race) is Agent Zero's again
             if not _by_next:
                 _mark_key_health(identity, key, True)
                 _kame_learn_key(identity, key, ctx, _attempt_wall)
@@ -6216,6 +7350,8 @@ async def _kame_carousel(self, ctx):
                 if _switched is not _KAME_NO_SWITCH:
                     _kame_wait_notice_finish(st, "resumed")
                     return _switched
+                if ctx.get("circle"):
+                    _kame_walk_arm(ctx)   # a slow model is not the busy case: the 1.8.2.8 delay
                 e = TimeoutError(f"KAME: {e.reason}")   # nothing could take it: a timeout
                 _kame_tag(e, key, time.perf_counter() - _call_started_at)
             # v1.8.2.7 (Hermes stitching): a provider that will not continue
@@ -6363,8 +7499,24 @@ async def _kame_carousel(self, ctx):
             # _get_best_key returns EXHAUSTED_RETRY and the ETA-driven sleep takes
             # over. Net effect: near-instant failover.
             _last_kind = kind
-            if _kame_busy_failure(identity, key, kind, sc):
+            _is_busy_failure = _kame_busy_failure(identity, key, kind, sc)
+            if _is_busy_failure:
                 _busy_keys.add(key)
+                _hop_f = _KAME_FALLBACK_HOP.get()
+                if _KAME_MODEL_SWITCH != "never" and _kame_main(ctx):
+                    if (_circle_probe or ctx.get("probe_primary") or (_hop_f and _hop_f.get("probe"))):
+                        # 1.8.2.9: a probe answered "busy" is proof; the window doubles, once.
+                        if not ctx.get("probe_noted"):
+                            ctx["probe_noted"] = True
+                            _busy_noted[0] = True
+                            _kame_note_busy(identity)
+                    elif (len(_busy_keys) == 1 and not _busy_noted[0] and _hop_f is None
+                          and time.time() >= _KAME_BUSY_UNTIL.get(identity, 0.0)
+                          and _kame_is_busy(identity, _busy_keys)):
+                        # the first knock after the window said "busy" again: the window reopens
+                        # (otherwise every reply for the next half minute knocks once more)
+                        _busy_noted[0] = True
+                        _kame_note_busy(identity)
             if len(_busy_keys) >= 2 and not _busy_noted[0]:
                 _busy_noted[0] = True
                 _kame_note_busy(identity)
@@ -6397,6 +7549,15 @@ async def _kame_carousel(self, ctx):
                 if _switched is not _KAME_NO_SWITCH:
                     _kame_wait_notice_finish(st, "resumed")
                     return _switched
+                if ctx.get("circle"):
+                    if _why == "your provider is busy":
+                        # 1.8.2.9 (E1): every model is busy - the wait is the probe clock's
+                        _switched = await _kame_circle_step(self, ctx, identity, all_keys, e, kind)
+                        if _switched is not None:
+                            _kame_wait_notice_finish(st, "resumed")
+                            return _switched
+                    else:
+                        _kame_walk_arm(ctx)
             if _no_fix or _all_denied:
                 _kame_wait_notice_finish(st, "stopped")
                 _kame_event("surfaced", identity, key,
@@ -6410,6 +7571,31 @@ async def _kame_carousel(self, ctx):
                 _door_wait = max(_KAME_CLOSED_DOOR_REST_S, float(_stated_server_delay(e) or 0))
                 _kame_rest_pool_for_door(identity, all_keys, _door_wait)
                 _kame_event("wait", identity, reason=f"{_why}: every key waits", seconds=_door_wait)
+            if _aux is not None and _aux.budget.klass == "important":
+                # 1.8.2.9 review H1/N3/N6. An important job is bounded by time, not by a count: the
+                # provider's "busy" and a refusal while another key is ready cost it nothing to go on.
+                if _is_busy_failure:
+                    _aux.busy_last = True
+                    if len(_busy_keys) >= min(2, len(set(all_keys))):
+                        if not _aux_walked:
+                            # with a list of the user's own, the job does not sit out the storm: the list
+                            # is asked while the best model is proven busy (one probe clock at most), and
+                            # again at the stop (Q3)
+                            _aux_walked = True
+                            _early = await _kame_switch_model(
+                                self, ctx, "background job busy", None,
+                                aux={"deadline": time.monotonic() + max(_KAB.FLOOR_S, min(_aux.remaining(), _KAME_PROBE_EVERY_S)),
+                                     "requests": max(1, _aux.budget.max_requests - _aux.requests)})
+                            if _early is not _KAME_NO_SWITCH:
+                                return _early
+                        # N3: the job's first probe clock keeps the 1.8.2.8 cadence (a short blip costs
+                        # seconds); after that it asks on the 20 s clock
+                        if _aux.elapsed() >= _KAME_PROBE_EVERY_S:
+                            if _KAME_PROBE_EVERY_S >= _aux.remaining():
+                                return await _kame_aux_stop(self, ctx, _aux, identity)
+                            _busy_keys.clear()
+                            await asyncio.sleep(_KAME_PROBE_EVERY_S)
+                            continue
             await asyncio.sleep(0)
             continue
 
@@ -6591,6 +7777,7 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
         _flight_id = secrets.token_hex(6)
         ctx["flight"] = {"job": _job, "identity": identity, "started": time.time(),
                          "refusals": 0, "last": "", "fallback": bool(_KAME_FALLBACK_HOP.get())}
+        _kame_note_call(ctx, self, identity)
         with _KAME_LOCK:
             _KAME_IN_FLIGHT[_flight_id] = ctx["flight"]
         try:

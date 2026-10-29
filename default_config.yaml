@@ -78,8 +78,11 @@ max_total_wait_seconds: 0
 # Speed: Balanced = adaptive (default): a reply still silent after twice its model's
 # usual first-word time races a backup key, then a third; the first key that
 # starts working wins and the others are cut (about 10% extra requests, never
-# under 429 pressure, never for a prompt over ~32k tokens). max: every reply
-# races from the start. off: one key at a time, and no keys asked together.
+# under 429 pressure, never for a prompt over ~32k tokens). max (shown as
+# "Faster"): the same a notch sooner (first backup at 1.5x the usual first word)
+# with three times the budget; a good reply still sends one request, and it goes
+# back to Balanced for 10 minutes when a key of the model hits a rate limit.
+# off (Saver): one key at a time, and no keys asked together.
 # Environment override: KAME_HEDGE_MODE.
 hedge_mode: adaptive
 
@@ -227,12 +230,14 @@ kame_wait_notice: true
 share_pool_health: true
 
 # Stop writing refusals.jsonl (each refusal a provider sent, keys removed,
-# 8 MB at most, decides nothing). Default off - the recorder runs.
+# the file rotates and keeps the last ~8 MB; decides nothing). Default off - the
+# recorder runs.
 # Environment override: KAME_RECORDER_DISABLED.
 refusal_recorder_disabled: false
 
 # Stop writing calls.jsonl (one line per attempt: durations, outcome, a key
-# fingerprint - no key, prompt or answer; 4 MB at most). Default off.
+# fingerprint - no key, prompt or answer; the file rotates and keeps the last
+# ~4 MB). Default off.
 # Environment override: KAME_CALL_TIMINGS_DISABLED.
 call_timings_disabled: false
 

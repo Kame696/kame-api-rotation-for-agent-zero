@@ -1,3 +1,31 @@
+# Agent Zero 1.8.2.9 validation
+
+## Verified runtime
+
+Offline only, so far: 52 / 52 suites green (341 new 1.8.2.9 tests in 23 files). Among the new tests: a busy best model is asked at most
+once per 20 seconds across conversations; no reply waits behind two silent models; Faster sends
+one request on a good reply and steps back to Balanced after a quota refusal; a background job
+stops inside its budget; the instrument logs rotate; every number on the page and in the chip comes
+from one view; the page and the settings carry the Hermes port's shelves and words (checked
+against a frozen copy of them, `tests/fixtures/hermes_1829_ui_strings.json`); the fallback list
+editor merges in the right order and keeps lines written by hand.
+
+## Boundaries
+
+- **Not yet run on a real Agent Zero.** The native checks on pinned v2.12, v2.13 and v2.14, the
+  upgrade check against those checkouts and a session on a real server have not been run for
+  1.8.2.9. The status-line heading and the page are checked in tests and in the sources, not on a
+  live screen.
+- **Not measured:** the cost of the reply path and the idle CPU (`tools/bench_reply_path.py`,
+  `tools/bench_status.py` exist and are tested offline; their numbers have not been taken). This
+  version claims no speed-up and no saving there.
+- The speed words give the most a day may spend at the default budget; what a given day spent is
+  on the page ("Extra requests this hour").
+- Hermes items with no Agent Zero twin: the fallback-list reach warning, reading YAML without
+  PyYAML, the Gemini signature check on cross-model legs (reasons in `CHANGELOG.md`).
+
+---
+
 # Agent Zero 1.8.2.8 validation
 
 ## Verified runtime

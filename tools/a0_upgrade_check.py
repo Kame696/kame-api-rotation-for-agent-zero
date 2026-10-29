@@ -239,15 +239,101 @@ HOST_FACTS = (
                "floor silently stop lifting and A0's own limit applies again.",
     },
     {
-        "id": "the notification manager can still push a live toast",
-        "file": "helpers/notification.py",
-        "needle": ["def send_notification", "PROGRESS", "mark_dirty_all"],
+        "id": "the chat's 'Calling LLM...' log item is still kept where KAME writes the wait",
+        "file": "extensions/python/before_main_llm_call/_10_log_for_stream.py",
+        "needle": ["log_item_generating", "Calling LLM..."],
         "severity": "degraded",
-        "why": "v1.6.0.1 narrates a wait through a PROGRESS notification with a "
-               "stable id, which updates in place and is pushed over the "
-               "WebSocket. Without it the wait is only said at ninety seconds, "
-               "in the chat — which is where it was said before, and why nobody "
-               "ever saw it.",
+        "why": "1.8.2.9. The wait is said on the chat's own status line: the heading of the log item "
+               "this extension creates and keeps in loop_data.params_temporary. If it is renamed or "
+               "gone, KAME falls back to the log's progress line and, without that too, says nothing "
+               "- it never raises, and rotation is untouched.",
+    },
+    {
+        "id": "a log item's heading can still be updated in place",
+        "file": "helpers/log.py",
+        "needle": ["class LogItem", "def update(", "heading: str | None = None"],
+        "severity": "degraded",
+        "why": "1.8.2.9. LogItem.update(heading=...) is how the status line carries the wait and "
+               "gives Agent Zero's own words back. Without it the wait is only in the chip.",
+    },
+    {
+        "id": "the log still has a progress line to fall back on",
+        "file": "helpers/log.py",
+        "needle": "def set_progress(",
+        "severity": "note",
+        "why": "1.8.2.9. Log.set_progress is the status line's second choice when a host has no "
+               "'Calling LLM...' item (a task runner). Missing it costs nothing else.",
+    },
+    {
+        "id": "loop_data still carries the temporary params the status line reads",
+        "file": "agent.py",
+        "needle": "params_temporary",
+        "severity": "degraded",
+        "why": "1.8.2.9. agent.loop_data.params_temporary is where the 'Calling LLM...' item lives, "
+               "and Agent Zero clears it every iteration, so the line is written for the call in flight.",
+    },
+    {
+        "id": "the chat call is still named call_chat_model (the status line finds its agent there)",
+        "file": "agent.py",
+        "needle": "async def call_chat_model(",
+        "severity": "degraded",
+        "why": "1.8.2.9. KAME reads the agent of a chat call off the call stack (self of call_chat_model / "
+               "call_chat_model_turn) so a subordinate agent writes its own A1 line. A rename leaves "
+               "the status line to the agent stashed at monologue start.",
+    },
+    {
+        "id": "the model-settings store can still search models (optional)",
+        "file": "plugins/_model_config/webui/model-config-store.js",
+        "needle": ["searchModelsDetailed", "ensureLoaded"],
+        "severity": "note",
+        "why": "1.8.2.9. The fallback-model editor searches models with Agent Zero's own picker. "
+               "Absent on older hosts: the editor degrades to plain inputs.",
+    },
+    {
+        "id": "chat naming is still made by generate_name (a cosmetic background job)",
+        "file": "plugins/_chat_naming/helpers/naming.py",
+        "needle": "async def generate_name(",
+        "severity": "note",
+        "why": "1.8.2.9. KAME names a background call by the function on the stack. This is the one "
+               "that never waits and never asks more than 3 times in 30 s; renamed, it is budgeted "
+               "as an important job instead.",
+    },
+    {
+        "id": "memory recall and memorize are still named search_memories / memorize",
+        "file": "plugins/_memory/extensions/python/message_loop_prompts_after/_50_recall_memories.py",
+        "needle": "async def search_memories(",
+        "severity": "note",
+        "why": "1.8.2.9. Background-job names for the budget (memory_recall; memorize_fragments and "
+               "memorize_solutions are told apart by the extension's module name).",
+    },
+    {
+        "id": "memory consolidation is still named _analyze_memory_consolidation",
+        "file": "plugins/_memory/helpers/memory_consolidation.py",
+        "needle": ["async def _extract_search_keywords(", "async def _analyze_memory_consolidation("],
+        "severity": "note",
+        "why": "1.8.2.9. Background-job names for the budget (memory_consolidation).",
+    },
+    {
+        "id": "history compression is still named summarize / summarize_messages / _compact_*",
+        "file": "plugins/_chat_compaction/helpers/compactor.py",
+        "needle": ["async def _compact_single_pass(", "async def _compact_large_history("],
+        "severity": "note",
+        "why": "1.8.2.9. Background-job names for the budget (compression; summarize_messages and "
+               "summarize live in helpers/history.py and are patched by name too).",
+    },
+    {
+        "id": "document queries are still named document_qa",
+        "file": "plugins/_document_query/helpers/document_query.py",
+        "needle": ["async def document_qa(", "async def _answer_questions_from_content("],
+        "severity": "note",
+        "why": "1.8.2.9. Background-job names for the budget (document_query).",
+    },
+    {
+        "id": "the infection check is still named _run_check",
+        "file": "plugins/_infection_check/helpers/checker.py",
+        "needle": "async def _run_check(",
+        "severity": "note",
+        "why": "1.8.2.9. Background-job names for the budget (infection_check).",
     },
     {
         "id": "the WebUI plugin slot the rotation chip lives in still exists",
@@ -284,20 +370,20 @@ HOST_FACTS = (
                "event says so) and KAME waits for the configured model as before.",
     },
     {
-        "id": "the central menu still has the slot the KAME panel entry lives in",
+        "id": "the central menu still has the slot the API Rotation entry lives in",
         "file": "webui/components/sidebar/top-section/quick-actions.html",
         "needle": "sidebar-quick-actions-dropdown-start",
         "severity": "degraded",
         "why": "1.8.2.7. The KAME entry in the central menu (like Memory and Time "
                "Travel). Without it the panel is still reachable from the chip's "
-               "'Open the KAME panel' button.",
+               "'Open API Rotation' button.",
     },
     {
         "id": "modals can still be opened by path",
         "file": "webui/js/modals.js",
         "needle": "globalThis.ensureModalOpen",
         "severity": "degraded",
-        "why": "1.8.2.7. Both doors into the KAME panel call ensureModalOpen.",
+        "why": "1.8.2.7. Both doors into the API Rotation page call ensureModalOpen.",
     },
     {
         "id": "a raised model error still ends the task",

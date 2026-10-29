@@ -48,6 +48,7 @@ INCLUDE_FILES = (
     "kame_latency.py",
     "kame_region.py",
     "kame_stitch.py",
+    "kame_aux.py",
     "kame_journal.py",
     "kame_settings.py",
     "kame_keys.py",

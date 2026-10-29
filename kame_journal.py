@@ -12,13 +12,19 @@ so one reader (``tools/a0_expected_gate.py``, the corpus tools) reads both:
 ``refusals.jsonl``
     One line per refusal a provider sent: status, type, code, message, body and
     an allowlisted header block, **redacted before it touches disk**. Decides
-    nothing. Stops at 8 MB. Off with ``refusal_recorder_disabled`` /
-    ``KAME_RECORDER_DISABLED``.
+    nothing. Rotates at 4 MB (``refusals.1.jsonl`` keeps the previous 4 MB).
+    Off with ``refusal_recorder_disabled`` / ``KAME_RECORDER_DISABLED``.
 
 ``calls.jsonl``
     One line per attempt: durations, outcome, rest, a key fingerprint. No key,
-    no prompt, no answer text. Stops at 4 MB. Off with
-    ``call_timings_disabled`` / ``KAME_CALL_TIMINGS_DISABLED``.
+    no prompt, no answer text. Rotates at 2 MB (``calls.1.jsonl`` keeps the
+    previous 2 MB). Off with ``call_timings_disabled`` /
+    ``KAME_CALL_TIMINGS_DISABLED``.
+
+Both logs rotate instead of stopping (1.8.2.9): until 1.8.2.8 a log that reached
+its ceiling went quiet without a word. Now the current file and ONE previous
+generation are kept, the disk total is what it was, and every rotation and every
+failure prints one console line.
 
 ``pool-health.json``
     Holds that survive restarting Agent Zero. Keyed by a hash of the key, never
@@ -53,8 +59,12 @@ PLUGIN_NAME = "api_rotation_by_kame"
 REFUSALS_FILE = "refusals.jsonl"
 CALLS_FILE = "calls.jsonl"
 HEALTH_FILE = "pool-health.json"
-REFUSALS_CEILING = 8 * 1024 * 1024
-CALLS_CEILING = 4 * 1024 * 1024
+#: 1.8.2.9: the size at which a log rotates. Current + one previous generation
+#: are kept, so the disk total is the old 8 MB / 4 MB.
+REFUSALS_CEILING = 4 * 1024 * 1024
+CALLS_CEILING = 2 * 1024 * 1024
+#: The size is looked at on the first write after start and then every this many.
+_CHECK_EVERY = 64
 
 # Switches. Set by the engine's setters; read on every write.
 RECORDER_ON = True
@@ -221,9 +231,11 @@ SETTING = "setting"
 MODEL_SWITCH = "model_switch"
 #: 1.8.2.7: a backup request (a slow first word) or keys asked together (a dry pool).
 BACKUP = "backup"
+#: 1.8.2.9: a background job used up its budget and was stopped (its keys are kept for the chat).
+GAVE_UP = "gave_up"
 _KINDS = frozenset({ROTATION, SWITCH, QUARANTINE, INVALID_KEY, DENIED_MODEL,
                     STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING,
-                    MODEL_SWITCH, BACKUP})
+                    MODEL_SWITCH, BACKUP, GAVE_UP})
 GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP})
 #: 1.8.2.7: which job an event belongs to. `chat` is the conversation; the
 #: others are Agent Zero's background calls (memory, titles, summaries).
@@ -298,8 +310,6 @@ _HEADER_DENY_MARKERS = ("authorization", "api-key", "apikey", "cookie", "secret"
 _OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_\-\.]{40,}$")
 _HEX_TOKEN = re.compile(r"^[0-9a-f]{24,}$", re.I)
 _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")
-_refusals_silenced = False
-_calls_silenced = False
 
 
 def _safe_attr(obj: Any, name: str) -> Any:
@@ -364,18 +374,102 @@ def _safe_text(value: Any, limit: int = 20000) -> str:
     return _redact_corpus(str(value))[:limit]
 
 
+_APPEND_LOCK = threading.Lock()
+_WRITES: Dict[str, int] = {}
+#: What is already failing, so a failure that repeats on every row is said once.
+_FAILING: set = set()
+_BLOCKED: set = set()       # logs past twice their ceiling that could not be rotated (review L3)
+
+
+def previous_name(name: str) -> str:
+    """``calls.jsonl`` -> ``calls.1.jsonl``: the one previous generation of a log."""
+    stem, dot, ext = name.rpartition(".")
+    return f"{stem}.1.{ext}" if dot else f"{name}.1"
+
+
+def generations(name: str) -> List[Path]:
+    """The files that hold ``name``'s rows and exist, OLDEST FIRST.
+
+    Every reader (``first_word_history``, ``tools/speed.py``) goes through this, so
+    none of them can miss the rows a rotation moved to the previous generation.
+    """
+    found: List[Path] = []
+    for each in (previous_name(name), name):
+        path = _path(each)
+        try:
+            if path is not None and path.is_file():
+                found.append(path)
+        except OSError:
+            pass
+    return found
+
+
+def _say(line: str) -> None:
+    """One console line. Never raises."""
+    try:
+        print(f"[KAME] {line}", flush=True)
+    except Exception:
+        pass
+
+
+def _failed(name: str, what: str, exc: BaseException) -> None:
+    """Say a failure once; it is said again only after the thing worked in between."""
+    token = f"{name}:{what}"
+    if token in _FAILING:
+        return
+    _FAILING.add(token)
+    detail = (f"{type(exc).__name__}: {exc}")[:160]
+    _say(f"{name} could not {what} ({detail})")
+
+
+def _rotate_if_full(name: str, path: Path, ceiling: int) -> bool:
+    """Move a full log to its previous generation. False when it is past twice its
+    ceiling and could not be rotated: that row is dropped, the disk stays bounded."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return True              # not there yet
+    if size < ceiling:
+        return True
+    try:
+        os.replace(str(path), str(path.with_name(previous_name(name))))
+    except Exception as exc:
+        _failed(name, "rotate", exc)
+        return size < 2 * ceiling
+    _FAILING.discard(f"{name}:rotate")
+    _say(f"{name} rotated ({size / (1024 * 1024):.1f} MB)")
+    return True
+
+
 def _append(name: str, ceiling: int, row: Dict[str, Any]) -> bool:
-    """Append one JSON line; False when the ceiling is reached or nothing can be written."""
+    """Append one JSON line, rotating first when the file has reached ``ceiling``.
+
+    The size is looked at on the first write after start and then every
+    ``_CHECK_EVERY`` writes, so a row costs one ``open`` and no ``stat``. False only
+    when nothing could be written (no data directory, a failed write, or a log that
+    cannot be rotated and has grown to twice its ceiling); the reason was said on
+    the console, once.
+    """
     path = _path(name)
     if path is None:
         return False
-    try:
-        if path.exists() and path.stat().st_size >= ceiling:
+    with _APPEND_LOCK:
+        count = _WRITES.get(name, 0)
+        _WRITES[name] = count + 1
+        # review L3: a log that could not be rotated past twice its ceiling is looked at on every
+        # write until a rotation works again, so the 63 writes between two checks cannot grow it
+        if count % _CHECK_EVERY == 0 or name in _BLOCKED:
+            if not _rotate_if_full(name, path, ceiling):
+                _BLOCKED.add(name)
+                return False
+            _BLOCKED.discard(name)
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            _failed(name, "write", exc)
             return False
-    except OSError:
-        pass
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _FAILING.discard(f"{name}:write")
     return True
 
 
@@ -384,9 +478,8 @@ def record_refusal(*, identity: str = "", key: str = "", exc: Any = None,
                    kind: str = "", rest: Optional[float] = None,
                    sized_by: str = "") -> None:
     """Write one refusal down. Decides nothing, never raises."""
-    global _refusals_silenced
     try:
-        if _refusals_silenced or not RECORDER_ON:
+        if not RECORDER_ON:
             return
         provider, _, model = str(identity or "").partition(":")
         row: Dict[str, Any] = {
@@ -408,9 +501,7 @@ def record_refusal(*, identity: str = "", key: str = "", exc: Any = None,
         headers = safe_headers(_raw_headers(exc))
         if headers:
             row["headers"] = headers
-        if not _append(REFUSALS_FILE, REFUSALS_CEILING, row):
-            if data_dir() is not None:
-                _refusals_silenced = True
+        _append(REFUSALS_FILE, REFUSALS_CEILING, row)
     except Exception:
         pass
 
@@ -442,28 +533,29 @@ def first_word_history(now: Optional[float] = None) -> Dict[str, List[float]]:
     """
     now = time.time() if now is None else now
     out: Dict[str, Deque[float]] = {}
-    path = _path(CALLS_FILE)
-    if path is None or not path.is_file():
-        return {}
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if row.get("outcome") != "ok":
-                    continue
-                ms = row.get("ms_to_first_sign") or row.get("ms_to_first_text")
-                at = row.get("at")
-                identity = row.get("identity")
-                if not identity or not isinstance(ms, (int, float)) or ms <= 0:
-                    continue
-                if isinstance(at, (int, float)) and now - at > HISTORY_MAX_AGE_S:
-                    continue
-                out.setdefault(identity, deque(maxlen=HISTORY_PER_IDENTITY)).append(ms / 1000.0)
-    except OSError:
-        pass
+    # 1.8.2.9: the previous generation first, so "oldest first" holds across a rotation.
+    for path in generations(CALLS_FILE):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if row.get("outcome") != "ok":
+                        continue
+                    if row.get("channel") == "secondary":
+                        continue   # 1.8.2.9: a background job's first word says nothing about the chat's
+                    ms = row.get("ms_to_first_sign") or row.get("ms_to_first_text")
+                    at = row.get("at")
+                    identity = row.get("identity")
+                    if not identity or not isinstance(ms, (int, float)) or ms <= 0:
+                        continue
+                    if isinstance(at, (int, float)) and now - at > HISTORY_MAX_AGE_S:
+                        continue
+                    out.setdefault(identity, deque(maxlen=HISTORY_PER_IDENTITY)).append(ms / 1000.0)
+        except OSError:
+            continue
     return {identity: list(samples) for identity, samples in out.items()}
 
 
@@ -475,11 +567,13 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
                 elapsed_before_s: Optional[float] = None,
                 pool_waited_before_s: Optional[float] = None,
                 rest_s: Optional[float] = None, rest_source: str = "",
-                call_id: str = "") -> None:
-    """One attempt, as durations. Never a key, a prompt or an answer."""
-    global _calls_silenced
+                call_id: str = "", channel: str = "main", task: str = "chat") -> None:
+    """One attempt, as durations. Never a key, a prompt or an answer.
+
+    1.8.2.9: ``channel`` is ``main`` (the conversation) or ``secondary`` (a background job of Agent
+    Zero), and ``task`` names the job (``chat`` for the conversation)."""
     try:
-        if _calls_silenced or not TIMINGS_ON:
+        if not TIMINGS_ON:
             return
         start = started_at if started_at is not None else ended_at
         row: Dict[str, Any] = {
@@ -489,6 +583,8 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
             "identity": str(identity or ""),
             "key": fingerprint(key),
             "attempt": int(attempt or 0),
+            "channel": "secondary" if channel == "secondary" else "main",
+            "task": str(task or ("chat" if channel != "secondary" else "utility"))[:40],
             "outcome": str(outcome or ""),
             "kind": str(kind or ""),
             "status": status if isinstance(status, int) and not isinstance(status, bool) else None,
@@ -502,9 +598,7 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
             row["rest_s"] = round(float(rest_s), 1)
             if rest_source:
                 row["rest_source"] = str(rest_source)
-        if not _append(CALLS_FILE, CALLS_CEILING, row):
-            if data_dir() is not None:
-                _calls_silenced = True
+        _append(CALLS_FILE, CALLS_CEILING, row)
     except Exception:
         pass
 
@@ -770,13 +864,15 @@ def forget_holds() -> ForgetHoldsResult:
 
 
 def _reset_for_tests() -> None:
-    global _HEALTH_LOADED, _HEALTH_DIRTY, _HEALTH_LAST_WRITE, _refusals_silenced, _calls_silenced
+    global _HEALTH_LOADED, _HEALTH_DIRTY, _HEALTH_LAST_WRITE
     with _HEALTH_LOCK:
         _HEALTH.clear()
         _ACCOUNT_HEALTH.clear()
         _HEALTH_LOADED = False
         _HEALTH_DIRTY = False
         _HEALTH_LAST_WRITE = 0.0
-    _refusals_silenced = False
-    _calls_silenced = False
+    with _APPEND_LOCK:
+        _WRITES.clear()
+        _FAILING.clear()
+        _BLOCKED.clear()
     EVENTS.clear()

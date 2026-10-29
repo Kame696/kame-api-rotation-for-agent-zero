@@ -53,9 +53,10 @@ SETTINGS: Dict[str, tuple] = {
     "hedge_mode": (
         "choice", "adaptive", None, None, ("off", "adaptive", "max"), "KAME_HEDGE_MODE",
         "Speed",
-        "Balanced: a reply still silent after twice its usual wait races a backup "
-        "key (about 10% extra requests). Fastest: every reply races. Saver: one "
-        "key at a time."),
+        "Saver: one key at a time. Balanced: a reply still silent after twice its "
+        "usual wait races a backup key. Faster: the same a notch sooner, with "
+        "three times the budget; it goes back to Balanced for 10 minutes when one "
+        "of the model's keys hits a rate limit. The buttons show what each costs."),
     "hedge_max_legs": (
         "number", 3, 1, 3, None, "",
         "Most keys raced for one reply",
@@ -183,12 +184,14 @@ SETTINGS: Dict[str, tuple] = {
         "flag", False, None, None, None, "KAME_RECORDER_DISABLED",
         "Stop recording refusals",
         "KAME writes each refusal to refusals.jsonl in usr/plugin-data, keys "
-        "removed, 8 MB at most. It decides nothing from it."),
+        "removed, and keeps the last ~8 MB (the file rotates). It decides nothing "
+        "from it."),
     "call_timings_disabled": (
         "flag", False, None, None, None, "KAME_CALL_TIMINGS_DISABLED",
         "Stop timing calls",
         "One line per attempt to calls.jsonl: durations, outcome, a key "
-        "fingerprint. No key, no prompt, no answer. 4 MB at most."),
+        "fingerprint. No key, no prompt, no answer. Keeps the last ~4 MB (the "
+        "file rotates)."),
     "kame_log_level": (
         "choice", "normal", None, None, ("silent", "normal", "verbose", "verbose+errors"), "",
         "Log verbosity",
@@ -207,8 +210,9 @@ SETTINGS: Dict[str, tuple] = {
         "During an outage, repeats become one line every ~20s."),
     "kame_wait_notice": (
         "flag", True, None, None, None, "KAME_LIVE_STATUS_DISABLED (inverted)",
-        "Say so in the chat when every key rests",
-        "A live notification at ~15s and a chat line at ~90s."),
+        "Say on the status line what KAME waits for",
+        "The chat's own status line ('A0: Calling LLM...') says which model or key KAME waits "
+        "for and when the next one is back. Off: the line stays as Agent Zero writes it."),
     "kame_unusable_response_limit": (
         "number", 5, 0, 100, None, "",
         "Floor for Agent Zero's unusable-response limit",
@@ -216,13 +220,63 @@ SETTINGS: Dict[str, tuple] = {
         "KAME raises its limit to at least this. 0 leaves it alone."),
 }
 
-#: 1.8.2.7: on the settings page for everybody. The rest is advanced.
-VISIBLE = ("fallback_models", "model_switch", "failover_after_seconds",
-           "hedge_mode", "first_token_wait", "stream_silence_timeout_seconds", "reply_notice",
-           "kame_wait_notice", "kame_log_level")
+#: 1.8.2.9 (U4): the shelves of the settings page, ``(id, title, note, keys)``, in the order they
+#: are shown. Hermes' five, with its titles and notes word for word, and one more after "Rest
+#: times" for what exists only in Agent Zero. Hermes' ``never_fall_back_to_another_model`` has no
+#: twin here: in Agent Zero the list is KAME's, and "Never" already means it.
+GROUPS = (
+    ("extra", "If your model cannot answer",
+     "When your provider is busy, every key of your model is resting, or a reply takes too long.",
+     ("model_switch", "failover_after_seconds", "reply_notice", "max_total_wait_seconds")),
+    ("speed", "Speed",
+     "How KAME keeps answers fast. Already tuned; the first two are the ones worth knowing.",
+     ("hedge_mode", "first_token_wait", "stream_silence_timeout_seconds", "hedge_max_legs",
+      "probe_burst_max_legs", "hedge_budget_pct", "hedge_burst", "hedge_quantile", "hedge_cold_s",
+      "hedge_cold_reasoning_s", "hedge_max_prompt_tokens")),
+    ("keyring", "Your API keys",
+     "One key per account (for Gemini, one per Google project): every key brings its own quota, "
+     "and KAME rotates between them.",
+     ("share_pool_health", "pacing_rpm_overrides", "key_region_overrides")),
+    ("tuning", "Rest times (advanced)",
+     "How long a refused key sits out. The provider's own numbers always win; these are the "
+     "fallbacks and ceilings.",
+     ("daily_quota_cooldown_seconds", "max_hold_seconds", "unsized_throttle_backoff",
+      "unsized_throttle_rest_seconds", "unsized_backoff_max_seconds", "stream_resume_limit")),
+    ("agentzero", "Agent Zero log and chat",
+     "How KAME talks in Agent Zero's chat line and log. These exist only in the Agent Zero version.",
+     ("kame_wait_notice", "kame_log_level", "key_log_style", "kame_log_full_errors",
+      "kame_collapse_storm_logs", "kame_unusable_response_limit")),
+    ("off", "Troubleshooting: turn parts of KAME off",
+     "Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding "
+     "out whether KAME is behind a problem. Leave them alone unless something is wrong.",
+     ("rotation_disabled", "spread_disabled", "carousel_disabled", "hedging_disabled",
+      "stream_stitch_disabled", "refusal_recorder_disabled", "call_timings_disabled")),
+)
+
+_GROUP_OF = {key: group for group, _title, _note, keys in GROUPS for key in keys}
+_GROUP_OF["fallback_models"] = "fallback"        # edited in its own tab, not on this shelf list
+_UNGROUPED = "tuning"                            # as in Hermes: a wrong shelf is a small confusion
+
+
+def group_of(name: str) -> str:
+    """Which shelf one setting belongs on."""
+    return _GROUP_OF.get(name, _UNGROUPED)
+
+
+def groups() -> tuple:
+    """The shelves for a panel that has to title and explain each one."""
+    return tuple({"id": g, "title": t, "note": n, "keys": list(k), "folded": g == "off",
+                  "shows_fallback": g == "extra", "shows_keys": g == "keyring"}
+                 for g, t, n, k in GROUPS)
+
+
+#: 1.8.2.9: on the settings page for everybody - the first two of each shelf, the way Hermes
+#: splits basic from advanced. The rest is under "Show advanced settings"; a changed one is
+#: never hidden. The fallback list has its own tab.
+VISIBLE = tuple(key for _g, _t, _n, keys in GROUPS if _g != "off" for key in keys[:2])
 #: 1.8.2.8: what each choice is called on screen, in the order it is shown.
 CHOICE_LABELS = {
-    "hedge_mode": (("off", "Saver"), ("adaptive", "Balanced"), ("max", "Fastest")),
+    "hedge_mode": (("off", "Saver"), ("adaptive", "Balanced"), ("max", "Faster")),
     "model_switch": (("auto", "Automatic"), ("timed", "Set time"), ("never", "Never")),
     "first_token_wait": (("auto", "Automatic"), ("timed", "Set time"), ("off", "Off")),
     "reply_notice": (("always", "Every reply"), ("switches", "Only another model"), ("never", "Never")),
@@ -241,6 +295,91 @@ TROUBLESHOOTING = ("rotation_disabled", "spread_disabled", "carousel_disabled",
 LEGACY_NUMBER = {
     "model_switch": ("failover_after_seconds", 60.0, "never"),
     "first_token_wait": ("stream_silence_timeout_seconds", 0.0, "off"),
+}
+
+
+#: 1.8.2.9: the speed words are Hermes' (settings.py `choice_labels_now`, `choice_help_now`,
+#: `CHOICE_FOOTNOTE`), text for text; none of the sentences names the host.
+HEDGE_MODE = "hedge_mode"
+_HEDGE_BUDGET_PCT = "hedge_budget_pct"
+
+
+def _hedging():
+    """The speed module (its live numbers, its formula), or None when it is missing."""
+    for qualified in ("usr.plugins.api_rotation_by_kame.kame_hedging", "kame_hedging"):
+        try:
+            import importlib
+
+            return importlib.import_module(qualified)
+        except Exception:
+            continue
+    return None
+
+
+def live_budget_pct() -> float:
+    """The backup budget in force now (the engine sets it in ``kame_hedging``), else the default."""
+    module = _hedging()
+    try:
+        return float(module.SETTINGS[_HEDGE_BUDGET_PCT])
+    except Exception:
+        return float(default(_HEDGE_BUDGET_PCT))
+
+
+def speed_multipliers(pct: Optional[float] = None) -> Tuple[float, float]:
+    """``(Balanced, Faster)``: the most requests per reply each mode may use over a day.
+
+    Balanced ``1 + pct/100``, Faster ``1 + min(100, 3 x pct)/100``; Saver is always 1x. ``pct`` is
+    the backup budget (``hedge_budget_pct``); omitted, the one in force now.
+    """
+    pct = live_budget_pct() if pct is None else pct
+    module = _hedging()
+    if module is not None:
+        return module.speed_multipliers(pct)
+    pct = float(pct)
+    return 1.0 + pct / 100.0, 1.0 + min(100.0, 3.0 * pct) / 100.0
+
+
+def _times(value: float) -> str:
+    """``1.1`` -> ``1.1x``; ``2.0`` -> ``2x``."""
+    text = f"{value:.1f}"
+    return (text[:-2] if text.endswith(".0") else text) + "x"
+
+
+def choice_labels_now(name: str, pct: Optional[float] = None) -> Dict[str, str]:
+    """The words each choice is shown with, by stored value. Speed carries what it costs."""
+    labels = dict(CHOICE_LABELS.get(name, ()))
+    if name == HEDGE_MODE:
+        balanced, faster = speed_multipliers(pct)
+        labels = {
+            "off": "Saver · 1x",
+            "adaptive": f"Balanced · up to {_times(balanced)}",
+            "max": f"Faster · up to {_times(faster)}",
+        }
+    return labels
+
+
+def choice_help_now(name: str, pct: Optional[float] = None) -> Dict[str, str]:
+    """One plain sentence per choice, shown under the buttons for the chosen one."""
+    if name != HEDGE_MODE:
+        return {}
+    balanced, faster = speed_multipliers(pct)
+    b_pct = round((balanced - 1.0) * 100)
+    f_pct = round((faster - 1.0) * 100)
+    return {
+        "off": "One request per reply, never more: the cheapest, and a slow reply simply waits.",
+        "adaptive": ("A second key races only a reply that is slower than twice its usual time, "
+                     f"so over a day it uses at most about {b_pct}% more requests."),
+        "max": ("Races a little sooner and more often, at most about "
+                f"{f_pct}% more requests, and goes back to Balanced by itself for 10 minutes "
+                "whenever one of that model's keys hits a rate limit."),
+    }
+
+
+#: 1.8.2.9. One line under the speed buttons (not for Saver): what the percentages leave out.
+CHOICE_FOOTNOTE: Dict[str, str] = {
+    HEDGE_MODE: ("Balanced and Faster may also race your next model when a reply is already about 3x "
+                 "slower than usual, and ask several keys at once when a model runs out of quota - "
+                 "the counter below shows what was really spent."),
 }
 
 

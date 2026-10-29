@@ -1,5 +1,112 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.2.9 — A page you can read, the wait said on the chat line, back to your best model, speed in plain words, side jobs on a budget (2026-10-28)
+
+**In short:** the owner used 1.8.2.8 on a real Agent Zero and said what he saw: a pop-up per error
+whose numbers disagreed ("120.3h" in the title, "~45m" in the text; "1 of 1 keys" while the chip
+said "4 of 6 resting"), a menu entry called "KAME", and a page that was hard to read. 1.8.2.9 fixes
+those first, then brings over what the Hermes port learned in its 1.8.2.9: going back to your
+best model, speed in plain words, a budget for background jobs, no reply stuck behind two silent
+models.
+
+**What you see first**
+
+- **No pop-up any more.** When KAME waits for a key, the chat's own status line ("Calling
+  LLM...") says what it waits for and how long is left, and the chip above the message box says
+  the same. The wait is told as the time left, in words (never "120.3h"), and the count is of
+  physical keys, the same number on the status line, the chip and the page. The chat line KAME
+  added after 90 seconds of waiting is gone as well; how long a wait has lasted is on the page,
+  under Details, as "waiting since 14:02".
+- **The menu entry and the page are called "API Rotation".** The page opens on three plain
+  sentences (what is happening, is anything wrong, what happens next), then one ring per model
+  in the order of your fallback list with one segment per key (shape as well as colour), "What
+  KAME did" (repeats are grouped: "6 times, every hour"), and the three settings you reach for.
+  Every older card is folded under "Details"; only the thin bar is gone, because the ring says
+  the same. Click a ring to see that model's keys, with **Wake this model** (its keys start
+  again as if never tried; nothing is deleted) and **Try this model now**.
+- **Four models on one dead key are one row,** not four: the page and the chip list the key once
+  with the models that use it.
+- **The settings are on the shelves of the Hermes port** (If your model cannot answer, Speed,
+  Your API keys, Rest times, then one shelf only Agent Zero has, then Troubleshooting), with the
+  same names and sentences; the page, the chip and the native Settings screen agree.
+- **Your fallback models are edited in rows** on their own tab: a provider, a model name with
+  Agent Zero's own model search, an X to remove, "+ Add fallback model". A row that is not
+  complete is not saved; a line you wrote by hand (with its `@ api_base`) is kept as it is.
+
+**What KAME does differently**
+
+- **Back to your best model.** When your model is busy and everything after it is busy too, KAME
+  no longer asks the busy model again and again with each key: it asks the first model of
+  `[your model] + your list` that is due, one request at a time, a busy model at most every 20
+  seconds across all conversations. Unlike the Hermes port (where the host owns the move
+  between providers) any model of your list may be used, as in 1.8.2.8. When a reply starts and
+  your best model is known busy and due another look, the reply still starts on the next model
+  at once, and the best model is asked beside it; if it answers first it is shown. At most 3
+  extra requests a minute per busy model, and only while replies are flowing.
+- **No reply behind two silent models.** Each raced model keeps the reply waiting only to its own
+  late point, never longer than 1.8.2.8 waited; at the slow bound one more model of your list
+  joins instead of everything starting over; and when every model that could answer is already
+  racing, nothing is cut.
+- **Speed in plain words.** Saver · 1x, Balanced · up to 1.1x, Faster · up to 1.3x, with a
+  sentence under the buttons (the numbers follow `hedge_budget_pct`). The stored values (`off`,
+  `adaptive`, `max`) are unchanged.
+- **Faster replaces Fastest.** A reply that goes well sends one request (Fastest sent a second one
+  at the first instant of every reply). The first backup goes out at 1.5 times the model's usual
+  first word, from a budget three times Balanced's, and a rate-limit or quota refusal on that
+  model puts it back to Balanced for 10 minutes. A configuration that said `max` now gets
+  Faster, which spends less.
+- **Extra requests this hour,** as a percentage of replies, next to what your setting allows.
+- **Background jobs get a budget.** Agent Zero's utility model names the chat, recalls and stores
+  memories, compresses history and answers questions about documents. Until now each of those
+  inherited the chat's endless wait and its backup races, so one chat title could ask a busy
+  model dozens of times. Now naming a chat sends at most 3 requests in 30 seconds and never waits
+  for a resting key; every other named job is bounded by time, not by a count of requests: it
+  stops after 5 minutes (or sooner when every key rests longer than that). While your keys are
+  limited it starts a new pass over them at most every 10 seconds, so a one-minute limit window
+  still ends with the real result (as in 1.8.2.8) with no more requests than 1.8.2.8, a few seconds later at worst; for its first 20 seconds
+  against a busy ("overloaded", 503) model it keeps the 1.8.2.8 pace, after that it asks twice per
+  20 seconds. A job that cannot start well sends none. A job KAME does not recognise (an agent
+  tool, a mail handler, another plugin) keeps the 1.8.2.8 wait. No background job sends backup or race requests. A job
+  that stops with a timeout-shaped error is carried on by Agent Zero as for any failed job; an
+  important one (not naming) goes down your fallback list when your best model is busy, and again
+  before it gives up. Your conversation keeps
+  its wait, `max_total_wait_seconds` included. Setting `KAME_AUX_UNBOUNDED=1` in the environment
+  brings the 1.8.2.8 behaviour back.
+- **Where your quota went.** The journal says which job sent each request; the first page shows a
+  line under a ring when background jobs are 10% or more of a model's requests, Details has a
+  card with the split and the jobs stopped early, and when they take 15% or more of your best
+  model the page says in words which model of YOUR list Agent Zero's Utility model could use.
+  KAME never changes Agent Zero's settings. `tools/speed.py` prints the same split.
+- **The two instrument logs rotate instead of stopping.** `calls.jsonl` and `refusals.jsonl` used to
+  stop recording, silently, at 4 MB and 8 MB. Now the current file and one previous generation
+  (`calls.1.jsonl`, `refusals.1.jsonl`) are kept, at 2 MB and 4 MB each, and one line in the
+  console says when a log rotates or cannot be written.
+
+**Extra requests your provider may bill.** Some of what makes KAME fast sends a request beyond
+the one you asked for: a backup key for a slow first word, the next model racing a slow reply,
+one more model joining at the slow bound, and the occasional ask of a busy best model (at most 3
+a minute). Saver sends no backup key, no race and no start-time ask of the best model; the "Extra
+requests this hour" line on the page shows what was really spent. Background jobs never send
+them; an important one also goes down your list when your best model is busy, and again before it gives
+up, to another model that may be billed.
+
+**Not in this version, and why:** three Hermes items have no Agent Zero twin — the warning that
+the host's retry count cuts the fallback list (Agent Zero has no retry cap in front of KAME's
+list), reading the fallback list without PyYAML (KAME never reads YAML here), and the Google
+signature check for race (tools travel as text on the default path; cross-model legs are switched
+off where native function tools are on). No change to the error reader or the key choice.
+
+**Evidence:** offline suites 52 / 52 green (341 new 1.8.2.9 tests in 23 files). Not yet run on a real Agent Zero and not yet measured on a server: the
+cost of the reply path and the idle CPU are tools in `tools/` (`bench_reply_path.py`,
+`bench_status.py`) whose numbers have not been taken, so this release claims neither a speed-up
+nor a saving there.
+
+**Upgrading from 1.8.2.8:** nothing to change; restart Agent Zero once. Defaults that differ:
+background jobs have a budget (`KAME_AUX_UNBOUNDED=1` turns it off), a configuration that said
+`max` is now Faster, and the toast and the 90-second chat line are gone.
+
+---
+
 ## 1.8.2.8 — Your next model when the provider is busy, everything automatic, the model of each reply on screen (2026-10-17)
 
 **In short:** the owner ran four fallback models with 14 keys each, the first model kept
