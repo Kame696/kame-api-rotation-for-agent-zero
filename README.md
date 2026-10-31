@@ -85,7 +85,7 @@ A late reply is **raced** by a backup key, then by your **next model**. Whicheve
 <td width="50%" valign="top">
 
 ### 🔀 Smart model fallback
-Your best model **leads every reply**. A busy, spent or slow one hands over in seconds, and is tried first again soon after.
+The model you picked **leads every reply**. A busy, spent or slow one hands over in seconds - to your main model, then the rest of your list - and is tried first again soon after.
 
 </td>
 </tr>
@@ -113,7 +113,7 @@ On the author's own Gemini free-tier keys (4 fallback models × 14 keys), on a b
 |---|---|---|
 | Main model is **slow** (about 2 minutes for one word) | 46–120 s per reply | **2.6 s median** |
 | Main model is **overloaded** (503) | stuck on it | next model answering in **8.3 s**, then at once |
-| Main model is **out of quota** | next model, then stuck there up to 1 hour | switched in **0.3 s**, back on your best model next reply |
+| Main model is **out of quota** | next model, then stuck there up to 1 hour | switched in **0.3 s**, back on the model you picked next reply |
 | Everything **healthy** | — | your main model, first word in **2–4 s** |
 
 <sub>Measured on the Hermes build, which shares these rules; 8 messages in one session. See <a href="VALIDATION.md">validation and limits</a>.</sub>
@@ -152,7 +152,7 @@ flowchart TD
     C -->|❌ 429| G[💤 Rest that key as long<br/>as the provider says]
     G -.->|next key| B
     C -->|❌ 503 or far too slow| I[🔀 Next model of your list]
-    I --> J([🎯 The next reply starts on<br/>your best model again])
+    I --> J([🎯 The next reply starts on<br/>the model you picked again])
 
     style B fill:#10b981,color:#fff
     style OK fill:#10b981,color:#fff
@@ -167,7 +167,7 @@ flowchart TD
 <tr><td>🔑 Pick</td><td>The key with the fewest requests in the last 60 s; a key is marked busy the moment it is handed out, so parallel agents spread across keys.</td></tr>
 <tr><td>🏁 Race</td><td>Silent at about 2× the usual first word: a backup key of the same model. At about 3×: your next model also gets the request. First to answer wins.</td></tr>
 <tr><td>💤 Rest</td><td>Exactly as long as the provider says, never more than an hour. A spent key still works on your other models.</td></tr>
-<tr><td>🔀 Fallback</td><td>Your fallback models, one per line, in the KAME settings. Only models <b>you</b> listed, never after part of the reply is on screen, and every new reply starts on your best one.</td></tr>
+<tr><td>🔀 Fallback</td><td>Your fallback models, one per line, in the KAME settings. Only models <b>you</b> listed, never after part of the reply is on screen, for any model a reply starts on (that model, then your main model, then the rest of the list), and every new reply starts on the model you picked.</td></tr>
 </table>
 
 <details>
@@ -355,7 +355,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
-| **1.8.3.1** — offline suites | 69 / 69 suites green (179 new 1.8.3.1 tests, among them `tools/parity_check.py`: the settings and timings of this port and the Hermes port compared by machine). Not yet run on a real Agent Zero; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
+| **1.8.3.1** — offline suites | 69 / 69 suites green (179 new 1.8.3.1 tests, among them `tools/parity_check.py`: the settings and timings of this port and the Hermes port compared by machine). One live session on a real Agent Zero (its own model call, Gemini, 15 keys): 6 / 6 answered, each on its first key, KAME's own wait 0 ms; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
 | **1.8.3.0** — offline suites | 62 / 62 suites green (232 new 1.8.3.0 tests in 10 files, on top of the 341 of 1.8.2.9). Not yet run on a real Agent Zero; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
 | **1.8.2.9** — offline suites | 52 / 52 suites green (341 new 1.8.2.9 tests in 23 files). Never released on its own |
 | **1.8.2.7** — remote native acceptance, real Agent Zero v2.12 / v2.13 / v2.14, real LiteLLM/OpenAI SDK over local TCP | 16 / 16 CI jobs green, 23 + 27 native checks per host: a backup key answered before a slow key's 4 s; the fallback list answered through Agent Zero's own model factory when every key rested and on a closed door, and the next call went back to the configured model; the panel's API answered in the host's real plugin layout, no key in any report |
