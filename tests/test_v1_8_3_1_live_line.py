@@ -135,10 +135,12 @@ def test_the_same_state_changes_at_most_once_a_second_and_a_new_state_at_once(vt
     agent = FakeAgent()
 
     async def go():
-        for i in range(8):
+        for i in range(7):
             K._kame_write_heading(f"line {i}", ("waiting",))      # a countdown: every 0.25 s
             await asyncio.sleep(0.25)
-        K._kame_write_heading("another state", ("calling",))       # a different state is not held back
+        # A different state is not held back. It comes mid-second (1.75 s), clear of the held flush at 2 s:
+        # before Python 3.13, asyncio on Windows runs a timer up to 15.6 ms early (its clock resolution).
+        K._kame_write_heading("another state", ("calling",))
     vt.run(agent.call_chat_model(go()))
     stamps = [t for t, h in agent.item.updates if h.startswith("A0: line")]
     assert len(stamps) == 2 and stamps[1] - stamps[0] >= 0.99
