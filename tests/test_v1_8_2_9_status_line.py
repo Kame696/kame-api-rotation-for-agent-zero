@@ -23,7 +23,8 @@ from kame_vclock import vt  # noqa: F401
 import kame_engine as K
 
 ROOT = Path(__file__).resolve().parents[1]
-WAIT_45 = "A0: Calling LLM... waiting on a key to come back - 0 of 1 keys ready, next key in ~45 min"
+# 1.8.3.1 (D2): the wait is the live line's "waiting" state: the shared words, the page's duration format
+WAIT_45 = "A0: \u23f3 Every key of gemini-3.8-flash is resting \u00b7 next key in 45m 00s"
 PLAIN = "A0: Calling LLM..."
 
 
@@ -98,6 +99,7 @@ def waiting_call(vt, agent, ctx, limit):
 # --- the words -----------------------------------------------------------------------------
 
 def test_every_key_resting_45_minutes_is_said_on_the_status_line_within_two_seconds(vt):
+    # (1.8.3.1: the first write comes with the first tick; the line then counts down once a second)
     rest_all(KEYS[:1], 2700)
     agent = FakeAgent()
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
@@ -117,7 +119,9 @@ def test_the_line_counts_the_keys_of_the_model_it_waits_on_the_chip_counts_all(v
     agent = FakeAgent()
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     waiting_call(vt, agent, ctx, 3)
-    assert any("0 of 1 keys ready, next key in ~45 min" in h for h in agent.headings())
+    # 1.8.3.1 (D2): the line names the model whose keys all rest; it carries no count (the asking line does)
+    assert any("Every key of gemini-3.8-flash is resting \u00b7 next key in 45m 00s" in h for h in agent.headings())
+    assert not any("keys ready" in h for h in agent.headings() if "resting" in h)
     assert K.status_view()["totals"]["phrase"] == "1 of 2 keys ready"
 
 
@@ -130,7 +134,7 @@ def test_a_120_hour_wait_still_says_the_time_left_never_the_age(vt):
         K._kame_wait_notice_tick(st, ID, KEYS[:1], "chat", "m")
     vt.run(agent.call_chat_model(go()))
     assert agent.item.heading == WAIT_45
-    assert "120" not in agent.item.heading and "h)" not in agent.item.heading
+    assert "120" not in agent.item.heading and "h)" not in agent.item.heading and "since" not in agent.item.heading
     # ... and the age is on the page, as "waiting since", from the same call
     assert st.cold_since < time.time() - 119 * 3600
 
@@ -146,15 +150,15 @@ def test_one_formatter_for_a_time_left(seconds, words):
 def test_past_three_hours_the_clock_time_is_said_not_decimals_of_hours():
     text = K._kame_fmt_left(5 * 3600 + 7 * 60, now=time.mktime((2027, 1, 15, 9, 0, 0, 0, 0, -1)))
     assert text == "back at 14:07"
-    assert K._kame_in_words(12) == "in 12 s" and K._kame_in_words(2700, tilde=True) == "in ~45 min"
-    assert K._kame_in_words(5 * 3600, tilde=True).startswith("back at ")
-    line = K._kame_wait_line({"ready": 0, "keys": 3}, 30 * 3600)
-    assert line == "waiting on a key to come back - 0 of 3 keys ready, next key back at " + line[-5:]
+    # 1.8.3.1 (D2): the live line counts the wait down in the page's format (45m 00s, 1h 02m), never decimals
+    line = K._kame_live_line({"kind": "waiting", "model": "m", "eta_s": 30 * 3600})
+    assert line.startswith("\u23f3 Every key of m is resting \u00b7 next key in ")
     assert not re.search(r"\d\.\dh", line)
 
 
 def test_no_next_key_estimate_is_not_invented():
-    assert K._kame_wait_line({"ready": 1, "keys": 3}, None) == "waiting on a key to come back - 1 of 3 keys ready"
+    assert K._kame_live_line({"kind": "waiting", "model": "m", "eta_s": None}) == \
+        "\u23f3 Every key of m is resting - waiting for one to come back"
 
 
 # --- no toast, no chat row ------------------------------------------------------------------
@@ -204,7 +208,7 @@ def test_a_key_that_comes_back_before_any_text_gives_agent_zeros_words_back(vt):
     result = vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=120)
     assert result[0].startswith("answer from")
     headings = agent.headings()
-    assert any("waiting on a key to come back" in h for h in headings)
+    assert any("is resting" in h for h in headings)
     assert headings[-1] == PLAIN and agent.item.heading == PLAIN
 
 
@@ -213,7 +217,8 @@ def test_a_subordinate_agent_keeps_its_own_prefix(vt):
     sub = FakeAgent("A1")
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     waiting_call(vt, sub, ctx, 3)
-    assert sub.item.updates[0][1] == WAIT_45.replace("A0:", "A1:")
+    assert WAIT_45.replace("A0:", "A1:") in [h for _t, h in sub.item.updates]
+    assert all(h.startswith("A1: ") for _t, h in sub.item.updates)
     assert sub.item.updates[-1][1] == "A1: Calling LLM..."
 
 
@@ -223,7 +228,7 @@ def test_without_the_log_item_the_logs_progress_line_is_used(vt):
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     waiting_call(vt, agent, ctx, 3)
     log = agent.context.log
-    assert log.progress[0] == (WAIT_45, True)
+    assert log.progress[0] == (WAIT_45, True)       # (the same words reach the progress line)
     assert log.progress[-1] == ("", False)
 
 
@@ -252,7 +257,7 @@ def test_the_setting_off_leaves_the_heading_alone(vt):
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     waiting_call(vt, agent, ctx, 5)
     assert agent.item.updates == [] and agent.context.log.progress == []
-    assert ctx["status_text"] is None or "waiting on a key" in str(ctx["status_text"])    # the chip still knows
+    assert ctx["status_text"] is None or "is resting" in str(ctx["status_text"])    # the chip still knows
 
 
 def test_a_background_job_never_rewrites_the_chats_line(vt):
@@ -264,14 +269,14 @@ def test_a_background_job_never_rewrites_the_chats_line(vt):
     assert agent.item.updates == []
 
 
-def test_the_line_changes_at_most_every_two_seconds(vt):
-    rest_all(KEYS[:1], 30)                      # "next key in ~30 s", "~29 s" ... changes every second
+def test_the_line_changes_at_most_once_a_second(vt):
+    rest_all(KEYS[:1], 30)                      # "next key in 30s", "29s" ... changes every second
     agent = FakeAgent()
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     waiting_call(vt, agent, ctx, 12)
     stamps = [t for t, h in agent.item.updates if h != PLAIN]
-    assert 4 <= len(stamps) <= 7
-    assert all(b - a >= 1.99 for a, b in zip(stamps, stamps[1:]))
+    assert 10 <= len(stamps) <= 13              # 1.8.3.1 (D2): the page counts in seconds, so does the line
+    assert all(b - a >= 0.99 for a, b in zip(stamps, stamps[1:]))
 
 
 def test_the_same_words_are_not_written_twice(vt):
@@ -291,15 +296,17 @@ def test_a_slow_model_raced_by_the_next_one_is_said_and_given_back(world, vt):
     ctx, _ = make_ctx(streaming({k: 30.0 for k in KEYS}))
     result = vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=60)
     assert result[0] == "answer from google/gemini-3.7-flash"
-    said = [h for h in agent.headings() if "races it" in h]
-    assert said == ["A0: Calling LLM... gemini/gemini-3.8-flash is slow - gemini-3.7-flash races it"]
+    # 1.8.3.1 (D2): the cross race has no sentence of its own; the line says who is asked, and the agent's
+    # own words come back at the end
+    assert any(h.startswith("A0: \u23f3 Asking ") for h in agent.headings()), agent.headings()
     assert agent.headings()[-1] == PLAIN
 
 
 # --- the circle step uses the same words ---------------------------------------------------------
 
 def test_the_busy_best_model_line_uses_the_one_formatter():
-    assert f"asked again {K._kame_in_words(12)}" == "asked again in 12 s"
+    assert K._kame_live_line({"kind": "waiting", "model": "m", "eta_s": 12}) == \
+        "\u23f3 Every key of m is resting \u00b7 next key in 12s"
 
 
 # --- the host seams the status line stands on ----------------------------------------------------

@@ -35,7 +35,7 @@
       <div class="field">
         <div class="field-label">
           <div class="field-title">Fallback models <span style="opacity:.55;font-size:.8em">●●● High</span></div>
-          <div class="field-description">When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional <code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.</div>
+          <div class="field-description">When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional <code>@ api_base</code>. Empty: nothing ever switches. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.</div>
         </div>
         <div class="field-control"><textarea rows="4" style="width:100%;font-family:monospace" placeholder="openrouter/meta-llama/llama-4-maverick&#10;groq/llama-3.3-70b-versatile" x-model="config.fallback_models" x-init="if (config.fallback_models === undefined || config.fallback_models === null) config.fallback_models = ''"></textarea></div>
       </div>
@@ -90,14 +90,14 @@
       <div class="field">
         <div class="field-label">
           <div class="field-title">Wait for the first token <span style="opacity:.55;font-size:.8em">●●○ Medium</span></div>
-          <div class="field-description">How long a key may stay silent before KAME drops it and asks the next one. Automatic learns each model's usual first-word time and drops a key only when it is far past it (20 s at least, 60 s for thinking models); never for a model on this computer. Backup keys still race a slow reply much sooner. Set time: the seconds below. Off: no limit.<br><i>When to change it: Leave on Automatic. Set time only if a provider hangs in silence and Automatic is too patient for you.</i></div>
+          <div class="field-description">How long a key may stay silent before KAME drops it and asks the next one. Automatic learns each model's usual first-word time and drops a key only when it is far past it (20 s at least, 60 s for thinking models); never for a model on this computer. Backup keys still race a slow reply much sooner. Set time: the seconds below. Off: 120 s.<br><i>When to change it: Leave on Automatic. Set time only if a provider hangs in silence and Automatic is too patient for you.</i></div>
         </div>
         <div class="field-control"><select x-model="config.first_token_wait" x-init="if (config.first_token_wait === undefined || config.first_token_wait === null) config.first_token_wait = (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null || Number(config.stream_silence_timeout_seconds) === 0) ? 'auto' : 'timed'"><option value="auto">Automatic</option><option value="timed">Set time</option><option value="off">Off</option></select></div>
       </div>
       <div class="field" x-show="(config.first_token_wait === 'timed')">
         <div class="field-label">
           <div class="field-title">First-token wait (seconds) <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
-          <div class="field-description">Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay silent before KAME asks the next one; 60 suits most providers. 0 (default) means no limit.<br><i>When to change it: Only with 'Set time'. 60 is a safe number for most providers.</i></div>
+          <div class="field-description">Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay silent before KAME asks the next one; 60 suits most providers. 0 (default) leaves the wait at 120 s.<br><i>When to change it: Only with 'Set time'. 60 is a safe number for most providers.</i></div>
         </div>
         <div class="field-control"><input type="number" step="any" min="0" max="3600" x-model.number="config.stream_silence_timeout_seconds" x-init="if (config.stream_silence_timeout_seconds === undefined || config.stream_silence_timeout_seconds === null) config.stream_silence_timeout_seconds = 0" /></div>
       </div>

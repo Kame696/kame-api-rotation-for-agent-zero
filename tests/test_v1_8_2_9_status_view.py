@@ -22,6 +22,18 @@ GEM = ["AIzaSyVIEW-gem-one-0000000000", "AIzaSyVIEW-gem-two-0000000000"]
 OPENAI_MODELS = ["claude-sonnet-5", "deepseek-v4-pro", "gpt-5.4-nano", "kimi-k3"]
 
 
+# 1.8.3.1 (A3): the reply rows carry the facts the popover tells (an answered row with every optional field, and
+# a failed one); `back_to` is Hermes-only (its pill puts the selector back; Agent Zero has no per-reply selector)
+HERMES_ONLY_PATHS = {"replies[].back_to"}
+
+
+def SEED_REPLIES():
+    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "n", "first_s": 1.0, "total_s": 2.0, "main": {"provider": "p", "model": "m"},
+                            "why": "busy", "attempts": 2, "cut": True, "waited_s": 3.0, "backup": True})
+    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": None, "total_s": None, "failed": True,
+                            "reason": "the provider answered 503"})
+
+
 @pytest.fixture(autouse=True)
 def calm():
     K._KAME_IDENTITY_BASE.clear()
@@ -69,8 +81,8 @@ def test_every_surface_says_the_same_count():
     view = K.status_view()
     t = view["totals"]
     assert t["phrase"] == "2 of 3 keys ready"
-    # the status line is built from the same totals
-    assert t["phrase"] in K._kame_wait_line(t, 1800.0)
+    # the live line (asking) is built from the same counts: "N of M keys ready" (1.8.3.1)
+    assert t["phrase"] in K._kame_live_line({"kind": "calling", "model": "m", "ready": 2, "keys": 3})
     assert K._kame_totals_phrase(t) == t["phrase"]
     # and the old per-model sums are not what any line is built from
     assert sum(p["keys"] for p in view["pools"]) == 6 and t["keys"] == 3
@@ -199,7 +211,7 @@ def test_every_path_hermes_reads_exists_in_the_view():
     K.set_fallback_models("google/gemini-3.7-flash")
     K._KAME_PRIMARY["identity"] = "openai:gpt-5.4-nano"
     K._KJ.EVENTS.add("rotation", identity="openai:gpt-5.4-nano", key="ka5206", reason="out of credit")
-    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": 1.0, "total_s": 2.0, "main": {"provider": "p", "model": "m"}})
+    SEED_REPLIES()
     view = K.status_view()
     paths = json.loads((FIXTURES / "hermes_1829_panel_reads.json").read_text(encoding="utf-8"))["paths"]
     assert len(paths) >= 40
@@ -217,7 +229,7 @@ def test_every_path_hermes_reads_exists_in_the_view():
             return isinstance(value, list) and any(exists(item, rest) for item in value)
         return exists(value, rest)
 
-    missing = [p for p in paths if not exists(view, p)]
+    missing = [p for p in paths if p not in HERMES_ONLY_PATHS and not exists(view, p)]
     assert missing == []
 
 

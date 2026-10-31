@@ -196,7 +196,7 @@ check("A1 the toast and the ninety-second chat row are gone",
       and not hasattr(K, "_KAME_WAIT_NOTICE_AFTER_S") and not hasattr(K, "_KAME_NOTICE_TOAST_AFTER_S")
       and not hasattr(K._KameSleepState(), "notice_item") and not hasattr(K._KameSleepState(), "toast_shown"))
 check("A2 the status line is a countdown, not a flood",
-      1.0 <= K._KAME_STATUS_LINE_EVERY_S <= 10.0, str(K._KAME_STATUS_LINE_EVERY_S))
+      K._KAME_STATUS_LINE_EVERY_S == 1.0, str(K._KAME_STATUS_LINE_EVERY_S))   # 1.8.3.1 (D2): once a second
 
 _log = FakeLog()
 _agent = LineAgent(_log)
@@ -208,7 +208,8 @@ check("A3 a wait never opens a row in the chat, however long (Q2)", _log.created
 _st = cold_pool()
 tick(_st)
 check("A4 even a wait of minutes opens no row", _log.created == [])
-check("A4b ... it is on the status line", "waiting on a key to come back" in _agent.item.heading,
+check("A4b ... it is on the status line, in the live line's words (1.8.3.1)",
+      "Every key of " in _agent.item.heading and "is resting" in _agent.item.heading,
       _agent.item.heading)
 
 K.set_wait_notice(False)
@@ -245,9 +246,10 @@ _st = cold_pool(_secret_keys)
 tick(_st, _secret_keys)
 _txt = _agent.item.heading
 check("C1 no key material reaches the chat", SECRET not in _txt)
-check("C2 it says how many keys are ready, over keys", re.search(r"\b0 of 4 keys ready\b", _txt) is not None, _txt)
-check("C4 it gives the time left", re.search(r"next key in ~\d+ min", _txt) is not None, _txt)
-check("C5 it is Agent Zero's own words with KAME's after them", _txt.startswith("A0: Calling LLM... "), _txt)
+check("C2 it names the model whose keys all rest (1.8.3.1: the count lives in the asking line)",
+      re.search(r"Every key of \S+ is resting", _txt) is not None, _txt)
+check("C4 it gives the time left, in the page's format", re.search(r"next key in \d+m \d\ds", _txt) is not None, _txt)
+check("C5 it is the agent's name, then the live line", _txt.startswith("A0: ⏳ Every key of "), _txt)
 check("C6 the age of the wait is not on the line", "waited" not in _txt.lower() and "since" not in _txt.lower())
 
 

@@ -36,7 +36,7 @@ ADAPTED = {
     ("never_fall_back_to_another_model", "help"): "names the Fallback models tab instead of Hermes",
     ("never_fall_back_to_another_model", "when"): "no Hermes",
     ("never_fall_back_to_another_model", "detail"): "no `hermes fallback add`, no Hermes classification hook",
-    ("first_token_wait", "help"): "Hermes' own 120 s wait does not exist in Agent Zero",
+    ("first_token_wait", "help"): "1.8.3.1: Off is 120 s in both, but here it is KAME's own constant, not the host's wait",
     ("stream_silence_timeout_seconds", "help"): "same",
     ("stream_silence_timeout_seconds", "detail"): "same",
     ("share_pool_health", "title"): "Agent Zero has no profiles; the switch keeps holds across restarts and processes",

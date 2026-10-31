@@ -31,6 +31,8 @@ import {
   quotaShare,
   ringAria,
   ringModels,
+  replyFromRow,
+  replyLineText,
   ringSvg,
   sideJobsLine,
   speedCostLine,
@@ -43,7 +45,7 @@ const SET = "/plugins/api_rotation_by_kame/kame_settings_set";
 const ACTION = "/plugins/api_rotation_by_kame/kame_pool_action";
 const FALLBACK_SET = "/plugins/api_rotation_by_kame/kame_fallback_set";
 const MODEL_CONFIG = "/plugins/_model_config/webui/model-config-store.js";
-const REFRESH_MS = 3000;
+const REFRESH_MS = 1000;       // 1.8.3.1 (D4): as often as the Hermes panel (a status read costs ~2 ms)
 const SEARCH_DEBOUNCE_MS = 250;
 const IMPORT_RETRY_MS = 5000;
 
@@ -671,6 +673,14 @@ const model = {
   replyAgo(r) {
     return eventAgo(this.serverNowS - Number(r?.at ?? 0));
   },
+  /** One reply in the words of the chip's popover (1.8.3.1, review R16): `✓ gemini-3.8-flash answered in 2.3s`,
+   *  `↪ ... answered for ... (busy)`, `✕ no answer: it timed out` - the same renderer. */
+  replyLine(r) {
+    return replyLineText(replyFromRow(r));
+  },
+  replyClock(r) {
+    return clockOf(r?.at);
+  },
   eventAgo(e) {
     return eventAgo(this.serverNowS - Number(e?.at ?? 0));
   },
@@ -1141,7 +1151,7 @@ const model = {
       why: fb.why,
       warning: typeof fb.warning === "string" ? fb.warning : "",
       entries,
-      how: "Change this list in the Fallback models tab. Background jobs never switch model.",
+      how: "Change this list in the Fallback models tab. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.",
     };
   },
   /** "This Agent Zero process": the counters of this process, the ones that are not zero shown with what they mean. */

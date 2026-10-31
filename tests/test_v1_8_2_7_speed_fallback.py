@@ -49,6 +49,11 @@ def clean(monkeypatch):
     K._KAME_FALLBACK_SKIP.clear()
     K._KAME_FALLBACK_MODEL_CACHE.clear()
     K._KAME_LAST_MODEL_SWITCH.clear()
+    # 1.8.3.1 (review R9): a virtual-clock test leaves a 1.8e9 timestamp in the call counters and the last replies;
+    # a group run then found "000000" (a piece of a key fixture) in the status output and false-failed the key-leak test.
+    K._KAME_CALLS["last_call_at"] = 0.0
+    K._KAME_REPLIES.clear()
+    K._KAME_FAILED_ROWS.clear()
     for name in K._KAME_SPEED_STATS:
         K._KAME_SPEED_STATS[name] = 0
     H.HEDGE_TRACKER.clear()

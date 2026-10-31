@@ -195,5 +195,5 @@ def test_the_fallback_list_is_shown_inside_its_shelf_with_how_each_model_is_doin
     assert [e["n"] for e in out["entries"]] == [1, 2]
     assert out["entries"][0]["yours"] is True and out["entries"][1]["yours"] is False
     assert out["entries"][1]["state"] == "KAME has not served this model yet"
-    assert out["how"] == "Change this list in the Fallback models tab. Background jobs never switch model."
+    assert out["how"] == "Change this list in the Fallback models tab. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once."
     assert PANEL.count("fallbackList.why") == 2             # the Settings tab and the Fallback tab

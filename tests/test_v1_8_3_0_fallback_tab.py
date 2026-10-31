@@ -52,7 +52,7 @@ def test_the_shelf_does_not_offer_to_open_the_tab_it_is_on():
 def test_the_intro_names_the_main_model_rule_and_the_old_wording_is_gone():
     fallback = PANEL.split("<!-- ===== Fallback models ===== -->", 1)[1].split("<!-- ===== Events", 1)[0]
     intro = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", fallback.split("kame-fb-row", 1)[0]))
-    assert "main model" in intro and "background jobs never switch model" in intro.lower()
+    assert "main model" in intro and "background jobs are never raced and never switch on their own account" in intro.lower()
     assert "every key resting longer than the time below" not in intro
     assert "Agent Zero has no fallback list of its own" not in intro
 

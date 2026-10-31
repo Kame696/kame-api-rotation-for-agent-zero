@@ -99,7 +99,7 @@ probe_burst_max_legs: 16
 # v1.8.2.8. Wait for the first token: how long a key may stay silent before the
 # next one is asked. auto (default): learned per model, far past its usual first
 # word (20-120 s; 60-300 s for thinking models); never for a model on this
-# machine. timed: stream_silence_timeout_seconds. off: no limit.
+# machine. timed: stream_silence_timeout_seconds. off: 120 s.
 # Environment: KAME_FIRST_TOKEN_WAIT.
 first_token_wait: auto
 

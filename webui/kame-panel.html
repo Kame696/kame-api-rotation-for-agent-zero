@@ -588,8 +588,9 @@
         <div class="kame-card">
           <div class="kame-card-title">Fallback models</div>
           <div class="kame-dim kame-small">
-            These models answer when your main model cannot. A chat that runs on another model never
-            falls back, and background jobs never switch model. Empty list: nothing ever switches.
+            These models answer when the model in use cannot. If a chat runs on another model, your
+            main model is tried first, then this list in order. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.
+            Empty list: nothing ever switches.
           </div>
 
           <p class="kame-dim" x-show="!$store.kamePanel.rows.length">No fallback models yet. Click &ldquo;+ Add fallback model&rdquo; to choose the model KAME should try when yours cannot answer.</p>
@@ -663,9 +664,9 @@
           <div class="kame-dim kame-small">The model that wrote each of the last replies of your conversation (each step of a reply that uses tools is a reply of its own), the time to its first word and in total. A model from your fallback list says which model it answered for.</div>
           <template x-for="(r, i) in $store.kamePanel.replies" :key="i">
             <p class="kame-reply">
-              <span class="kame-mono" x-text="r.model"></span>
-              <span class="kame-tone-warn" x-show="r.for" x-text="'for ' + r.for"></span>
-              <span x-text="'first word ' + $store.kamePanel.replyTime(r.first_s) + ' · ' + $store.kamePanel.replyTime(r.total_s) + ' total'"></span>
+              <span class="kame-dim kame-mono" x-text="$store.kamePanel.replyClock(r)"></span>
+              <span :class="r.failed ? 'kame-tone-bad' : ''" x-text="$store.kamePanel.replyLine(r)"></span>
+              <span class="kame-dim" x-show="!r.failed && r.first_s !== null && r.first_s !== undefined" x-text="'first word ' + $store.kamePanel.replyTime(r.first_s)"></span>
               <span class="kame-dim" x-text="$store.kamePanel.replyAgo(r)"></span>
             </p>
           </template>

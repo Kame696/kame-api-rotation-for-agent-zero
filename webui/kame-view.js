@@ -763,3 +763,243 @@ export function chipSummary(data, nowMs) {
     retired: Number(totals.retired) || 0,
   };
 }
+
+// -- the live line and the chip popover (1.8.3.1, D2 / D3) ---------------------------------------
+//
+// The words below are the shared table `tests/fixtures/live_words_1831.json`, byte-identical in the Hermes
+// port: the node check runs every row through these functions.
+
+/** The one live sentence for an activity (the twin of `_kame_live_line` in the engine). Seven states, icons
+ *  included: calling, retrying, racing, standin, waiting, stitching, recovered. `phase` (`racing` /
+ *  `standin`) rides beside `kind: "calling"`. `etaSeconds` is the time left as the page counts it (null =
+ *  no estimate). `""` when there is nothing to say. */
+export function liveLineText(activity, etaSeconds) {
+  if (!activity || typeof activity !== "object") return "";
+  const kind = String(activity.phase || activity.kind || "");
+  const model = activity.name ?? activity.model ?? "";
+  const ready = activity.ready ?? activity.healthy;
+  const keys = activity.keys;
+  const counted = `${ready ?? "?"} of ${keys ?? "?"} keys ready`;
+  if (kind === "calling") {
+    const resting = (activity.attempt ?? 1) > 1 || (ready != null && keys != null && Number(ready) < Number(keys));
+    return resting ? `↻ ${model}: trying another key · ${counted}` : `⏳ Asking ${model} · ${counted}`;
+  }
+  if (kind === "racing") return `⚡ ${model} is slow to start - a backup key is asking too`;
+  if (kind === "standin") return `↪ ${model} can't answer now - ${activity.other ?? ""} is answering instead`;
+  if (kind === "waiting") {
+    return etaSeconds == null
+      ? `⏳ Every key of ${model} is resting - waiting for one to come back`
+      : `⏳ Every key of ${model} is resting · next key in ${durationWords(etaSeconds)}`;
+  }
+  if (kind === "stitching") {
+    const done = activity.n ?? activity.resume;
+    const limit = activity.max ?? activity.budget;
+    return `↻ The answer was cut off - continuing it on another key${done != null && limit != null ? ` (${done} of ${limit})` : ""}`;
+  }
+  if (kind === "recovered") return `↻ ${model} is back after ${durationWords(activity.duration_s ?? activity.waited_s ?? 0)}`;
+  return "";
+}
+
+/** "2nd", "3rd", "11th", "22nd". */
+export function ordinal(n) {
+  const tens = n % 100;
+  const unit = n % 10;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : unit === 1 ? "st" : unit === 2 ? "nd" : unit === 3 ? "rd" : "th";
+  return `${n}${suffix}`;
+}
+
+/** One sentence for a reply (`reply` is the generic shape: `kind`, `model`, `other`, `seconds`, `key_index`,
+ *  `waited_s`, `why`, `reason`). `""` for nothing or an unknown kind. */
+export function replyLineText(reply) {
+  if (!reply || typeof reply !== "object") return "";
+  const model = reply.model ?? "";
+  const seconds = reply.seconds == null ? null : Number(reply.seconds);
+  const took = seconds === null ? "" : ` in ${seconds.toFixed(1)}s`;
+  const kind = String(reply.kind ?? "");
+  if (kind === "answered") return `✓ ${model} answered${took}`;
+  if (kind === "retried") return `↻ ${model} answered on the ${ordinal(Number(reply.key_index) || 2)} key${took}`;
+  if (kind === "backup") return `⚡ a backup key of ${model} answered first${seconds === null ? "" : ` (${seconds.toFixed(1)}s)`}`;
+  if (kind === "standin") return `↪ ${model} answered for ${reply.other ?? ""}${reply.why ? ` (${reply.why})` : ""}${took}`;
+  if (kind === "waited") return `⏳ waited ${durationWords(reply.waited_s ?? 0)} for a key, then ${model} answered${took}`;
+  if (kind === "cut") return `↻ ${model}'s answer was cut off and finished on another key`;
+  if (kind === "failed") return `✕ no answer: ${reply.reason ?? "the request failed"}`;
+  return "";
+}
+
+/** A row of the engine's `replies` in the generic shape `replyLineText` reads. The most telling thing wins:
+ *  no answer, a stand-in, a cut answer, a wait, a backup key, a retry. Old rows have only `model`. */
+export function replyFromRow(row) {
+  const seconds = row?.total_s ?? null;
+  const model = row?.name ?? row?.model ?? "";
+  if (row?.failed) return { kind: "failed", model, reason: row.reason };
+  if (row?.for) return { kind: "standin", model, other: row.for_name ?? row.for, seconds, why: row.why };
+  if (row?.cut) return { kind: "cut", model };
+  if (row?.waited_s) return { kind: "waited", model, seconds, waited_s: row.waited_s };
+  if (row?.backup) return { kind: "backup", model, seconds };
+  if ((row?.attempts ?? 1) > 1) return { kind: "retried", model, key_index: row.attempts, seconds };
+  return { kind: "answered", model, seconds };
+}
+
+const SPEED_LABEL = { adaptive: "Balanced", max: "Faster", off: "Saver" };
+
+/** The route LiteLLM puts in front of a model name when the provider's own name is not the route's
+ *  (`google` -> `gemini`); the twin of `_KAME_ROUTE_ALIASES` in the engine. */
+const ROUTE_ALIASES = { google: "gemini" };
+
+/** A model's name as the user wrote it, without the provider or LiteLLM's route (1.8.3.1, review R10): the
+ *  twin of `_kame_live_name`. `google:gemini/gemini-3.8-flash` -> `gemini-3.8-flash`; a vendor path that
+ *  belongs to the model (`openrouter:meta-llama/llama-4`) stays. Falls back to the pool's own label. */
+export function modelName(model) {
+  const identity = String(model?.identity ?? "");
+  const colon = identity.indexOf(":");
+  if (colon < 0) return String(model?.label ?? identity);
+  const provider = identity.slice(0, colon).toLowerCase();
+  const rest = identity.slice(colon + 1);
+  const slash = rest.indexOf("/");
+  if (slash > 0) {
+    const first = rest.slice(0, slash).toLowerCase();
+    if (first === provider || first === (ROUTE_ALIASES[provider] ?? "")) return rest.slice(slash + 1);
+  }
+  return rest;
+}
+
+/** How many models and replies the popover lists. */
+export const CHIP_MODELS_MAX = 6;
+export const CHIP_REPLIES_MAX = 5;
+
+const PRODUCT = "KAME API Rotation";
+
+/** One model's status, on the right of its row: `{ text, tone }`. */
+export function chipRowStatus(model, view, nowMs) {
+  const { entry, pool } = model;
+  if (!pool || !pool.keys || pool.unused) return { text: "not used yet", tone: "quiet" };
+  const busy = untilEpoch(entry?.busy_until, nowMs);
+  if (busy) {
+    const again = untilEpoch(entry?.probe_at, nowMs);
+    return entry?.busy_kind === "slow"
+      ? { text: `slow today · skipped for ${durationWords(busy)}`, tone: "warn" }
+      : { text: again ? `busy · asked again in ${durationWords(again)}` : "busy · asked again soon", tone: "warn" };
+  }
+  const counts = keyCounts(pool);
+  const ready = counts.r + counts.f;
+  const total = pool.keys ?? 0;
+  const refused = counts.x + counts.o;
+  if (!ready && total) {
+    if (refused) {
+      return { text: `${count(refused, "key", "keys")} refused - replace ${refused === 1 ? "it" : "them"}`, tone: "bad" };
+    }
+    const soonest = Math.min(
+      ...(pool.key_states || []).filter((row) => row[2]).map((row) => untilEpoch(row[2], nowMs) ?? Infinity),
+      Infinity,
+    );
+    if (counts.d && !counts.s) return { text: "out for today", tone: "bad" };
+    return { text: Number.isFinite(soonest) ? `resting · back in ${durationWords(soonest)}` : "resting", tone: "bad" };
+  }
+  return { text: `${ready} of ${total} ready`, tone: ready === total ? "good" : "warn" };
+}
+
+/** A small ring for a popover row, as SVG text (Alpine cannot repeat an element inside an <svg>): one arc
+ *  per key in the page's colours and shapes. */
+export function miniRingSvg(segments) {
+  const parts = [];
+  if (!segments.length) {
+    parts.push(`<circle cx="50" cy="50" r="38" fill="none" stroke="${RING_COLOUR.day}" stroke-width="12"/>`);
+  }
+  for (const segment of segments) {
+    const style = KEY_STATE[segment.code] || KEY_STATE.r;
+    if (segments.length === 1 && segment.count === 1) {
+      parts.push(`<circle cx="50" cy="50" r="38" fill="none" stroke="${style.colour}" stroke-width="12"${attr("stroke-dasharray", style.dash)}/>`);
+    } else {
+      parts.push(
+        `<path d="${arcPath(38, segment.start, segment.end)}" fill="none" stroke="${style.colour}" stroke-width="12"${attr("stroke-dasharray", style.dash)}/>`,
+      );
+    }
+  }
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">${parts.join("")}</svg>`;
+}
+
+function popoverTone(view, active, stale) {
+  if (!view || !active || stale) return "muted";
+  const totals = view.totals || {};
+  const keys = Number(totals.keys) || 0;
+  const ready = Number(totals.ready) || 0;
+  if (!keys) return "muted";
+  if (!ready) return "bad";
+  return ready < keys || Number(totals.retired) > 0 ? "warn" : "good";
+}
+
+/** Everything the chip's popover shows, as plain data (D3): a header, one sentence in the state colour, the
+ *  keys line, the models of the ladder (up to six), the last replies (up to five), the retired-key sentence
+ *  and the button. A pure function of the status report (`data.view` plus `active`, `build`, `version`). */
+export function chipPopover(data, nowMs) {
+  const has = data && typeof data === "object";
+  const view = has && data.view ? { ...data.view, active: data.active, build: data.build } : null;
+  const read = Boolean(view && data.available);
+  const active = Boolean(read && data.active);
+  const nowSec = nowMs / 1000;
+  const generated = Number(view?.generated_at) || 0;
+  const ageS = generated ? Math.max(0, nowSec - generated) : 0;
+  const stale = ageS > STALE_READING_S;
+  const said = active ? nowSentences(view, nowMs, ageS) : null;
+  const all = active ? ringModels(view).main : [];
+  const hasList = (view?.fallback?.entries || []).some((entry) => entry.role === "fallback");
+  const usable = all.find((model) => model.pool && (model.pool.unused || modelState(model, view, nowMs).tone === "good"));
+  const activity = view?.activity && view.activity.kind && view.activity.kind !== "idle" ? view.activity : null;
+  const inUse = activity?.identity ? poolOf(view, activity.identity)?.identity : null;
+  let sentence;
+  if (!read) {
+    sentence = `${PRODUCT} has not been read yet.`;
+  } else if (!active) {
+    sentence = `${PRODUCT} is loaded but not rotating: ${data.reason ?? (data.layer === 3 ? "Agent Zero is running natively" : "unknown")}`;
+  } else if (said.tone !== "good") {
+    sentence = said.line2;
+  } else if (activity) {
+    const eta = typeof activity.eta_s === "number" ? untilEpoch((generated || nowSec) + activity.eta_s, nowMs) : null;
+    sentence = liveLineText(activity, activity.kind === "waiting" ? eta : null);
+  } else if (usable) {
+    sentence = `Ready - next reply: ${modelName(usable)}`;
+  } else {
+    sentence = "Ready - nothing has been asked yet";
+  }
+  const totals = view?.totals || {};
+  const speed = SPEED_LABEL[view?.speed?.mode];
+  const keysLine = Number(totals.keys) ? `${totalsPhrase(totals)}${speed ? ` · Speed: ${speed}` : ""}` : "No pooled key has been used yet";
+  const models = all.slice(0, CHIP_MODELS_MAX).map((model) => {
+    const status = chipRowStatus(model, view, nowMs);
+    const isMain = hasList && model.rank === 1;
+    const answering = Boolean(inUse) && model.pool?.identity === inUse;
+    const segments = ringSegments(model.pool?.key_states || []);
+    return {
+      identity: model.identity,
+      name: modelName(model),
+      segments,
+      ring: miniRingSvg(segments),
+      status: status.text,
+      tags: [...(isMain ? ["main"] : []), ...(answering && !isMain ? ["in use"] : [])],
+      tone: status.tone,
+    };
+  });
+  const replies = (view?.replies || []).slice(0, CHIP_REPLIES_MAX).map((row) => ({
+    at: row.at,
+    line: replyLineText(replyFromRow(row)),
+    time: clockOf(row.at),
+  }));
+  const retired = Number(totals.retired) || (view?.pools || []).reduce((sum, pool) => sum + (pool.retired || 0), 0);
+  return {
+    button: "Open API Rotation",
+    emptyReplies: "No reply yet in this session.",
+    keysLine,
+    models,
+    more: Math.max(0, all.length - CHIP_MODELS_MAX),
+    replies,
+    retired: retired
+      ? `${count(retired, "key is", "keys are")} out of rotation - the provider refused ${retired === 1 ? "it as a credential" : "them as credentials"}. ` +
+        "Nothing was deleted: put a working key over the retired one in your .env and it returns by itself."
+      : "",
+    sentence,
+    stale,
+    title: "API Rotation",
+    tone: popoverTone(view, active, stale),
+    version: has && data.version ? `KAME ${data.version}` : "KAME",
+  };
+}

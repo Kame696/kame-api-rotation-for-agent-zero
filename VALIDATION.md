@@ -1,3 +1,17 @@
+# Agent Zero 1.8.3.1 validation
+
+## Verified runtime
+
+Offline only, so far: 69 / 69 suites green (179 new 1.8.3.1 tests in 7 files, and the 1.8.3.0 tests that pinned
+the main-model-only rule or the old words rewritten to the new rule). Among the new tests: a reply that
+starts on any model X walks X, the main model, then the rest of the list; a background job and an empty list
+never switch; the chat line has seven states whose words are the ones of a fixture shared byte for byte
+with the Hermes port; the chip popover (sections, rings, one status per model, the last five replies as
+sentences) is built by one pure function tested in node; the page reads every second and the chip every
+second or every fifth; Off is 120 seconds; and `tools/parity_check.py` reads the settings and the
+timing constants of both ports and fails on any difference that is not written down with its reason
+(decision 0017).
+
 # Agent Zero 1.8.3.0 validation
 
 ## Verified runtime
@@ -14,12 +28,15 @@ Agent Zero's store when the person types.
 ## Boundaries
 
 - **Not yet run on a real Agent Zero.** The native checks on pinned v2.12, v2.13 and v2.14, the upgrade check
-  against those checkouts and a session on a real server have not been run for 1.8.3.0. The new tabs are checked
+  against those checkouts and a session on a real server have not been run for 1.8.3.1 (nor 1.8.3.0). The new tabs are checked
   in tests and in the sources, not on a live screen.
 - **Not measured:** the cost of the reply path and the idle CPU (`tools/bench_reply_path.py`,
   `tools/bench_status.py`). This version claims no speed-up and no saving there.
 - The counters of "This Agent Zero process" start at zero whenever Agent Zero restarts.
-- The page reads the status every 3 seconds (the Hermes page reads a local file every second).
+- The page reads the status every second, as the Hermes page does (it was every 3 seconds in 1.8.3.0). The chip's
+  popover and the chat line are checked in tests and in the sources, not on a live screen.
+- Two timing parameters differ from the Hermes port on purpose and are on the parity check's allowlist with their reasons:
+  the automatic first-token ceilings and the age at which a reading is called old.
 - Hermes items with no Agent Zero twin are listed with their reasons in `decisions/0016-hermes-only-items-left-out.md`.
 
 ---

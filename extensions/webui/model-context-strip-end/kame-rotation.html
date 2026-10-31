@@ -1,5 +1,5 @@
 <!--
-  KAME rotation chip - v1.6.0.1, redrawn in 1.8.2.9.
+  KAME rotation chip - v1.6.0.1, redrawn in 1.8.2.9, popover redesigned in 1.8.3.1.
 
   Lives in Agent Zero v2.11's `model-context-strip-end` WebUI plugin slot, a
   couple of centimetres from where the person types. That placement is the whole
@@ -11,8 +11,14 @@
   for the keyboard. The chip is in the same place and survives typing.
 
   1.8.2.9: one ring with a segment per key, the same count as the status line and
-  the API Rotation page (all three read one view), keys grouped by provider and
-  by key with the full model names, repeated decisions as one line.
+  the API Rotation page (all three read one view).
+
+  1.8.3.1 (D3): a click opens the popover, with the same sections and the same
+  words as the Hermes popover: the header, one sentence in the state colour and
+  the key count, "Your models" (a ring and ONE status per model), "Last replies"
+  (one sentence each), the retired-key sentence and the button to the full page.
+  What it says is `chipPopover()` in kame-view.js; this file only draws it. The
+  per-key blocks left the popover; they stay on the full page.
 
   Counts and fingerprints only. The endpoint behind this cannot return a key.
 -->
@@ -40,6 +46,8 @@
       </button>
 
       <div class="kame-rot-popover"
+           x-data="{ get p() { return $store.kameRotation.popover; } }"
+           :class="{ 'kame-rot-stale': p.stale }"
            x-show="$store.kameRotation.open"
            x-transition.opacity
            style="display: none;"
@@ -47,98 +55,61 @@
            aria-label="API Rotation">
 
         <div class="kame-rot-header">
-          <strong>API Rotation</strong>
-          <span class="kame-rot-version"
-                x-text="'KAME ' + ($store.kameRotation.view.version || '')"></span>
+          <strong x-text="p.title"></strong>
+          <span class="kame-rot-version" x-text="p.version"></span>
         </div>
 
-        <div class="kame-rot-headline"
-             :class="'kame-rot-' + $store.kameRotation.view.tone"
-             x-text="$store.kameRotation.view.headline"></div>
-        <div class="kame-rot-counts" x-show="$store.kameRotation.view.counts"
-             x-text="$store.kameRotation.view.counts"></div>
-        <div class="kame-rot-headline kame-rot-warn"
-             x-show="$store.kameRotation.view.said && $store.kameRotation.view.said.tone !== 'good'"
-             x-text="$store.kameRotation.view.said ? $store.kameRotation.view.said.line2 : ''"></div>
-        <button class="kame-rot-open-panel" type="button"
-                @click="ensureModalOpen('/plugins/api_rotation_by_kame/webui/main.html')">Open API Rotation</button>
+        <div class="kame-rot-sentence">
+          <span class="kame-rot-dot" :class="'kame-rot-dot-' + p.tone" aria-hidden="true"></span>
+          <span x-text="p.sentence"></span>
+        </div>
+        <div class="kame-rot-count" x-text="p.keysLine"></div>
 
-        <template x-if="!$store.kameRotation.view.providers.length">
-          <div class="kame-rot-empty">
-            KAME learns your keys on the first model call of a chat. Nothing here
-            yet is not a fault.
+        <template x-if="p.models.length">
+          <div class="kame-rot-section">
+            <div class="kame-rot-section-head">Your models</div>
+            <template x-for="m in p.models" :key="m.identity">
+              <div class="kame-rot-model">
+                <span class="kame-rot-mring" x-html="m.ring"></span>
+                <span class="kame-rot-mname" :title="m.identity" x-text="m.name"></span>
+                <template x-for="tag in m.tags" :key="tag">
+                  <span class="kame-rot-tag" x-text="tag"></span>
+                </template>
+                <span class="kame-rot-mstatus" :class="'kame-rot-t-' + m.tone" x-text="m.status"></span>
+              </div>
+            </template>
+            <div class="kame-rot-more" x-show="p.more > 0" x-text="'+' + p.more + ' more'"></div>
           </div>
         </template>
 
-        <template x-for="prov in $store.kameRotation.view.providers" :key="prov.provider">
-          <div class="kame-rot-pool">
-            <div class="kame-rot-pool-head">
-              <span class="kame-rot-pool-name" x-text="prov.provider"></span>
-              <span class="kame-rot-pool-count"
-                    x-text="prov.keyCount + (prov.keyCount === 1 ? ' key' : ' keys')"></span>
+        <div class="kame-rot-section">
+          <div class="kame-rot-section-head">Last replies</div>
+          <template x-for="(reply, i) in p.replies" :key="i">
+            <div class="kame-rot-reply">
+              <span class="kame-rot-rtime" x-text="reply.time"></span>
+              <span class="kame-rot-rline" x-text="reply.line"></span>
             </div>
-            <template x-for="row in prov.rows" :key="row.fingerprint + row.code + row.words">
-              <div class="kame-rot-key" :class="'kame-rot-key-' + row.code">
-                <div class="kame-rot-key-line">
-                  <span class="kame-rot-key-id"><span class="kame-rot-glyph" :style="'color:' + row.colour" x-text="row.glyph"></span><span x-text="row.fingerprint"></span></span>
-                  <span class="kame-rot-key-note" x-text="row.words"></span>
-                </div>
-                <div class="kame-rot-key-models" x-text="row.modelsLine"></div>
-              </div>
-            </template>
-          </div>
-        </template>
+          </template>
+          <div class="kame-rot-empty" x-show="!p.replies.length" x-text="p.emptyReplies"></div>
+        </div>
 
-        <template x-if="$store.kameRotation.view.moves.length">
-          <div class="kame-rot-events">
-            <div class="kame-rot-events-head">Last decisions</div>
-            <template x-for="(mv, i) in $store.kameRotation.view.moves" :key="i">
-              <div class="kame-rot-event">
-                <span class="kame-rot-event-icon" aria-hidden="true" x-text="mv.icon"></span>
-                <span class="kame-rot-event-why" x-text="mv.text"></span>
-              </div>
-            </template>
-          </div>
-        </template>
+        <!--
+          The one sentence in this panel that asks the reader to DO something.
+          Retiring is not deleting: KAME never writes credentials, the row
+          stays where it is, and a working key put in its place brings it back
+          on the next successful call.
+        -->
+        <div class="kame-rot-action" x-show="p.retired" x-text="p.retired"></div>
 
-        <template x-if="$store.kameRotation.view.retired">
-          <!--
-            The one sentence in this panel that asks the reader to DO something.
-            Retiring is not deleting: KAME never writes credentials, the row
-            stays where it is, and a working key put in its place brings it back
-            on the next successful call.
-          -->
-          <div class="kame-rot-action">
-            Nothing was deleted - paste a working key over the retired one in
-            your <code>.env</code> and it returns by itself.
-          </div>
-        </template>
+        <button class="kame-rot-open-panel" type="button"
+                @click="$store.kameRotation.open = false; ensureModalOpen('/plugins/api_rotation_by_kame/webui/main.html')"
+                >Open API Rotation</button>
       </div>
     </div>
   </template>
 </div>
 
 <style>
-  .kame-rot-events {
-    margin-top: 0.6rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--color-border, rgba(127, 127, 127, 0.25));
-    font-size: 0.75rem;
-  }
-  .kame-rot-events-head {
-    opacity: 0.7;
-    margin-bottom: 0.3rem;
-  }
-  .kame-rot-event {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.4rem;
-    align-items: baseline;
-    padding: 0.1rem 0;
-  }
-  .kame-rot-event-icon { opacity: 0.6; }
-  /* A decision is a sentence: it wraps, it is never cut. */
-  .kame-rot-event-why { overflow-wrap: anywhere; }
   .kame-rot-anchor {
     position: static;
     display: flex;
@@ -196,6 +167,8 @@
     background-color: color-mix(in srgb, var(--color-panel) 90%, black 10%);
     box-shadow: 0 16px 38px rgba(0, 0, 0, .3);
   }
+  /* an old reading is said to be old: the whole popover is dimmed */
+  .kame-rot-popover.kame-rot-stale { opacity: .75; }
   .kame-rot-header {
     display: flex;
     align-items: baseline;
@@ -208,85 +181,115 @@
     font-size: .7rem;
     color: color-mix(in srgb, var(--color-text) 55%, transparent);
   }
-  .kame-rot-headline {
-    margin: .45rem 0 .2rem;
+  /* the sentence: a dot in the state colour (and the words say the same, so colour is never alone) */
+  .kame-rot-sentence {
+    display: flex;
+    align-items: flex-start;
+    gap: .45rem;
+    margin: .55rem 0 .15rem;
     font-size: .8rem;
-    color: color-mix(in srgb, var(--color-text) 85%, transparent);
+    color: color-mix(in srgb, var(--color-text) 90%, transparent);
     overflow-wrap: anywhere;
   }
-  .kame-rot-counts {
-    margin: 0 0 .5rem;
+  .kame-rot-dot {
+    flex: none;
+    width: .5rem;
+    height: .5rem;
+    margin-top: .3rem;
+    border-radius: 50%;
+    background: #8a8f98;
+  }
+  .kame-rot-dot-good { background: #38bdf8; }
+  .kame-rot-dot-warn { background: #f59e0b; }
+  .kame-rot-dot-bad { background: #ef4444; }
+  .kame-rot-count {
+    margin: 0 0 .2rem;
+    padding-left: .95rem;
     font-size: .74rem;
     color: color-mix(in srgb, var(--color-text) 66%, transparent);
   }
-  .kame-rot-headline.kame-rot-warn { color: #d99a2b; }
-  .kame-rot-headline.kame-rot-bad  { color: #d9534f; }
-  .kame-rot-empty {
-    padding: .35rem 0 .15rem;
-    color: color-mix(in srgb, var(--color-text) 62%, transparent);
-    font-size: .78rem;
-  }
-  .kame-rot-pool {
-    padding-top: .6rem;
-    margin-top: .6rem;
+  .kame-rot-section {
+    margin-top: .7rem;
+    padding-top: .55rem;
     border-top: 1px solid var(--color-border);
   }
-  .kame-rot-pool-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: .5rem;
-    align-items: baseline;
-    font-size: .8rem;
+  .kame-rot-section-head {
+    margin-bottom: .25rem;
+    font-size: .62rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent);
   }
-  .kame-rot-pool-name {
+  .kame-rot-model {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin-top: .3rem;
+    font-size: .76rem;
+  }
+  .kame-rot-mring { flex: none; width: 1rem; height: 1rem; }
+  .kame-rot-mring svg { width: 100%; height: 100%; display: block; }
+  .kame-rot-mname {
+    flex: 1 1 auto;
+    min-width: 0;
     font-family: var(--font-family-code);
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .kame-rot-pool-count {
-    font-variant-numeric: tabular-nums;
+  .kame-rot-tag {
+    flex: none;
+    padding: 0 .3rem;
+    border-radius: 4px;
+    font-size: .62rem;
+    background: color-mix(in srgb, var(--color-text) 12%, transparent);
     color: color-mix(in srgb, var(--color-text) 72%, transparent);
   }
-  .kame-rot-key {
-    margin-top: .4rem;
+  .kame-rot-mstatus {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--color-text) 78%, transparent);
+  }
+  .kame-rot-t-warn { color: #f59e0b; }   /* the Hermes popover's amber and red (review R15) */
+  .kame-rot-t-bad { color: #ef4444; }
+  .kame-rot-t-quiet { color: color-mix(in srgb, var(--color-text) 50%, transparent); }
+  .kame-rot-more {
+    margin-top: .3rem;
     font-size: .72rem;
-    color: color-mix(in srgb, var(--color-text) 72%, transparent);
+    color: color-mix(in srgb, var(--color-text) 55%, transparent);
   }
-  .kame-rot-key-line {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+  .kame-rot-reply {
+    display: flex;
     gap: .5rem;
-    align-items: baseline;
+    margin-top: .25rem;
+    font-size: .74rem;
+    color: color-mix(in srgb, var(--color-text) 82%, transparent);
   }
-  .kame-rot-key-id { font-family: var(--font-family-code); white-space: nowrap; }
-  .kame-rot-glyph { margin-right: .35rem; }
-  .kame-rot-key-note {
-    text-align: right;
+  .kame-rot-rtime {
+    flex: none;
     font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
+    color: color-mix(in srgb, var(--color-text) 50%, transparent);
   }
-  /* The full model names that use this key: they wrap, they are never cut. */
-  .kame-rot-key-models {
-    margin-top: .1rem;
-    padding-left: 1.1rem;
-    font-size: .68rem;
-    opacity: .8;
-    overflow-wrap: anywhere;
+  /* a reply is a sentence: it wraps, it is never cut */
+  .kame-rot-rline { overflow-wrap: anywhere; }
+  .kame-rot-empty {
+    padding: .1rem 0;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent);
+    font-size: .74rem;
   }
   .kame-rot-action {
     margin-top: .7rem;
     padding-top: .6rem;
     border-top: 1px solid var(--color-border);
     font-size: .74rem;
-    color: color-mix(in srgb, var(--color-text) 78%, transparent);
-  }
-  .kame-rot-action code {
-    font-family: var(--font-family-code);
-    font-size: .95em;
+    color: #ef4444;
   }
   .kame-rot-open-panel {
-    margin: .2rem 0 .1rem;
-    padding: .25rem .6rem;
-    font-size: .74rem;
+    width: 100%;
+    margin-top: .7rem;
+    padding: .3rem .6rem;
+    font-size: .76rem;
     border: 1px solid var(--color-border);
     border-radius: 8px;
     background: transparent;

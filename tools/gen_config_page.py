@@ -29,7 +29,7 @@ POWER = {"high": "●●● High", "medium": "●●○ Medium", "low": "●○�
 FALLBACK_SENTENCE = (
     "When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these "
     "that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional "
-    "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs never switch model.")
+    "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.")
 
 
 def _row(name):

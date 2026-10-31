@@ -135,9 +135,8 @@ def test_the_automatic_switch_time_follows_the_models_usual_first_word():
 
 def test_the_first_token_wait_modes():
     ctx, _ = make_ctx(streaming({}))
-    thinking = K._kame_reasoning_call(ctx)
-    cold = 300.0 if thinking else 180.0
-    assert K._kame_silence_for(None, ctx, 1) == cold                  # automatic, cold
+    # 1.8.3.1 (review R5): Automatic is Hermes' 120 s ceiling for both classes (it was 180 s / 300 s cold)
+    assert K._kame_silence_for(None, ctx, 1) == 120.0                 # automatic, cold
     background, _ = make_ctx(streaming({}))
     background["main_chat"] = False                                   # a compaction or utility stream
     assert K._kame_silence_for(None, background, 1) == 0.0
@@ -145,8 +144,8 @@ def test_the_first_token_wait_modes():
     assert K._kame_silence_for(None, ctx, 1) == 0.0                   # never a local model
     ctx["kwargs"] = {}
     K.set_first_token_wait("off")
-    assert K._kame_silence_for(None, ctx, 1) == 0.0
-    K.set_stream_silence_timeout(40)                                  # a number = "My time"
+    assert K._kame_silence_for(None, ctx, 1) == 120.0                 # 1.8.3.1 (D4): Off is Hermes' 120 s, not "no limit"
+    K.set_stream_silence_timeout(40)                                 # a number = "My time"
     assert K._KAME_FIRST_TOKEN_MODE == "timed"
     assert K._kame_silence_for(None, ctx, 1) == 40.0
     assert K._kame_silence_for(None, ctx, 3) == 10.0
@@ -295,14 +294,14 @@ def test_busy_is_the_provider_saying_so(kind, status, busy):
 
 
 def test_a_long_prompt_gets_more_patience_and_a_thinking_model_a_generous_floor():
-    assert K._kame_auto_silence(ID, False, 0) == 180.0                 # cold
+    assert K._kame_auto_silence(ID, False, 0) == 120.0                 # cold (1.8.3.1 review R5: Hermes' ceiling; was 180)
     for _ in range(40):
         H.HEDGE_TRACKER.record_latency(ID, 1.0, stream=True, reasoning=False)
     assert K._kame_auto_silence(ID, False, 0) == 30.0
     assert K._kame_auto_silence(ID, False, 80_000) == 70.0
     for _ in range(40):
         H.HEDGE_TRACKER.record_latency(ID, 5.0, stream=True, reasoning=True)
-    assert K._kame_auto_silence(ID, True, 0) == 180.0
+    assert K._kame_auto_silence(ID, True, 0) == 120.0                  # a thinking model: floor and ceiling are 120 s
 
 
 def test_after_my_time_still_moves_a_busy_model_at_once(fake_models):

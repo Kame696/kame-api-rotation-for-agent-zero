@@ -157,7 +157,8 @@ class Intervened(Exception):
 
 
 def _only_waiting(headings):
-    return [h for h in headings if "asked again in" in h]
+    # 1.8.3.1 (D2): the wait is the live line's "waiting" state (shared words)
+    return [h for h in headings if "is resting" in h and "next key in" in h]
 
 
 def test_m1_a_stop_in_the_middle_of_the_circle_wait_gives_the_heading_back(world, vt):
@@ -195,7 +196,7 @@ def test_m1_a_message_in_the_middle_of_the_exhaustion_sleep_gives_the_heading_ba
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     with pytest.raises((Intervened, asyncio.TimeoutError)):
         vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=10)
-    assert any("waiting on a key" in h for h in agent.headings())
+    assert any("is resting" in h for h in agent.headings())
     assert agent.item.heading == PLAIN
 
 
@@ -206,13 +207,14 @@ def test_m1_a_stop_in_the_middle_of_the_race_line_gives_the_heading_back(silent_
     silent_world.delay["google/gemini-3.7-flash"] = 30.0      # the raced model is silent too
     with pytest.raises(asyncio.TimeoutError):
         vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=3.0)
-    assert any("races it" in h for h in agent.headings()), agent.headings()
+    # 1.8.3.1 (D2): the line is said from the first attempt (a cross race has no sentence of its own any more)
+    assert any("Asking " in h for h in agent.headings()), agent.headings()
     assert agent.item.heading == PLAIN
 
 
 # --- M2 ---------------------------------------------------------------------------------------
 
-def test_m2_the_wait_line_counts_the_keys_of_the_model_waited_on(vt):
+def test_m2_the_wait_line_names_the_model_waited_on_and_the_chip_counts_all(vt):
     rest_all(KEYS[:1], 2700)
     K._get_identity_state("gemini:gemini-3.5-flash", ["AIzaSyLINE-other-000000", "AIzaSyLINE-other-111111",
                                                       "AIzaSyLINE-other-222222"])   # three healthy keys
@@ -220,9 +222,9 @@ def test_m2_the_wait_line_counts_the_keys_of_the_model_waited_on(vt):
     ctx, _ = make_ctx(streaming({}), keys=KEYS[:1])
     with pytest.raises(asyncio.TimeoutError):
         vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=3)
-    waiting = [h for h in agent.headings() if "waiting on a key" in h]
-    assert waiting and "0 of 1 keys ready" in waiting[0], waiting
-    assert "3 of 4" not in waiting[0]
+    waiting = [h for h in agent.headings() if "is resting" in h]
+    assert waiting and "Every key of gemini-3.8-flash is resting" in waiting[0], waiting
+    assert "3 of 4" not in waiting[0] and "keys ready" not in waiting[0]
     assert K.status_view()["totals"]["phrase"] == "3 of 4 keys ready"   # the chip's count is the global one
 
 

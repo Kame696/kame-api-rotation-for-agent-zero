@@ -80,13 +80,13 @@ SETTINGS: Dict[str, tuple] = {
             "How long a key may stay silent before KAME drops it and asks the next one. Automatic learns "
             "each model's usual first-word time and drops a key only when it is far past it (20 s at "
             "least, 60 s for thinking models); never for a model on this computer. Backup keys still race"
-            " a slow reply much sooner. Set time: the seconds below. Off: no limit.")),
+            " a slow reply much sooner. Set time: the seconds below. Off: 120 s.")),
     "stream_silence_timeout_seconds": (
         "number", 0, 0, 3600, None, "KAME_STREAM_SILENCE_TIMEOUT",
         "First-token wait (seconds)",
         (
             "Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay "
-            "silent before KAME asks the next one; 60 suits most providers. 0 (default) means no limit.")),
+            "silent before KAME asks the next one; 60 suits most providers. 0 (default) leaves the wait at 120 s.")),
     "hedge_max_legs": (
         "number", 3, 1, 3, None, "KAME_HEDGE_MAX_LEGS",
         "Most parallel requests per call",
@@ -429,7 +429,7 @@ DETAIL: Dict[str, str] = {
     "stream_silence_timeout_seconds": (
         "For a provider that accepts a request and then sends nothing. KAME waits this long for the "
         "first character — and for every character after it — before dropping that key and asking the"
-        " next one. Zero, the default, means no limit of KAME's own. Leave it at zero unless you have"
+        " next one. Zero, the default, leaves the wait at 120 s. Leave it at zero unless you have"
         " a provider that accepts a request and then hangs: a reasoning model can spend well over "
         "twenty seconds before its first token, and a number that short would abandon it mid-thought "
         "and rotate through the whole pool doing the same. Anything above zero is raised to at least "

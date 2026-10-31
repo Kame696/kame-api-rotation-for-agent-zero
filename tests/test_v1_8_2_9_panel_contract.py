@@ -34,6 +34,18 @@ JS_MEMBERS = {"length", "map", "filter", "find", "some", "every", "slice", "forE
 READ = re.compile(r"(?<![\w\-/])view\s*\??\.\s*([a-z_][a-z0-9_]*)((?:\s*\??\.\s*[a-z_][a-z0-9_]*)*)")
 
 
+# 1.8.3.1 (A3): the reply rows carry the facts the popover tells (an answered row with every optional field, and
+# a failed one); `back_to` is Hermes-only (its pill puts the selector back; Agent Zero has no per-reply selector)
+HERMES_ONLY_PATHS = {"replies[].back_to"}
+
+
+def SEED_REPLIES():
+    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "n", "first_s": 1.0, "total_s": 2.0, "main": {"provider": "p", "model": "m"},
+                            "why": "busy", "attempts": 2, "cut": True, "waited_s": 3.0, "backup": True})
+    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": None, "total_s": None, "failed": True,
+                            "reason": "the provider answered 503"})
+
+
 @pytest.fixture(autouse=True)
 def calm():
     K._KAME_IDENTITY_BASE.clear()
@@ -51,7 +63,7 @@ def full_view():
     K.set_fallback_models("google/gemini-3.7-flash")
     K._KAME_PRIMARY["identity"] = "openai:gpt-5.4-nano"
     K._KJ.EVENTS.add("rotation", identity="openai:gpt-5.4-nano", key="ka5206", reason="out of credit")
-    K._KAME_REPLIES.append({"at": time.time(), "model": "m", "for": "", "first_s": 1.0, "total_s": 2.0, "main": {"provider": "p", "model": "m"}})
+    SEED_REPLIES()
     return K.status_view()
 
 
@@ -121,7 +133,7 @@ def test_every_path_the_hermes_page_reads_is_a_path_of_the_view():
     paths = json.loads((ROOT / "tests" / "fixtures" / "hermes_1829_panel_reads.json").read_text(encoding="utf-8"))["paths"]
     assert len(paths) >= 40
     view = full_view()
-    assert [p for p in paths if not path_exists(view, p)] == []
+    assert [p for p in paths if p not in HERMES_ONLY_PATHS and not path_exists(view, p)] == []
 
 
 def test_the_chip_store_reads_the_view_through_the_shared_module():

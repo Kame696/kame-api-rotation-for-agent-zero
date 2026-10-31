@@ -138,14 +138,15 @@ def test_the_old_cards_are_folded_under_details_and_the_thin_bar_is_gone():
 
 def test_models_sharing_one_key_are_one_row_in_the_page_and_the_chip():
     assert "keyGroups" in PANEL and "modelsLine" in PANEL
-    assert "view.providers" in CHIP and "modelsLine" in CHIP and "Last decisions" in CHIP
-    assert "text-overflow: ellipsis" not in CHIP, "a model name is never cut"
-    assert "white-space: nowrap" not in CHIP.split(".kame-rot-key-models", 1)[1].split("}", 1)[0]
+    # 1.8.3.1 (D3): the per-key blocks left the chip's popover (they stay on the page); a model's row there
+    # is a ring, its name and ONE status, and a reply is a sentence that wraps
+    assert "view.providers" not in CHIP and "modelsLine" not in CHIP and "Last decisions" not in CHIP
+    assert "overflow-wrap: anywhere" in CHIP.split(".kame-rot-rline", 1)[1].split("}", 1)[0], "a reply is never cut"
 
 
 def test_the_chip_opens_the_page_and_shows_one_count():
     assert "Open API Rotation" in CHIP and "ensureModalOpen('/plugins/api_rotation_by_kame/webui/main.html')" in CHIP
-    assert "view.counts" in CHIP and "view.tip" in CHIP and "x-html=\"$store.kameRotation.view.ring\"" in CHIP
+    assert "p.keysLine" in CHIP and "view.tip" in CHIP and "x-html=\"$store.kameRotation.view.ring\"" in CHIP
 
 
 def test_the_page_and_the_chip_read_the_same_view_module():

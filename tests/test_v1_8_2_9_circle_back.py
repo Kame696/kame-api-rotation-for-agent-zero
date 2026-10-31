@@ -187,14 +187,15 @@ def test_two_conversations_on_the_same_busy_model_ask_it_once_per_twenty_seconds
 
 def test_the_wait_between_two_asks_is_said_on_the_status_line(world, monkeypatch):
     said = []
-    monkeypatch.setattr(K, "_kame_status_line", lambda ctx, text: said.append(text))
+    # 1.8.3.1 (D2): the wait between two asks is the live line's "waiting" state, in the shared words
+    monkeypatch.setattr(K, "_kame_status_put", lambda ctx, text, st=None, key=None: said.append(text))
     ctx = primary_ctx(world)
     with pytest.raises(TimeoutError):
         drive(world, ctx, limit=45)
-    waiting = [t for t in said if t and "asked again in" in t]
+    waiting = [t for t in said if t and "next key in" in t]
     assert waiting, said
-    assert all("busy" in t for t in waiting)
-    assert said[-1] is None or "asked again in" in said[-1]      # cleared when the wait ends
+    assert all(t.startswith("⏳ Every key of ") for t in waiting)
+    assert said[-1] is None or "next key in" in said[-1]      # cleared when the wait ends
 
 
 # --- guards: 1.8.2.8 stays where the SPEC says "unchanged" ----------------------------
@@ -240,7 +241,7 @@ def test_a_budgeted_background_call_asks_the_list_only_in_its_two_walks(world):
 
 def test_text_already_on_the_screen_never_circles_and_never_leaves_the_model(world, monkeypatch):
     said = []
-    monkeypatch.setattr(K, "_kame_status_line", lambda ctx, text: said.append(text), raising=False)
+    monkeypatch.setattr(K, "_kame_status_put", lambda ctx, text, st=None, key=None: said.append(text), raising=False)
 
     def attempt_after_text():
         async def attempt(owner, key, ctx):
@@ -254,7 +255,10 @@ def test_text_already_on_the_screen_never_circles_and_never_leaves_the_model(wor
     with pytest.raises(TimeoutError):
         drive(world, ctx, limit=3)
     assert world.asked(E1) == [] and world.asked(E2) == []
-    assert not [t for t in said if t and "asked again in" in t]
+    # 1.8.3.1 (D2): the only wait said is the keys' own short rest (seconds), never a circle wait (20 s and more)
+    assert not [t for t in said if t and "next key in" in t and "m " in t.split("next key in")[1][:6]]
+    assert not [t for t in said if t and "next key in" in t
+                and int("".join(c for c in t.split("next key in")[1].split("s")[0] if c.isdigit()) or 0) > 5]
     assert len(world.asked(PRIMARY)) >= 3          # it keeps rotating the keys it has (1.8.2.8: 3 in 3 s)
 
 

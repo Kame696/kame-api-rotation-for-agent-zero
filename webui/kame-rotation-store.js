@@ -19,9 +19,12 @@
  */
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
-import { chipSummary } from "/plugins/api_rotation_by_kame/webui/kame-view.js";
+import { chipPopover, chipSummary } from "/plugins/api_rotation_by_kame/webui/kame-view.js";
 
 const API_PATH = "/plugins/api_rotation_by_kame/kame_status";
+
+/** A chip with nothing open and no chat running reads the status every this many seconds. */
+const IDLE_EVERY_TICKS = 5;
 
 // Registering the visibility toggle is a nicety, not a dependency. Agent Zero
 // may move this store between versions, and a chip that disappears because a
@@ -55,13 +58,26 @@ const model = {
   now: Date.now(),
   open: false,
   loadSeq: 0,
-  _timer: null,
   _tick: null,
   _ticks: 0,
+
+  /** Whether the chat in view has a turn running (Agent Zero's own flag). */
+  get running() {
+    try {
+      return Boolean(globalThis.Alpine?.store?.("chats")?.selectedContext?.running);
+    } catch {
+      return false;
+    }
+  },
 
   // The view is derived, not stored: the clock moves it (a time left counts down) without a request.
   get view() {
     return chipSummary(this.data, this.now);
+  },
+
+  // 1.8.3.1 (D3): what the popover shows - one sentence, the models, the last replies - as plain data.
+  get popover() {
+    return chipPopover(this.data, this.now);
   },
 
   async onMount(watch) {
@@ -74,26 +90,22 @@ const model = {
     } catch {
       /* an Agent Zero without that store still gets the snapshot refresh */
     }
-    // A slow safety net only. The live path is `apply_snapshot_before`, which
-    // fires on every WebSocket push; this exists so a pool that changes while
-    // nothing else is happening - every key resting out a daily cap, with no
-    // traffic to trigger a snapshot - still ticks down on screen.
-    this._timer = setInterval(() => void this.refresh(), 15000);
-    // While the popover is open the times left count down each second and the data is re-read every 5.
+    // 1.8.3.1 (D4): one clock, a second long. The live path is `apply_snapshot_before`, which fires on every
+    // WebSocket push; this clock exists so a pool that changes while nothing else is happening - every key
+    // resting out a daily cap, with no traffic to trigger a snapshot - still ticks down on screen. The data
+    // is re-read every second while the popover is open or a chat is running (the countdowns and the live
+    // line move), and every fifth second otherwise. A read costs about 2 ms, so a second is cheap.
     this._tick = setInterval(() => {
-      if (!this.open) return;
       this.now = Date.now();
       this._ticks += 1;
-      if (this._ticks % 5 === 0) void this.refresh();
+      if (this.open || this.running || this._ticks % IDLE_EVERY_TICKS === 0) void this.refresh();
     }, 1000);
   },
 
   cleanup() {
     this.open = false;
     this.loadSeq += 1;
-    if (this._timer) clearInterval(this._timer);
     if (this._tick) clearInterval(this._tick);
-    this._timer = null;
     this._tick = null;
   },
 

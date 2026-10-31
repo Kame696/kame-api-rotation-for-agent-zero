@@ -1,5 +1,74 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.3.1 — Any model has a way down, one live line, a popover on the chip (2026-10-30)
+
+**In short:** the owner tried 1.8.3.0 and said the rule was too narrow: pick another model for a chat and
+KAME stopped helping. The better rule is that every model has a way down, and that what the screen
+says is the same in the Agent Zero version and the Hermes version. Same version number, same logic,
+same defaults, same timings, same words.
+
+**What you see**
+
+- **Any model has a ladder.** For a reply that starts on model X, KAME's order is X, then your main
+  model, then the rest of your fallback list (without X). A model you chose for the chat, or one that is
+  itself in the list, now falls back down your list exactly as the main model does: a busy or resting
+  model hands over, a slow start gets a backup, a model that stays silent is raced. A background job
+  is never raced and never switches on its own account (a stopped important job goes down your list once,
+  as before), an empty list never switches, and nothing moves once part of the reply is on screen.
+- **One live line, the same words in both versions.** The chat's own "Calling LLM..." heading carries
+  one line in seven states: asking, trying another key, a backup key is asking too, another model is
+  answering instead, every key is resting (with the time to the next one), the answer is being
+  continued, and "back after 2m 10s". It is written at most once a second, a change of state at once, and
+  never more than 120 characters.
+- **A popover on the chip.** Click the chip beside the message box: one sentence with the state colour
+  and the key count, "Your models" (a ring and one word each, up to six, "+N more"), "Last replies"
+  (the last five, one sentence each: "answered for X (busy) in 3.0s", "waited 40s for a key", "no answer:
+  the provider answered 503"), the sentence about a retired key and a button to the full page. The
+  per-key blocks stay on the page.
+- **The same clocks.** The API Rotation page reads the status every second (it was every 3 seconds). The
+  chip reads it every second while its popover is open or a chat is running, and every 5 seconds
+  otherwise; the push Agent Zero sends with every snapshot is still there.
+- **"Wait for the first token: Off" is 120 seconds**, the wait Hermes means by it, not "no limit": a key that
+  accepts and then says nothing for 120 seconds is dropped, the next one answers. A local model and a
+  background stream are still left alone. The words of the setting say so.
+- **The reply rows know why.** Each of the last replies now carries what the popover needs to say: which
+  model answered for which, why it was busy or resting, how long the reply waited for a key and how
+  many keys were tried.
+- **A busy model is noticed at the first knock** (as it already was here; the Hermes version now
+  matches it).
+
+- **Review fixes.** "Wait for the first token: Off" is now 120 seconds in both automatic modes, as on Hermes
+  (it was 30 s for chat, 120 s for the rest). A walk down the list never comes back to a model it already
+  left. A failed reply that is retried writes one "no answer" row, and the Events tab shows it in words
+  (the model, the reason, how long ago). The "Wait for the first token: Off" line, the busy-model line and
+  the stand-in line say the same as the Hermes version, the "back after" time is counted from the start of
+  the call and said when the answer arrives, a line held back for a second is written when the second is
+  over, and the stand-in line is said again after a rest. The chip popover names a model as the list does
+  (`google` is `gemini`). The status words use Hermes' amber and red.
+
+**Tested, not yet seen on a real server.** Offline suites 69 / 69 green (179 new 1.8.3.1 tests), including
+`tools/parity_check.py`, which reads the settings and the timing constants of both ports and fails on any
+difference that is not written down with its reason. Not run on a real Agent Zero; remote native
+acceptance, the reply-path cost and the idle CPU have not been measured for this version.
+
+**Known limits (both ports, written on purpose).**
+
+- For another provider the Hermes host owns the move, so in the Hermes version the circle back and the start
+  probe walk your whole list only inside one provider; in Agent Zero they walk the whole list. Hermes keeps
+  its own 60-second doubling backoff before it returns to the main model by itself.
+- Agent Zero's Responses transport with native tools keeps the cross-model races off (a second request
+  on another model would repeat a tool call); the ladder still hands over there.
+- Agent Zero reads the words of an error on a 500; Hermes reads its own. One parameter differs on purpose
+  and is on the parity check's allowlist with its reason: the age at which a reading is called old
+  (30 s here, 75 s there). The automatic first-token ceilings are now 120 s in both ports.
+- Hermes sets the model selector back after a fallback answered; Agent Zero has no per-reply selector that a
+  fallback moves.
+- The chip says "Ready - next reply: <main model>" even in a chat on another model: the page cannot read the
+  model of the conversation in view reliably. Hermes' own spinner keeps its old words (the Desktop erases a
+  line it does not recognise); Agent Zero's heading has no such limit.
+
+---
+
 ## 1.8.3.0 — The page says what the Hermes page says, your fallback list belongs to your main model (2026-10-29)
 
 **In short:** this version includes everything that was planned for 1.8.2.9 (that version was never
