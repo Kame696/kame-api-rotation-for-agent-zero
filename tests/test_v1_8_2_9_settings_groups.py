@@ -56,6 +56,7 @@ def test_hermes_keys_sit_where_hermes_puts_them():
     assert by_group["extra"] == ["model_switch", "failover_after_seconds", "reply_notice", "max_total_wait_seconds",
                                  "never_fall_back_to_another_model"]
     assert by_group["speed"][:3] == ["hedge_mode", "first_token_wait", "stream_silence_timeout_seconds"]
+    # 1.8.4.0: "Reserve keys" was added here, then hidden before it shipped (kame_settings.HIDDEN), as in Hermes
     assert by_group["keyring"] == ["share_pool_health", "pacing_rpm_overrides", "key_region_overrides"]
     assert by_group["tuning"][0] == "daily_quota_cooldown_seconds"
     assert set(by_group["off"]) == set(S.TROUBLESHOOTING)
@@ -68,7 +69,7 @@ def test_every_setting_is_on_exactly_one_shelf_and_the_list_has_its_own_tab():
             assert key not in seen, f"{key} is on two shelves"
             assert key in S.SETTINGS, f"{key} is not a setting"
             seen[key] = g
-    assert set(S.SETTINGS) - set(seen) == {"fallback_models"}
+    assert set(S.SETTINGS) - set(seen) == {"fallback_models"} | S.HIDDEN  # 1.8.4.0: hidden ones sit on no shelf
     assert S.group_of("fallback_models") == "fallback"
     assert S.group_of("hedge_mode") == "speed" and S.group_of("rotation_disabled") == "off"
     assert S.group_of("a_setting_added_later") == "tuning"          # a wrong shelf beats a missing setting

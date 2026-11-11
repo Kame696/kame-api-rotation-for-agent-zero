@@ -196,6 +196,42 @@ try:
 except Exception as e:  # noqa: BLE001 - the point of the test
     check("LIVE: a real call rotates off the 429 key and answers", False, repr(e))
 
+# LIVE 1b (1.8.4.0, E1) - Agent Zero's own request for prompt caching reaches the provider call.
+# KAME used to force explicit_caching off for every provider; now the caller's request is honoured, so an
+# Anthropic model gets Agent Zero's cache markers, and a call that did not ask for them gets none.
+_net_seen = []
+
+
+async def _spy_acompletion(**kw):
+    _net_seen.append(repr(kw.get("messages")))
+    return _FakeStream([{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}])
+
+
+setattr(_net_module, "acompletion", _spy_acompletion)
+kame._get_all_api_keys = lambda self: ["KEY-ONE", "KEY-TWO"]
+kame._KAME_KEY_HEALTH = {}
+try:
+    kame.set_prompt_caching("auto")
+    kame._kame_cache_forget()
+    _claude = models.LiteLLMChatWrapper(model="claude-sonnet-4-5", provider="anthropic")
+
+    async def _sink(delta, full):
+        return None
+
+    asyncio.run(models.LiteLLMChatWrapper.unified_call(
+        _claude, system_message="s", user_message="u", response_callback=_sink, explicit_caching=True))
+    asyncio.run(models.LiteLLMChatWrapper.unified_call(
+        _claude, system_message="s", user_message="u", response_callback=_sink, explicit_caching=False))
+    check("LIVE: an Anthropic call that asked for caching reaches litellm with cache_control markers",
+          len(_net_seen) == 2 and "cache_control" in _net_seen[0], str(_net_seen)[:200])
+    check("LIVE: a call that did not ask for caching carries no cache_control marker",
+          len(_net_seen) == 2 and "cache_control" not in _net_seen[1], str(_net_seen)[:200])
+except Exception as e:  # noqa: BLE001
+    check("LIVE: prompt caching is honoured for the caller that asked for it", False, repr(e))
+setattr(_net_module, "acompletion", _fake_acompletion)
+kame._get_all_api_keys = lambda self: ["KEY-DEAD", "KEY-GOOD"]
+kame._KAME_KEY_HEALTH = {}
+
 # LIVE 2 — the same real call with NO keys configured must be a pure passthrough.
 _seen_keys.clear()
 kame._get_all_api_keys = lambda self: []

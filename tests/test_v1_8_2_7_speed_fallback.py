@@ -516,7 +516,7 @@ def test_the_panel_and_the_screen_know_every_setting():
     import kame_settings as S
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     page = open(os.path.join(root, "webui", "config.html"), encoding="utf-8").read()
-    assert all(f"config.{n}" in page for n in S.SETTINGS)
+    assert all(f"config.{n}" in page for n in S.SETTINGS if n not in S.HIDDEN)  # 1.8.4.0: loaded, never shown
     assert set(S.VISIBLE) <= set(S.SETTINGS) and set(S.TROUBLESHOOTING) <= set(S.SETTINGS)
     assert "keys share" not in page.lower()   # one key = one account here (Hermes 0027 s4)
 

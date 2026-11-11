@@ -1181,3 +1181,46 @@ def window_label(exc) -> str:
         return detect_window(str(exc), body_of(exc))
     except Exception:
         return UNKNOWN
+
+
+def stated_daily_limit(body: Any) -> Optional[Tuple[int, str]]:
+    """The per-day limit a refusal body states, as ``(value, "project" | "key")``; else None.
+
+    Reads a violation whose ``quotaId`` names requests per day and whose ``quotaValue`` is a
+    number; a tokens-per-day quota is not a number of requests, so it is left out.
+    ``PerProject`` in the id means the limit is the project's, otherwise the key's.
+    The shape is the provider's own (``error.details[].violations[]``); it is searched
+    wherever it sits, so a wrapper around the body does not hide it. Malformed input gives
+    None. Never looks at which provider sent it.
+    """
+    try:
+        found = _find_violation(body, 0)
+        return found
+    except Exception:
+        return None
+
+
+def _find_violation(node: Any, depth: int) -> Optional[Tuple[int, str]]:
+    if depth > 8:
+        return None
+    if isinstance(node, dict):
+        quota_id = node.get("quotaId")
+        if isinstance(quota_id, str) and "requestsperday" in quota_id.lower().replace("_", ""):
+            value = node.get("quotaValue")
+            try:
+                number = int(str(value).strip()) if not isinstance(value, bool) else 0
+            except (TypeError, ValueError):
+                number = 0
+            if number > 0:
+                scope = "project" if "perproject" in quota_id.lower() else "key"
+                return number, scope
+        for child in node.values():
+            hit = _find_violation(child, depth + 1)
+            if hit is not None:
+                return hit
+    elif isinstance(node, (list, tuple)):
+        for child in node:
+            hit = _find_violation(child, depth + 1)
+            if hit is not None:
+                return hit
+    return None

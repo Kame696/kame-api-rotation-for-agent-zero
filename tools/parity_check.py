@@ -129,6 +129,8 @@ ALLOWED = {
     ("setting", "share_pool_health", "title"):
         "Agent Zero has no profiles; the switch keeps holds across restarts and processes "
         "(tests/test_v1_8_3_0_settings_words.py writes the same reason)",
+    ("setting", "prompt_caching", "exists"):
+        "Agent Zero hands KAME the host's request for provider prompt caching (explicit_caching); Hermes has no such flag",
     ("constant", "a reading is called old after (s)"):
         "not the same clock: Hermes re-reads a file its backend republishes every 20 s (75 s = three misses); "
         "Agent Zero's page fetches the live status every second, so 30 s without a good read already means the "
@@ -218,6 +220,8 @@ def agent_zero_rows():
         sys.path.remove(str(ROOT))
     rows = {}
     for key, spec in S.SETTINGS.items():
+        if key in getattr(S, "HIDDEN", ()):  # 1.8.4.0: loaded, never shown; Hermes' describe_all skips them too
+            continue
         kind, default, lo, hi, choices, _env, title = spec[:7]
         rows[key] = {
             "title": title, "kind": kind, "default": default, "choices": list(choices or []),

@@ -128,6 +128,17 @@ hedge_cold_s: 6
 hedge_cold_reasoning_s: 30
 hedge_max_prompt_tokens: 32000
 
+# Reserve keys: the short key labels the panel shows, comma separated. A reserve
+# key is used only when every other key of that model cannot answer, and never
+# for a backup request. Leave empty unless some of your keys are paid.
+# Environment: KAME_KEY_RESERVE.
+key_reserve: ""
+
+# Prompt cache: auto uses the provider's prompt cache when Agent Zero asks for it
+# and turns it off by itself for a model that refuses it; off never uses it.
+# Environment: KAME_PROMPT_CACHING.
+prompt_caching: auto
+
 # Per-model requests-per-minute limits for the pacer, e.g.
 # "google:gemini/gemini-2.5-flash=10, groq:*=30". KAME also learns them from
 # real 429s. Environment: KAME_PACING_RPM_OVERRIDES.

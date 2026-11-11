@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.3.1"
+KAME_VERSION = "1.8.4.1"
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -880,12 +880,25 @@ _KP = _kame_optional("kame_pacing")
 _KL = _kame_optional("kame_latency")
 _KR = _kame_optional("kame_region")
 _KS = _kame_optional("kame_stitch")
+# 1.8.4.0 (E5, E6): what KAME did over time and the last 24 hours. Display only; optional like the rest.
+_KLIFE = _kame_optional("kame_lifetime")
+
+
+def _kame_life(method, *args, **kwargs) -> None:
+    """One call into the lifetime counters. Nothing here raises and nothing reads a number back."""
+    try:
+        if _KLIFE is not None:
+            getattr(_KLIFE.LIFETIME, method)(*args, **kwargs)
+    except Exception:
+        pass
 
 _KAME_STREAM_SILENCE_S = 0.0          # wait for the first token; 0 = off (Hermes default)
 _KAME_STREAM_RESUME_LIMIT = -1        # continuations of one cut answer; -1 = no limit, 0 = off
 _KAME_STREAM_STITCH_DISABLED = False
 _KAME_HEDGING_DISABLED = False        # the Hermes switch; same as hedge_mode off
 _KAME_PACING_RPM_OVERRIDES = ""
+_KAME_KEY_RESERVE = ""                # 1.8.4.0 (E4): labels of the keys used last
+_KAME_PROMPT_CACHING = "auto"         # 1.8.4.0 (E1): auto | off
 _KAME_KEY_REGION_OVERRIDES = ""
 _KAME_NO_PREFILL = set()              # identities whose provider refused a trailing assistant turn
 _KAME_SEEDED = set()                  # (identity, reasoning) whose backup trigger was seeded
@@ -1027,6 +1040,28 @@ def set_pacing_rpm_overrides(raw) -> None:
     _KAME_PACING_RPM_OVERRIDES = str(raw or "").strip()[:4000]
     if _KP is not None:
         _KP.SETTINGS["pacing_rpm_overrides"] = _KAME_PACING_RPM_OVERRIDES
+        try:
+            _KP.PACER._synced_at.clear()
+        except Exception:
+            pass
+
+
+def set_prompt_caching(value) -> None:
+    """1.8.4.0 (E1): ``auto`` honours the host's prompt cache and drops it for a model that
+    refuses it; ``off`` never sends it."""
+    global _KAME_PROMPT_CACHING
+    text = str(value or "").strip().lower()
+    if text in ("auto", "off"):
+        _KAME_PROMPT_CACHING = text
+
+
+def set_key_reserve(raw) -> None:
+    """1.8.4.0 (E4): the short key labels the panel shows, comma separated. A reserve key is
+    used only when every other key of that model cannot answer, and never as a backup."""
+    global _KAME_KEY_RESERVE
+    _KAME_KEY_RESERVE = str(raw or "").strip()[:4000]
+    if _KP is not None:
+        _KP.SETTINGS["key_reserve"] = _KAME_KEY_RESERVE
         try:
             _KP.PACER._synced_at.clear()
         except Exception:
@@ -1203,6 +1238,8 @@ def current_settings() -> dict:
         "hedging_disabled": _KAME_HEDGING_DISABLED,
         "pacing_rpm_overrides": _KAME_PACING_RPM_OVERRIDES,
         "key_region_overrides": _KAME_KEY_REGION_OVERRIDES,
+        "key_reserve": _KAME_KEY_RESERVE,
+        "prompt_caching": _KAME_PROMPT_CACHING,
         **{name: _KAME_HEDGE_VALUES[name] for name in _KAME_HEDGE_NUMBERS},
         "kame_log_level": _KAME_LOG_LEVEL,
         "daily_quota_cooldown_seconds": _KAME_DAILY_COOLDOWN_S,
@@ -1476,6 +1513,8 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_HEDGE_MAX_LEGS", set_hedge_max_legs),
         ("KAME_PACING_RPM_OVERRIDES", set_pacing_rpm_overrides),
         ("KAME_KEY_REGION_OVERRIDES", set_key_region_overrides),
+        ("KAME_KEY_RESERVE", set_key_reserve),
+        ("KAME_PROMPT_CACHING", set_prompt_caching),
         ("KAME_HEDGE_BUDGET_PCT", lambda v: set_hedge_number("hedge_budget_pct", v)),
         ("KAME_HEDGE_BURST", lambda v: set_hedge_number("hedge_burst", v)),
         ("KAME_HEDGE_QUANTILE", lambda v: set_hedge_number("hedge_quantile", v)),
@@ -1866,10 +1905,18 @@ def pool_report(context_id=None) -> dict:
                 # v1.8.1.0: why it rests and which rung sized it, for /kame-quota.
                 "why": (kd.get("hold_kind") or "") if state == "resting" else "",
                 "label": (kd.get("rest_label") or "") if state == "resting" else "",
+                # 1.8.4.0 (E4): named in the Reserve keys setting (display only)
+                "reserve": _kame_is_reserve(identity, key),
             })
         total = len(keys)
+        life = _kame_life_view(identity)
         pools.append({
             "identity": identity,
+            # 1.8.4.0 (E6): display only - requests sent in the last 24 hours, and the daily limit the
+            # provider itself stated (None when it never did). Never a "left today" number.
+            "sent_24h": life["sent_24h"],
+            "daily_limit": life["daily_limit"],
+            "daily_scope": life["daily_scope"],
             "total": total,
             "ready": ready,
             "resting": resting,
@@ -1907,6 +1954,8 @@ def pool_report(context_id=None) -> dict:
         "pools": pools,
         "totals": totals,
         "stats": stats,
+        # 1.8.4.0 (E5): what KAME did since the counters began (display only)
+        "lifetime": _kame_life_totals(),
         # Where each cooldown came from, per pool. A rising `default` share is
         # the shape of an install that has gone quiet after an upstream change.
         "tally": tally,
@@ -1936,6 +1985,27 @@ def pool_report(context_id=None) -> dict:
         "data_dir": (str(_KJ.data_dir()) if (_KJ is not None and _KJ.data_dir() is not None) else ""),
         "generated_at": now,
     }
+
+
+def _kame_life_view(identity) -> dict:
+    try:
+        if _KLIFE is not None:
+            return _KLIFE.LIFETIME.view(identity)
+    except Exception:
+        pass
+    return {"sent_24h": 0, "daily_limit": None, "daily_scope": None}
+
+
+def _kame_life_totals() -> dict:
+    """``since`` (epoch or None) and the four counters; zeros when the counters cannot be read."""
+    zero = {"since": None, "replies": 0, "saved": 0, "key_switches": 0, "model_switches": 0}
+    try:
+        if _KLIFE is not None:
+            snap = _KLIFE.LIFETIME.snapshot()
+            return {name: snap.get(name, zero[name]) for name in zero}
+    except Exception:
+        pass
+    return zero
 
 
 def _kame_safe_status_view(context_id, now) -> dict:
@@ -2175,9 +2245,14 @@ def _kame_key_view(now=None, known=True) -> dict:
                 row["models"].append(label)
             if until is not None and (row["until_epoch"] is None or until < row["until_epoch"]):
                 row["until_epoch"] = until      # the soonest the key is back for any of its models
+        life = _kame_life_view(identity)
         pools.append({
             "identity": identity, "label": label, "keys": len(rows), "healthy": healthy,
             "unused": identity in unused,
+            # 1.8.4.0 (E4, E6): display only - the keys named in "Reserve keys", the requests sent in
+            # the last 24 hours and the daily limit the provider itself stated (None when it never did)
+            "reserve_keys": [_key_short_id(r[0]) for r in rows if _kame_is_reserve(identity, r[0])],
+            "sent_24h": life["sent_24h"], "daily_limit": life["daily_limit"], "daily_scope": life["daily_scope"],
             "in_flight": sum(1 for s in key_states if s[1] == "f"),
             "resting": len(rows) - healthy,
             "soonest_s": round(soonest, 1) if (soonest is not None and not healthy) else None,
@@ -2205,6 +2280,8 @@ def _kame_key_view(now=None, known=True) -> dict:
             totals["rejected"] += 1
         elif all(c == "o" for c in codes):
             totals["retired"] += 1
+    # 1.8.4.0 (U1): the names the Hermes page reads. Agent Zero's totals already count each physical key once.
+    totals["physical_keys"], totals["physical_ready"] = totals["keys"], totals["ready"]
     totals["phrase"] = _kame_totals_phrase(totals)
     return {"pools": pools, "key_groups": key_groups, "totals": totals}
 
@@ -2342,6 +2419,7 @@ def status_view(context_id=None, now=None) -> dict:
         "activity": _kame_activity(keys, context_id, now),
         "fallback": _kame_fallback_view(now),
         "events": events,
+        "lifetime": _kame_life_totals(),
         "moves": _kame_group_moves(events),
         "replies": replies_report(),
         "speed": speed_report(),
@@ -3763,6 +3841,13 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
     rest, else "". Tests call this exact function, so what is tested is what runs.
     """
     delay, kind, sc = _classify_error(exc)
+    # 1.8.4.0 (E6): the daily limit a refusal states is kept for the ring's detail line. Display only:
+    # nothing in selection, rest or wait reads it.
+    try:
+        if _KLIFE is not None and _KE is not None:
+            _KLIFE.LIFETIME.note_limit(identity, _KE.body_of(exc))
+    except Exception:
+        pass
     # v1.8.2.7: what a provider keeps in a status or a phrase the tables missed.
     quirk = None if sc == 503 else _kame_quirk(exc, "auth" if (kind == "other" and _is_auth_error(exc)) else kind)
     if quirk in ("billing", "per_minute", "server") and (sc or _evidence_status(exc)) == 429 \
@@ -4133,6 +4218,55 @@ def _kame_pacing_and_latency(identity):
     return ready, speed
 
 
+def _kame_is_reserve(identity, key) -> bool:
+    """Whether the ``key_reserve`` setting names this key. Never raises; False means 'not a reserve'."""
+    if _KP is None or not _KAME_KEY_RESERVE:
+        return False
+    try:
+        _KP.PACER.sync_identity_settings(identity)
+        return bool(_KP.PACER.is_reserve(key))
+    except Exception:
+        return False
+
+
+def _kame_race_ready(identity) -> bool:
+    """1.8.4.0 round 2 (R1): could a race leg on ``identity`` go out on a key that is not a reserve?
+
+    A leg that asks another model of the list, a widened leg and the start probe are backup
+    requests, so E4 holds for them: a reserve key is never one. True when no key is reserved,
+    when every key of the model is (the setting reads as not set), when KAME has not seen the
+    pool yet, or when a key outside the reserve is ready now. Never raises; a failing question
+    answers True, as before R1. Same rule as Hermes ``KameTransport._race_ready``."""
+    try:
+        if not _KAME_KEY_RESERVE:
+            return True
+        pool_id, keys = _kame_pool_of(identity)
+        if not keys:
+            return True
+        ordinary = [k for k in keys if not _kame_is_reserve(pool_id, k)]
+        if not ordinary or len(ordinary) == len(keys):
+            return True
+        now = time.time()
+        with _KAME_LOCK:
+            pool = _KAME_KEY_HEALTH.get(pool_id, {}).get("keys", {})
+            return any(not (pool.get(k) or {}).get("retired_at")
+                       and float((pool.get(k) or {}).get("sick_until") or 0) < now
+                       for k in ordinary)
+    except Exception:
+        return True
+
+
+def _kame_spend_first(identity, keys):
+    """1.8.4.0 (E4): ``keys`` without the reserve keys, unless nothing else is left.
+
+    Every key reserved leaves the list as it was, so the setting can never empty a pool.
+    Inside the result every existing rule is untouched."""
+    if not _KAME_KEY_RESERVE or len(keys) < 2:
+        return keys
+    ordinary = [k for k in keys if not _kame_is_reserve(identity, k)]
+    return ordinary or keys
+
+
 def _get_best_key(identity, all_keys):
     """RPM-aware predictive selection: picks the key with most remaining capacity.
 
@@ -4193,6 +4327,9 @@ def _get_best_key(identity, all_keys):
             ]
             if fresh:
                 healthy = fresh
+
+        # 2c. 1.8.4.0 (E4): reserve keys only when no other key is healthy.
+        healthy = _kame_spend_first(identity, healthy)
 
         # 3. RPM-aware selection: fewest recent requests = most remaining capacity
         #    Tie-break: least recently used (LRU) for even spreading
@@ -4404,6 +4541,10 @@ def _is_terminal_error(exc: Exception) -> bool:
         return True
     if "blockreason" in _evidence_text(exc).replace("_", ""):
         return True  # Gemini `promptFeedback.blockReason`: the prompt was refused
+    # 1.8.4.0 (E7): the phrases above name a request no key can answer. Read BEFORE the provider
+    # quirks and the auth reading below: a 403 carrying one is the request's fault, not the key's.
+    if any(ind in _evidence_text(exc) for ind in _CONTENT_BLOCK_INDICATORS):
+        return True
     if _q in ("denied", "billing", "per_minute", "server", "auth"):
         return False
     if _evidence_status(exc) == 416:
@@ -4452,9 +4593,35 @@ def _is_terminal_error(exc: Exception) -> bool:
 
 
 #: A moderation refusal of the request itself. Mirrors Hermes'
-#: `REQUEST_CONTENT_BLOCK_INDICATORS` (1.8.1.4).
-_CONTENT_BLOCK_INDICATORS = ("content_policy", "content filter", "content_filter",
-                             "safety filter")
+#: `REQUEST_CONTENT_BLOCK_INDICATORS` (1.8.1.4), same phrases in the same order.
+#:
+#: 1.8.4.0 (E7). After the first entry, the host's own list verbatim (Hermes v0.23.0
+#: `_CONTENT_POLICY_BLOCKED_PATTERNS`): a 403 carrying any of them used to be read as a refused key
+#: and walked every key. Each phrase is one provider's exact wording, never a generic word. The last
+#: entry is a 429 no key can answer (a shorter request can): the host compresses for it only if the
+#: error reaches it. `content_policy` is Agent Zero's older, wider spelling of the Hermes entry
+#: `content_policy_violation`; it is kept so nothing that stopped before stops later.
+#: `tools/host_assumptions.py` fails when the host's list holds a phrase this list does not.
+_CONTENT_BLOCK_INDICATORS = (
+    "content_policy",
+    "content_policy_violation",
+    "content filter",
+    "content_filter",
+    "safety filter",
+    "flagged for possible cybersecurity risk",
+    "trusted access for cyber",
+    "violates our usage policies",
+    "violates openai's usage policies",
+    "your request was flagged by",
+    "prompt was flagged by our safety",
+    "responses cannot be generated due to safety",
+    "responsibleaipolicyviolation",
+    "new_sensitive",
+    "content exists risk",
+    "data may contain inappropriate content",
+    "data_inspection_failed",
+    "extra usage is required for long context",
+)
 
 
 def _get_all_api_keys(model_instance) -> list:
@@ -4673,6 +4840,79 @@ def _kame_result_is_empty(res) -> bool:
         return False
 
 
+# --- 1.8.4.0 (E1): prompt caching, by evidence ------------------------------------------------
+#
+# Free-tier Gemini keys have no cached-content storage and answer the host's cache request with a
+# 429 that says so. That one refusal used to switch the cache off for every provider. Now the host's
+# request is honoured, and a model that refuses it is remembered (30 days) and sent without it. The
+# rule reads the refusal's text, never a provider's name.
+
+_KAME_NO_CACHE = None            # {identity: epoch}, read once at first use
+_KAME_NO_CACHE_LOCK = threading.Lock()
+
+
+def _kame_cache_forget(keep_file=False) -> None:
+    """Drop the in-memory set (tests); the file goes too unless ``keep_file``."""
+    global _KAME_NO_CACHE
+    with _KAME_NO_CACHE_LOCK:
+        _KAME_NO_CACHE = None
+    if not keep_file and _KJ is not None:
+        try:
+            _KJ.cache_refusals_save({})
+        except Exception:
+            pass
+
+
+def _kame_cache_set() -> dict:
+    global _KAME_NO_CACHE
+    with _KAME_NO_CACHE_LOCK:
+        if _KAME_NO_CACHE is None:
+            try:
+                _KAME_NO_CACHE = dict(_KJ.cache_refusals_load()) if _KJ is not None else {}
+            except Exception:
+                _KAME_NO_CACHE = {}
+        return _KAME_NO_CACHE
+
+
+def _kame_cache_remembered(identity) -> bool:
+    try:
+        at = _kame_cache_set().get(str(identity))
+        return at is not None and 0 <= time.time() - float(at) < 30 * 86400.0
+    except Exception:
+        return False
+
+
+def _kame_cache_remember(identity) -> None:
+    try:
+        table = _kame_cache_set()
+        with _KAME_NO_CACHE_LOCK:
+            table[str(identity)] = time.time()
+            snapshot = dict(table)
+        if _KJ is not None:
+            _KJ.cache_refusals_save(snapshot)
+    except Exception:
+        pass
+
+
+def _kame_is_cache_refusal(exc) -> bool:
+    """A 4xx whose text names the provider's cache (Google's cached content, Anthropic's
+    ``cache_control``). Reads the same text the classifier reads. Never raises."""
+    try:
+        status = _evidence_status(exc)
+        if not (isinstance(status, int) and 400 <= status <= 499):
+            return False
+        text = _evidence_text(exc).replace(" ", "").replace("_", "")
+        return "cachedcontent" in text or "cachecontrol" in text
+    except Exception:
+        return False
+
+
+def _kame_caching_wanted(ctx) -> bool:
+    """Whether this attempt may ask the host for explicit prompt caching."""
+    return (bool(ctx.get("explicit_caching")) and _KAME_PROMPT_CACHING == "auto"
+            and not _kame_cache_remembered(ctx.get("identity")))
+
+
 async def _kame_attempt_delegated(self, key, ctx):
     """ONE attempt on ONE key — executed by A0's own model method (v1.0.9).
 
@@ -4684,25 +4924,60 @@ async def _kame_attempt_delegated(self, key, ctx):
       would duplicate the system prompt and the user message once per rotation.
       For the same reason ``system_message`` / ``user_message`` are passed empty:
       KAME has already merged them into the list.
-    * ``explicit_caching`` stays OFF, preserving the v1.0.4 behavior. Free-tier
-      Gemini/Vertex keys have ZERO cached-content storage, so A0's prompt caching
-      429s on cache-create for EVERY key and no amount of rotation helps.
+    * ``explicit_caching`` is what the caller asked for, when the ``prompt_caching`` setting is
+      ``auto`` and the model has not refused the cache before (1.8.4.0). Free-tier Gemini/Vertex
+      keys have ZERO cached-content storage and answer the cache request with a 4xx that names it:
+      that call is repeated once, on the same key, without the cache, nothing is marked, and the
+      model is remembered so the next call does not ask. A refusal after text reached the screen is
+      not repeated here; it goes to the carousel as any other.
     """
     call_kwargs = dict(ctx["kwargs"])
     call_kwargs["api_key"] = key
     call_kwargs.update(ctx["retry_knobs"])
-    return await ctx["orig"](
-        self,
-        system_message="",
-        user_message="",
-        messages=list(ctx.get("attempt_messages") or ctx["messages"]),
-        response_callback=ctx["response_callback"],
-        reasoning_callback=ctx["reasoning_callback"],
-        tokens_callback=ctx["tokens_callback"],
-        rate_limiter_callback=ctx["rate_limiter_callback"],
-        explicit_caching=False,
-        **call_kwargs,
-    )
+
+    async def call(cache):
+        return await ctx["orig"](
+            self,
+            system_message="",
+            user_message="",
+            messages=list(ctx.get("attempt_messages") or ctx["messages"]),
+            response_callback=ctx["response_callback"],
+            reasoning_callback=ctx["reasoning_callback"],
+            tokens_callback=ctx["tokens_callback"],
+            rate_limiter_callback=ctx["rate_limiter_callback"],
+            explicit_caching=cache,
+            **call_kwargs,
+        )
+
+    if not _kame_caching_wanted(ctx):
+        return await call(False)
+    try:
+        return await call(True)
+    except Exception as exc:
+        progress = ctx.get("progress") or {}
+        if progress.get("any") or progress.get("reasoning") or not _kame_is_cache_refusal(exc):
+            raise
+        # 1.8.4.1 (K4): the model is remembered (30 days) only once the cache is proven to have been
+        # the reason: the call without it returned, or failed for something that is not a cache
+        # refusal. When the second call is refused for the cache too, switching it off changed
+        # nothing, so nothing is remembered and no event is written; that refusal goes on to the
+        # carousel as any other. A leg cancelled during the second call (another leg of the race
+        # answered first) is not a cache refusal either: the first refusal named the cache, and
+        # forgetting it would pay one refused request on every later reply the other leg wins.
+        def proven():
+            _kame_cache_remember(ctx.get("identity"))
+            _kame_event("cache_off", ctx.get("identity", ""),
+                        reason=f"Prompt cache refused by {_kame_model_label(ctx.get('identity'))}: "
+                               "sent again without it, and not asked for 30 days.")
+
+        try:
+            result = await call(False)
+        except BaseException as again:
+            if not _kame_is_cache_refusal(again):
+                proven()
+            raise
+        proven()
+        return result
 
 
 # --- THE COMMANDER ---
@@ -5362,6 +5637,34 @@ def _kame_busy_state(identity, now):
     return True, stamp
 
 
+def _kame_in_tail(identity, now, exact=False) -> bool:
+    """1.8.4.0 (E8): is ``identity`` in the TAIL of a busy window - past ``busy_until`` and within
+    ``max(first window, window)`` more (the stretch where a doubled window would still grow)?
+    A model that never had a window has no tail. Reads only. ``exact`` matches the key as given."""
+    for ident, until in list(_KAME_BUSY_UNTIL.items()):
+        if until <= 0.0 or now < until:
+            continue
+        if not (ident == identity if exact else _kame_names_match(ident, identity)):
+            continue
+        if now < until + max(_KAME_BUSY_FIRST_S, _KAME_BUSY_WINDOW.get(ident, 0.0)):
+            return True
+    return False
+
+
+def _kame_busy_window_or_tail(identity, now):
+    """``(in window or tail, probed_at)`` - ``_kame_busy_state`` extended by the tail, for the start
+    decision only; every other reader of ``_kame_busy_state`` keeps the window alone."""
+    busy, stamp = _kame_busy_state(identity, now)
+    if busy:
+        return True, stamp
+    if not _kame_in_tail(identity, now):
+        return False, None
+    for ident, at in list(_KAME_PROBED_AT.items()):
+        if _kame_names_match(ident, identity):
+            stamp = at if stamp is None else max(stamp, at)
+    return True, stamp
+
+
 def _kame_stamp_is_due(stamp, now) -> bool:
     return stamp is None or now < stamp or now - stamp >= _KAME_PROBE_EVERY_S
 
@@ -5373,12 +5676,13 @@ def _kame_probe_due(identity, now=None) -> bool:
     return (not busy) or _kame_stamp_is_due(stamp, now)
 
 
-def _kame_claim_probe(identity, now=None) -> bool:
+def _kame_claim_probe(identity, now=None, tail=False) -> bool:
     """Atomic: the ask of a busy model goes to exactly one conversation per 20 s. A model
-    that is not busy needs no claim (True, nothing stamped)."""
+    that is not busy needs no claim (True, nothing stamped). ``tail`` (1.8.4.0, E8) counts the
+    tail of the window as busy, for the start decision."""
     now = time.time() if now is None else now
     with _KAME_LOCK:
-        busy, stamp = _kame_busy_state(identity, now)
+        busy, stamp = (_kame_busy_window_or_tail if tail else _kame_busy_state)(identity, now)
         if not busy:
             return True
         if not _kame_stamp_is_due(stamp, now):
@@ -5621,6 +5925,9 @@ def _kame_pick_more(identity, all_keys, used, n):
         # for the call itself); asked about a subset, that hatch would fire on
         # the subset (review 2026-10-17, M2).
         live = [k for k in all_keys if not (pool.get(k) or {}).get("retired_at")]
+    # 1.8.4.0 (E4): a reserve key is never a backup and never one of the keys asked together.
+    # Every key of the model reserved reads the setting as not set.
+    live = _kame_spend_first(identity, live)
     for _ in range(max(0, int(n))):
         rest = [k for k in live if k not in used and k not in picked]
         if not rest:
@@ -5724,11 +6031,14 @@ class _KameRace:
         self.tasks[leg] = asyncio.ensure_future(self.ctx["attempt"](owner, key, leg_ctx))
         return self.tasks[leg]
 
-    def start_cross(self, owner, leg, entry, probe=False):
+    def start_cross(self, owner, leg, entry, probe=False, race_leg=True):
         """v1.8.2.8 (Hermes D12): a leg that asks the NEXT MODEL of the list - a whole
         KAME call on that model, inside a fallback hop, its words shown only if it
         shows work first. Its failure is its own: never judged on this pool's keys.
-        ``probe`` (1.8.2.9): the model was known busy and this ask is its probe."""
+        ``probe`` (1.8.2.9): the model was known busy and this ask is its probe.
+        ``race_leg`` (1.8.4.0 round 2, F2): True for the cross launch and the start probe, False
+        for the widen. It goes into the hop as ``"race"``: a race leg is a backup request, so its
+        carousel never rotates onto a reserve key (E4)."""
         ctx = self.ctx
         _kame_ledger("race")   # 1.8.2.9: the next model beside the reply is an extra request
         progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
@@ -5737,6 +6047,7 @@ class _KameRace:
         async def run():
             token = _KAME_FALLBACK_HOP.set({"origin": ctx["identity"], "to": entry["identity"],
                                             "probe": bool(probe),
+                                            "race": bool(race_leg),
                                             # 1.8.3.1 (D3): the reply row says why (as `_kame_cross_won` words it)
                                             "why": "busy" if ctx.get("probe_primary") else "slow"})
             main_token = _KAME_RACED_MAIN.set(True)
@@ -5748,7 +6059,8 @@ class _KameRace:
                 kwargs.pop("responses_input_items", None)
                 return await method(system_message="", user_message="", messages=list(ctx["messages"]),
                                     response_callback=rc, reasoning_callback=rsc, tokens_callback=tc,
-                                    rate_limiter_callback=ctx.get("rate_limiter_callback"), **kwargs)
+                                    rate_limiter_callback=ctx.get("rate_limiter_callback"),
+                                    explicit_caching=bool(ctx.get("explicit_caching")), **kwargs)
             finally:
                 _KAME_RACED_MAIN.reset(main_token)
                 _KAME_FALLBACK_HOP.reset(token)
@@ -6100,6 +6412,15 @@ def _kame_after_answer(identity, ctx, call_started_perf) -> None:
             row["waited_s"] = round(float(facts["waited_s"]), 1)
         if ctx.get("backup_won"):
             row["backup"] = True                              # a backup key of the same model answered first
+        # 1.8.4.0 (E5): the lifetime line. "Saved" = a chat reply answered after at least one failed
+        # attempt in this call (another key, a stand-in model, or a cut finished elsewhere). A race the
+        # next model won by being faster is a stand-in, but nothing failed, and the line says "provider
+        # error". Display only.
+        attempts = int(facts.get("attempts") or 0)
+        stand_in = bool(hop and hop.get("origin"))
+        failed_over = stand_in and str(hop.get("why") or "") != "slow"
+        _kame_life("reply", saved=attempts > 1 or failed_over or int(ctx.get("resumes") or 0) > 0,
+                   key_switches=max(0, attempts - 1), model_switches=1 if stand_in else 0)
         with _KAME_LOCK:
             _KAME_REPLIES.append(row)
         agent = _KAME_CURRENT_AGENT.get()
@@ -6282,10 +6603,19 @@ async def _kame_finish_continuation(ctx, result):
         return result
     seen = ctx.pop("stitch_seen", "") or ""
     try:
-        tail = stitcher.flush()
+        # 1.8.4.0 round 2 (F7): no answer at all is a cut (the next key continues); a returned answer ended
+        # by itself, and a short continuation of it is text, not a repeat of the start.
+        tail = stitcher.flush(cut=result is None)
         callback = ctx.get("a0_response_callback")
         if tail and callback is not None:
             await callback(tail, seen + stitcher.forwarded)
+        if result is None:
+            # 1.8.4.0 round 2 (R4): no answer at all is not the end of the continuation. The carousel
+            # asks the next key, and that key has to continue what the user has read; with the seen
+            # text dropped here it started the answer again and "Hello " then "Hello world" went to
+            # the screen's chunks twice (tools/chaos.py, seed 78).
+            ctx["stitch_seen"] = seen + stitcher.forwarded
+            return result
         _kame_event("stitch", ctx.get("identity", ""),
                     reason=f"cut answer continued ({stitcher.mode or 'new'}), shown once")
         return _kame_stitched_result(result, seen + stitcher.forwarded)
@@ -6515,6 +6845,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 if probe_cross:
                     probe = bool(ctx.get("probe_cross_claimed"))   # claimed when the probe was allowed
                 else:
+                    if not _kame_race_ready(entry["identity"]):
+                        continue                         # 1.8.4.0 round 2 (R1): only its reserve key is free
                     probe = _kame_claim_entry(entry)     # 1.8.2.9: a busy model is asked only if due
                     if probe is None:
                         continue                         # another conversation took this model's ask
@@ -6551,11 +6883,13 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                         and not race.burst and _kame_hedge_mode() != "off" and _kame_cross_allowed(ctx)):
                     # B2: ONE more model of the list joins at the bound; nothing is cut.
                     entry = _kame_free_entry_outside(ctx, identity, race)
+                    # 1.8.4.0 round 2 (F1): R1 does not apply to the widen. A widen it turned down
+                    # fell through to the hand-over below, which cuts every running leg.
                     probe = _kame_claim_entry(entry) if entry is not None else None
                     if entry is not None and probe is not None:
                         widened += 1
                         slow_extended = True
-                        race.start_cross(owner, len(race.tasks), entry, probe)
+                        race.start_cross(owner, len(race.tasks), entry, probe, race_leg=False)
                         _kame_event("model_switch", identity,
                                     reason=f"no first word after {_fmt_duration(now_m - race.started[0])}: "
                                            f"{entry['label']} (one more model of your list) joins")
@@ -7117,6 +7451,7 @@ async def _kame_switch_model(owner, ctx, reason, cause=None, aux=None):
                 reasoning_callback=ctx.get("reasoning_callback"),
                 tokens_callback=ctx.get("tokens_callback"),
                 rate_limiter_callback=ctx.get("rate_limiter_callback"),
+                explicit_caching=bool(ctx.get("explicit_caching")),
                 **kwargs)
         except _KameSwitchModel as exc:
             blocked = True
@@ -7173,7 +7508,15 @@ def _kame_start_probe_allowed(ctx, identity) -> bool:
         if not _KAME_FALLBACK_MODELS or _KAME_FALLBACK_HOP.get() is not None or not _kame_cross_allowed(ctx):
             return False
         now = time.time()
-        if not _kame_busy_state(identity, now)[0] or not _kame_probe_due(identity, now):
+        # 1.8.4.0 (E8): the tail of the window counts here (this decision only), so the reply of a
+        # storm's tail starts on the next model and asks the best one beside it.
+        _busy_or_tail, _stamp = _kame_busy_window_or_tail(identity, now)
+        if not _busy_or_tail or not _kame_stamp_is_due(_stamp, now):
+            return False
+        if not _kame_race_ready(identity):
+            # 1.8.4.0 round 2 (R1): the probe is a race leg, and only a reserve key of this model is
+            # free. No probe: the window hands over as D8 does, the tail knocks as before E8, and
+            # either way the reserve key is spent only on this reply's own request.
             return False
         reasoning = _kame_reasoning_call(ctx)
         slow = _kame_slow_number(ctx, identity, reasoning) or 30.0
@@ -7181,7 +7524,7 @@ def _kame_start_probe_allowed(ctx, identity) -> bool:
         if not first:
             return False
         entry = first[0][0]
-        if not _kame_claim_probe(identity, now):
+        if not _kame_claim_probe(identity, now, tail=True):
             return False
         entry_busy = _kame_busy_state(entry["identity"], now)[0]
         if entry_busy and not _kame_claim_probe(entry["identity"], now):
@@ -7437,6 +7780,7 @@ def _kame_count_request(ctx, identity=None, now=None) -> None:
     try:
         now = time.time() if now is None else now
         identity = identity or ctx.get("identity") or ""
+        _kame_life("sent", identity)     # 1.8.4.0 (E6): the same request, counted per hour
         main = _kame_main(ctx)
         task = ctx.get("aux_task") or ("chat" if main else "utility")
         hour = int(now // 3600)
@@ -7636,9 +7980,13 @@ async def _kame_carousel(self, ctx):
     # 1.8.2.9 (E2): when the best model is due another look it is asked beside the first free
     # model of the list, whoever speaks first is shown; (E1) a list call that IS a probe goes on.
     _hop_now = _KAME_FALLBACK_HOP.get()
-    if (_KAME_MODEL_SWITCH != "never" and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0)
-            and not (_hop_now and _hop_now.get("probe"))):
-        if not _kame_start_probe_allowed(ctx, identity):
+    # 1.8.4.0 (E8): the TAIL of the window (after it, within max(first, window) more) is raced the same
+    # way where the probe is allowed; where it is not, the tail is today's sequential knock (nothing here).
+    _gate_now = time.time()
+    _in_window = _gate_now < _KAME_BUSY_UNTIL.get(identity, 0.0)
+    if (_KAME_MODEL_SWITCH != "never" and not (_hop_now and _hop_now.get("probe"))
+            and (_in_window or _kame_in_tail(identity, _gate_now, exact=True))):
+        if not _kame_start_probe_allowed(ctx, identity) and _in_window:
             _switched = await _kame_switch_model(self, ctx, "your provider is busy", None)
             if _switched is not _KAME_NO_SWITCH:
                 return _switched
@@ -7675,6 +8023,16 @@ async def _kame_carousel(self, ctx):
         _select_t0 = time.perf_counter()
         key, status = _get_best_key(identity, all_keys)
         _select_ms = (time.perf_counter() - _select_t0) * 1000.0
+
+        # 1.8.4.0 round 2 (F2): a race leg is a backup request, and a cross leg is a whole carousel on
+        # that model; its own pick offers a reserve key when no other key is ready. It ends as its own
+        # failure instead (never judged on this pool). Every key reserved reads the setting as not set.
+        _hop_race = _KAME_FALLBACK_HOP.get()
+        if (_hop_race and _hop_race.get("race") and status == "SUCCESS" and _KAME_KEY_RESERVE
+                and _kame_is_reserve(identity, key)
+                and not all(_kame_is_reserve(identity, _k) for _k in all_keys)):
+            _kame_wait_notice_finish(st, "stopped")
+            raise _KameSwitchModel("race leg: only a reserve key is free", None)
 
         if status == "EXHAUSTED_RETRY" and not _KAME_CAROUSEL_DISABLED:
             # v1.8.2.7: every key resting longer than `failover_after_seconds`
@@ -8328,19 +8686,18 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
         call_type = "Chat" if stream else "Util"
         model_short = model.split("/")[-1][:25]
 
-        # v1.0.4 (A0 V2.1): never let prompt caching reach the provider — free-tier
-        # keys have zero cached-content storage and 429 on cache-create, on every
-        # key, so rotation cannot help. explicit_caching=False is forced in
-        # _kame_attempt_delegated; strip the raw flag here too in case a caller set
-        # it directly.
+        # 1.8.4.0 (E1): what the caller asked for is remembered in ctx["explicit_caching"] and
+        # decided per attempt in _kame_attempt_delegated (setting, and the models that refused
+        # the cache before). The raw flag stays stripped from what is forwarded.
         forwarded = dict(kwargs)
-        forwarded.pop("a0_explicit_prompt_caching", None)
+        asked_cache = bool(explicit_caching) or bool(forwarded.pop("a0_explicit_prompt_caching", False))
 
         ctx = {
             "identity": identity,
             "all_keys": all_keys,
             "call_type": call_type,
             "model_short": model_short,
+            "explicit_caching": asked_cache,
             "orig": original,
             "attempt": _kame_attempt_delegated,
             "messages": active_msgs,

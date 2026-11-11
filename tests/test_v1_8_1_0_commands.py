@@ -127,7 +127,7 @@ print("\n--- the one settings table ---")
 cfg_src = open(os.path.join(HERE, "default_config.yaml"), encoding="utf-8").read()
 page = open(os.path.join(HERE, "webui", "config.html"), encoding="utf-8").read()
 missing_default = [n for n in S.SETTINGS if not re.search(rf"^{n}:", cfg_src, re.M)]
-missing_page = [n for n in S.SETTINGS if n not in page]
+missing_page = [n for n in S.SETTINGS if n not in page and n not in S.HIDDEN]  # 1.8.4.0: loaded, never shown
 check("every setting has a default in default_config.yaml", not missing_default, missing_default)
 check("every setting is on the settings page", not missing_page, missing_page)
 current = K.current_settings()

@@ -85,6 +85,8 @@ OPTIONAL = (
     "kame_latency.py",
     "kame_region.py",
     "kame_stitch.py",
+    # 1.8.4.0: what KAME did over time and the last 24 hours. Missing, those two lines go quiet.
+    "kame_lifetime.py",
     # 1.8.2.9: the budget of a background job. Missing, background jobs keep the 1.8.2.8 wait.
     "kame_aux.py",
     "api/kame_settings_set.py",

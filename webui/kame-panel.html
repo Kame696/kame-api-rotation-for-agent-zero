@@ -121,6 +121,7 @@
               <div x-show="!$store.kamePanel.keyTable.empty">
                 <div class="kame-card-title" x-text="$store.kamePanel.keyTable.label"></div>
                 <div class="kame-dim" x-text="$store.kamePanel.keyTable.summary"></div>
+                <div class="kame-dim kame-small" x-show="$store.kamePanel.keyTable.sent" x-text="$store.kamePanel.keyTable.sent"></div>
                 <ul class="kame-keylist">
                   <template x-for="k in $store.kamePanel.keyTable.keys" :key="k.fingerprint">
                     <li><span class="kame-mono"><span class="kame-glyph" :style="'color:' + k.colour" x-text="k.glyph"></span><span x-text="k.fingerprint"></span></span>
@@ -158,13 +159,19 @@
         <!-- What KAME did -->
         <div class="kame-card">
           <div class="kame-card-title">What KAME did</div>
-          <p class="kame-dim" x-show="!$store.kamePanel.moves.length">Nothing to report &mdash; every reply went straight out.</p>
+          <p class="kame-dim" x-show="!$store.kamePanel.moves.length" x-text="$store.kamePanel.movesEmpty"></p>
           <ul class="kame-moves" x-show="$store.kamePanel.moves.length">
             <template x-for="(mv, i) in $store.kamePanel.moves" :key="i">
               <li><span><span class="kame-dim" aria-hidden="true" x-text="mv.icon"></span> <span x-text="mv.text"></span></span>
                 <span class="kame-dim kame-small" x-text="mv.ago"></span></li>
             </template>
           </ul>
+          <p class="kame-dim kame-small" x-show="$store.kamePanel.lifetime">
+            <span x-text="$store.kamePanel.lifetime && $store.kamePanel.lifetime.text"></span>
+            <a href="https://github.com/Kame696/kame-api-rotation-for-agent-zero" target="_blank" rel="noopener noreferrer"
+               x-show="$store.kamePanel.lifetime && $store.kamePanel.lifetime.star"
+               x-text="$store.kamePanel.lifetime && $store.kamePanel.lifetime.starText"></a>
+          </p>
           <button class="btn" @click="$store.kamePanel.tab = 'events'">All events &rarr;</button>
         </div>
 
@@ -179,13 +186,17 @@
                             <div class="kame-setting-label">
                               <div>
                                 <span class="kame-setting-title" x-text="m.title"></span>
-                                <span class="kame-tag" :class="'kame-tag-' + m.impact" x-show="$store.kamePanel.impactTag(m)" x-text="$store.kamePanel.impactTag(m)"
+                                <span class="kame-tag" :class="'kame-tag-' + m.impact" x-show="$store.kamePanel.impactTag(m) &amp;&amp; $store.kamePanel.details(m)" x-text="$store.kamePanel.impactTag(m)"
                                       title="Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning."></span>
                                 <span class="kame-tag" x-show="$store.kamePanel.isChanged(m)">changed</span>
                               </div>
-                              <div class="kame-dim kame-small" :title="m.detail || m.sentence" x-text="m.sentence"></div>
-                              <div class="kame-small" x-show="m.when" x-text="'When to change it: ' + m.when"></div>
-                              <div class="kame-dim kame-small kame-mono" x-show="$store.kamePanel.showAdvanced || $store.kamePanel.isChanged(m)">
+                              <div class="kame-dim kame-small" x-show="m.line">
+                                <span x-text="m.line"></span>
+                                <button type="button" class="kame-why" :aria-expanded="!!$store.kamePanel.whyOpen[m.name]" @click="$store.kamePanel.toggleWhy(m.name)">Why?</button>
+                              </div>
+                              <div class="kame-dim kame-small" x-show="$store.kamePanel.details(m)" :title="m.detail || m.sentence" x-text="m.sentence"></div>
+                              <div class="kame-small" x-show="m.when &amp;&amp; $store.kamePanel.details(m)" x-text="'When to change it: ' + m.when"></div>
+                              <div class="kame-dim kame-small kame-mono" x-show="$store.kamePanel.details(m) &amp;&amp; ($store.kamePanel.showAdvanced || $store.kamePanel.isChanged(m))">
                                 <span x-show="$store.kamePanel.showAdvanced" x-text="m.name"></span>
                                 <span x-show="$store.kamePanel.showAdvanced &amp;&amp; m.env" x-text="m.env"></span>
                                 <span class="kame-tag" :class="$store.kamePanel.sourceOf(m) === 'default' ? 'kame-tag-quiet' : ''" :title="$store.kamePanel.sourceTip(m)" x-text="$store.kamePanel.sourceLabel(m)"></span>
@@ -224,8 +235,8 @@
                               </template>
                               <button class="btn" x-show="$store.kamePanel.isChanged(m)" :disabled="$store.kamePanel.busy" @click="$store.kamePanel.reset(m.name)">Reset</button>
                             </div>
-                            <div class="kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceNote(m)" x-text="$store.kamePanel.choiceNote(m)"></div>
-                            <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.choiceFoot(m)" x-text="$store.kamePanel.choiceFoot(m)"></div>
+                            <div class="kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.details(m) &amp;&amp; $store.kamePanel.choiceNote(m)" x-text="$store.kamePanel.choiceNote(m)"></div>
+                            <div class="kame-dim kame-small kame-setting-help" x-show="m.type === 'choice' &amp;&amp; $store.kamePanel.details(m) &amp;&amp; $store.kamePanel.choiceFoot(m)" x-text="$store.kamePanel.choiceFoot(m)"></div>
                             <div class="kame-error kame-small kame-setting-help" x-show="$store.kamePanel.errorOf(m.name)" x-text="$store.kamePanel.errorOf(m.name)"></div>
                             <div class="kame-confirm kame-setting-help" x-show="$store.kamePanel.askingFlag === m.name">
                               <b class="kame-small" x-text="$store.kamePanel.flagQuestion(m)"></b>
@@ -373,7 +384,7 @@
                 <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
                 <ol class="kame-small">
                   <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
-                    <li><span class="kame-dim" x-text="e.n + '.'"></span> <span class="kame-mono" x-text="e.identity"></span>
+                    <li><span class="kame-mono" x-text="e.identity"></span>
                       <span class="kame-dim" x-show="e.yours">(your model)</span>
                       <span class="kame-dim" x-text="e.state"></span></li>
                   </template>
@@ -493,7 +504,7 @@
                 <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
                 <ol class="kame-small">
                   <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
-                    <li><span class="kame-dim" x-text="e.n + '.'"></span> <span class="kame-mono" x-text="e.identity"></span>
+                    <li><span class="kame-mono" x-text="e.identity"></span>
                       <span class="kame-dim" x-show="e.yours">(your model)</span>
                       <span class="kame-dim" x-text="e.state"></span></li>
                   </template>
@@ -825,6 +836,7 @@
   .kame-sub { font-size: 0.8em; opacity: 0.55; }
   .kame-status { display: flex; align-items: center; gap: 0.5em; font-size: 0.85em; opacity: 0.85; }
   .kame-dot { width: 0.6em; height: 0.6em; border-radius: 50%; background: #38bdf8; display: inline-block; }
+  .kame-dot-idle { background: #8b8b8b; }
   .kame-dot-warn { background: #f59e0b; }
   .kame-dot-bad { background: #ef4444; }
   .kame-bad, .kame-tone-bad { color: #ef4444; }
@@ -849,6 +861,7 @@
   .kame-banner-bad { border-color: rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.1); color: #ef4444; }
   .kame-field { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8em; padding: 0.2em 0; }
   .kame-field-value { text-align: right; font-variant-numeric: tabular-nums; }
+  .kame-why { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline dotted; cursor: pointer; font: inherit; }
   .kame-fblist { padding: 0.6em 0.8em; margin: 0.4em 0; border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 6px; }
   .kame-fblist p { margin: 0.2em 0; }
   .kame-footer { display: flex; flex-direction: column; gap: 0.2em; }

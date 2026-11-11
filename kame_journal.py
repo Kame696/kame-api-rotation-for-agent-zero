@@ -235,10 +235,12 @@ BACKUP = "backup"
 GAVE_UP = "gave_up"
 #: 1.8.3.0: an answer that was cut short was continued on another key and joined back up.
 STITCH = "stitch"
+#: 1.8.4.0: a model refused the provider's prompt cache and is sent without it for 30 days.
+CACHE_OFF = "cache_off"
 _KINDS = frozenset({ROTATION, SWITCH, QUARANTINE, INVALID_KEY, DENIED_MODEL,
                     STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING,
-                    MODEL_SWITCH, BACKUP, GAVE_UP, STITCH})
-GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP, STITCH})
+                    MODEL_SWITCH, BACKUP, GAVE_UP, STITCH, CACHE_OFF})
+GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP, STITCH, CACHE_OFF})
 #: 1.8.2.7: which job an event belongs to. `chat` is the conversation; the
 #: others are Agent Zero's background calls (memory, titles, summaries).
 JOBS = ("chat", "utility", "compress", "")
@@ -865,6 +867,50 @@ def forget_holds() -> ForgetHoldsResult:
             return ForgetHoldsResult(count, ok, error)
     except Exception as exc:
         return ForgetHoldsResult(0, False, (f"{type(exc).__name__}: {exc}")[:240])
+
+
+# ---------------------------------------------------------------------------
+# 1.8.4.0 (E1): the models that refused the provider's prompt cache
+# ---------------------------------------------------------------------------
+_CACHE_FILE = "no-explicit-cache.json"
+#: A key can become paid, so a refusal is only believed this long.
+CACHE_REFUSAL_TTL_S = 30 * 86400.0
+
+
+def cache_refusals_load(now: Optional[float] = None) -> Dict[str, float]:
+    """``{identity: epoch}`` of the models remembered as refusing the cache; entries older than
+    30 days are left out. An unreadable file is an empty set. Never raises."""
+    try:
+        path = _path(_CACHE_FILE)
+        if path is None or not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        now = time.time() if now is None else now
+        out: Dict[str, float] = {}
+        if isinstance(raw, dict):
+            for identity, at in raw.items():
+                try:
+                    at = float(at)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(identity, str) and 0 <= now - at < CACHE_REFUSAL_TTL_S:
+                    out[identity] = at
+        return out
+    except Exception:
+        return {}
+
+
+def cache_refusals_save(table: Dict[str, float]) -> None:
+    """Write the remembered set, atomically. Nothing here raises."""
+    try:
+        path = _path(_CACHE_FILE)
+        if path is None:
+            return
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(table, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+        os.replace(temporary, path)
+    except Exception:
+        pass
 
 
 def _reset_for_tests() -> None:

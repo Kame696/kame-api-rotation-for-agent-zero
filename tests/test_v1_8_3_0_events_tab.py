@@ -221,7 +221,9 @@ def test_the_legend_lists_every_kind_agent_zero_records_in_hermes_order_with_its
     out = run_store("await store.refresh(); return store.legendKinds.map(k => k.word);", loaded())
     assert out == ["Not for this model", "Stopped waiting", "Bad key", "Key benched", "Answered on retry", "Key rests",
                    "Setting changed", "Answer continued", "Provider outage", "Answer cut", "Fallback",
-                   "Passed to Agent Zero", "Next key", "All keys resting"]
+                   "Passed to Agent Zero", "Next key", "All keys resting",
+                   # 1.8.4.0 (E1): Agent Zero only, after Hermes' kinds so their order is untouched
+                   "Prompt cache off"]
 
 
 # -- the background tab -------------------------------------------------------------------------

@@ -145,7 +145,9 @@ def test_a_ready_pool_reads_as_one_sentence_a_count_and_three_rows():
     v = popover(report())
     assert v["title"] == "API Rotation" and v["version"] == "KAME 1.8.3.1" and v["button"] == "Open API Rotation"
     assert v["sentence"] == "Ready - next reply: main-model"
-    assert v["keysLine"] == "7 of 7 keys ready · Speed: Balanced"
+    # 1.8.4.0 (U1): one count everywhere - the keys of the model that answers the next reply (3), not
+    # the sum over every model (7)
+    assert v["keysLine"] == "3 of 3 keys ready · Speed: Balanced"
     assert [m["name"] for m in v["models"]] == ["main-model", "second", "third"]
     assert v["models"][0]["tags"] == ["main"] and v["models"][1]["tags"] == []
     assert [m["status"] for m in v["models"]] == ["3 of 3 ready", "3 of 3 ready", "1 of 1 ready"]

@@ -1,5 +1,46 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.4.1 — Your prompt cache is back, a blocked prompt stops at once (2026-11-10)
+
+**In short:** a full audit of 1.8.3.1. 4,200 fault-injected calls found no crash. The cracks were in what the
+screen says, in refusals no key can fix, and in one old rule that cost paying users their prompt cache.
+1.8.4.0 was the build that came out of that audit. It was reviewed once more before release and never
+shipped on its own: everything it held is here, with what the second review corrected.
+
+**What you see**
+
+- **Your prompt cache is back.** Since 1.0.4 KAME switched Agent Zero's prompt cache off for every provider,
+  because free Gemini keys refuse it. Anthropic, OpenRouter and the others lost their cache for nothing. Now
+  the request goes through. A model that refuses it pays one extra request, is remembered for 30 days and is
+  sent without the cache. It is remembered only when leaving the cache out was what cured the refusal.
+  The rule reads the refusal's text, never the provider's name. A new setting,
+  `prompt_caching`, turns it off.
+- **A prompt no key can answer stops at once.** A provider's safety refusal on a 403 used to be read as a
+  refused key: every key was tried and rested, and two wordings never stopped at all. KAME now knows every
+  wording Hermes lists, so the refusal goes straight back and no key is punished. The same goes for
+  Anthropic's "extra usage is required for long context" 429, which only a shorter request can cure.
+- **One number on the screen.** The header, the chip and the sentence now give the same count: the keys of
+  the model your next reply goes to. It used to be possible to read "14 of 14" above "8 of 14", or "0 of 56"
+  with 14 keys.
+- **The empty line tells the truth.** "What KAME did" no longer says "every reply went straight out" before
+  any reply, or under a red banner. It says `No replies yet.`, or `Waiting for your keys. Nothing went wrong
+  on your side.`, or `Nothing to report: every reply went straight out.`
+- **What KAME did for you, over time.** The panel keeps a quiet line: `Since 12 Oct: 1,240 replies, 96 saved
+  from a provider error.` The counters stay on your machine and survive a restart and Clear pool.
+- **Sent in the last 24 hours.** Each model's detail shows how many requests went out and, when the provider
+  stated it, its own daily limit: `Sent in the last 24 hours: 143. The provider's own limit: 20 a day per
+  project.` Display only: nothing reads these numbers to pick a key, and there is no "left today" figure,
+  because the moment a provider's day ends has not been measured.
+- **Quick controls fit on a screen.** One line each, with the rest behind a `Why?` toggle.
+- **A very short cut answer is no longer repeated.** "Hello" cut and answered again as "Hello world" showed
+  "Hello Hello world". Longer answers were already clean.
+- **`1. 1.` is gone.** The numbered lists in Settings count once.
+- **A reply soon after your model was busy does not wait for it to refuse again.** It starts on the next model of
+  your list and asks yours beside it; whichever starts answering first is shown, yours included.
+- **Checked against Agent Zero v2.15.**
+
+---
+
 ## 1.8.3.1 — Any model has a way down, one live line, a popover on the chip (2026-10-30)
 
 **In short:** the owner tried 1.8.3.0 and said the rule was too narrow: pick another model for a chat and
@@ -741,7 +782,7 @@ was measured on real refusals first:
   page, with the same names as on Hermes.
 - `/kame doctor`'s rest table is now checked against the classifier itself, not
   against its own numbers.
-- **An adversarial review** (a second model told to break the port) found eight
+- **An adversarial review** (a second pass whose only job was to break the port) found eight
   defects; all fixed, each now a test. The ones that mattered: a number the
   provider stated earlier for a key now outranks the ladder, learned per key
   and forgotten on an answer, as Hermes keeps it; a 503 between two bare

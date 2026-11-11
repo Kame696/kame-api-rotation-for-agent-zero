@@ -155,8 +155,9 @@ def test_the_details_are_folded_until_asked():
 
 def test_the_header_count_is_the_one_count_over_keys():
     out = run_store("await store.refresh(); return [store.headerStatus, store.said.line1];", loaded())
-    assert out[0]["text"] == "2 of 3 keys ready"
-    # the first sentence counts the keys of the model it names (Hermes' wording), not the whole pool
+    # 1.8.4.0 (U1): this said "2 of 3" (every physical key) above a sentence saying "2 of 2" (the model the next
+    # reply goes to). The header, the chip and the sentence now say the same fraction: that model's keys.
+    assert out[0]["text"] == "2 of 2 keys ready"
     assert out[1].endswith("(2 of 2 keys ready).")
 
 

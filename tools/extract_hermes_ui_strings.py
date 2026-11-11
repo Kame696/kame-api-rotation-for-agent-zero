@@ -52,7 +52,12 @@ SAME = [
     ("What KAME did", [PANEL]),
     ("Quick controls", [PANEL]),
     ("Getting started", [PANEL]),
-    ("Nothing to report — every reply went straight out.", [PANEL]),
+    # 1.8.4.0 (U2, U6, U5): the empty line depends on the state; the lifetime line; the quick controls' one line
+    ("Nothing to report: every reply went straight out.", [VIEW]),
+    ("No replies yet.", [VIEW]),
+    ("Waiting for your keys. Nothing went wrong on your side.", [VIEW]),
+    ("A star helps others find it.", [VIEW]),
+    ("Why?", [PANEL]),
     ("All events →", [PANEL]),
     ("All settings →", [PANEL]),
     ("The three you may want to change often. Everything else is in Settings.", [PANEL]),

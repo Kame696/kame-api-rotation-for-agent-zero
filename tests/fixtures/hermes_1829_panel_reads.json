@@ -21,12 +21,19 @@
     "fallback.state",
     "fallback.warning",
     "fallback.why",
+    "lifetime.replies",
+    "lifetime.saved",
+    "lifetime.since",
+    "pools[].daily_limit",
+    "pools[].daily_scope",
     "pools[].healthy",
     "pools[].identity",
     "pools[].idle_for_s",
     "pools[].in_flight",
     "pools[].key_states",
     "pools[].keys",
+    "pools[].reserve_keys",
+    "pools[].sent_24h",
     "pools[].soonest_s",
     "quota_use.models",
     "quota_use.since",
@@ -51,6 +58,8 @@
     "speed.hour.replies",
     "speed.mode",
     "speed.paused_until",
-    "speed.since_start.extra_pct"
+    "speed.since_start.extra_pct",
+    "totals.physical_keys",
+    "totals.physical_ready"
   ]
 }

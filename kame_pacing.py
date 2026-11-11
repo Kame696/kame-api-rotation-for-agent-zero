@@ -46,7 +46,7 @@ __all__ = ["Pacer", "PACER", "rpm_from_overrides", "key_labels"]
 #: Agent Zero port: the two settings the Hermes pacer reads from its settings
 #: module. `key_quota_groups` stays empty here on purpose: one key = one account
 #: (the owner's rule, Hermes decisions/0027 s4, hidden there too).
-SETTINGS: Dict[str, str] = {"pacing_rpm_overrides": "", "key_quota_groups": ""}
+SETTINGS: Dict[str, str] = {"pacing_rpm_overrides": "", "key_quota_groups": "", "key_reserve": ""}
 
 
 def key_labels(key: str) -> Tuple[str, ...]:
@@ -134,6 +134,10 @@ class Pacer:
         # deleting an entry in the panel takes it out — 1.8.2.3 only ever
         # added to the map.
         self._setting_groups: Dict[str, str] = {}
+        # 1.8.4.0 (E4): labels (lower case) named in the ``key_reserve`` setting.
+        # Ordering only: a reserve key is offered last, never as a backup. Rebuilt on
+        # every sync so deleting an entry in the panel takes it out.
+        self._setting_reserve: frozenset = frozenset()
         # 1.8.2.3: per-identity resolution of the settings overrides,
         # re-read on a short clock so a panel edit lands without a restart
         # and the hot path pays one dict read when nothing changed.
@@ -161,6 +165,23 @@ class Pacer:
                 if group:
                     return group
         return key
+
+    def reserve_labels(self) -> frozenset:
+        """The labels (lower case) the ``key_reserve`` setting names, for the panel's key rows."""
+        return self._setting_reserve
+
+    def is_reserve(self, key: str) -> bool:
+        """Whether the ``key_reserve`` setting names this key (any spelling the panel shows)."""
+        reserve = self._setting_reserve
+        if not reserve:
+            return False
+        if any(label.lower() in reserve for label in key_labels(key)):
+            return True
+        # Agent Zero's panel shows a key as "k" plus five hex digits (its own fingerprint);
+        # that spelling is accepted here as well, the one a person reads off the screen.
+        text = str(key or "")
+        short = "k" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:5]
+        return bool(text) and short in reserve
 
     def same_scope(self, a: str, b: str) -> bool:
         """Whether two keys draw on one quota (same key, or one named group)."""
@@ -318,6 +339,7 @@ class Pacer:
             provider, _, model = str(identity).partition(":")
             rpm = rpm_from_overrides(SETTINGS.get("pacing_rpm_overrides", ""), provider, model)
             raw_groups = SETTINGS.get("key_quota_groups", "")
+            raw_reserve = SETTINGS.get("key_reserve", "")
         except Exception:
             self._synced_at[identity] = now
             return
@@ -340,6 +362,12 @@ class Pacer:
                 if label and group:
                     fresh[label] = group
             self._setting_groups = fresh
+            # An unknown label matches no key and is ignored silently (the key may be
+            # on another machine). "label=anything" is read as the label.
+            self._setting_reserve = frozenset(
+                part.partition("=")[0].strip().lower()
+                for part in str(raw_reserve or "").split(",")
+                if part.partition("=")[0].strip())
         # The learned RPM for scopes seen later must start from the override
         # too: keep it as the identity's known limit until a 429 says less.
         if rpm:
@@ -353,6 +381,7 @@ class Pacer:
             self._not_before.clear()
             self._groups.clear()
             self._setting_groups.clear()
+            self._setting_reserve = frozenset()
 
     def snapshot(self) -> Dict[str, object]:
         """For the panel: per-scope limit, window occupancy, next-free.

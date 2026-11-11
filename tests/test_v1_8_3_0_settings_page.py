@@ -207,7 +207,7 @@ def test_the_toolbar_buttons_carry_their_tooltips():
 
 def test_the_native_settings_screen_shows_the_same_sentences_the_panel_does():
     for name, row in S.SETTINGS.items():
-        if name == "fallback_models":
+        if name == "fallback_models" or name in S.HIDDEN:  # 1.8.4.0: hidden, never shown
             continue
         title, sentence = row[6], row[7]
         assert title.replace("&", "&amp;") in CONFIG_HTML or title in CONFIG_HTML, name

@@ -149,6 +149,13 @@ SETTINGS: Dict[str, tuple] = {
         (
             "On: holds are kept on disk (a hash of each key, never the key), so restarting Agent Zero "
             "does not spend calls on keys already known to be out.")),
+    "key_reserve": (
+        "text", "", None, None, None, "KAME_KEY_RESERVE",
+        "Reserve keys",
+        (
+            "Keys listed here are used only when every other key of that model cannot "
+            "answer, and are never used for a backup request. Put your paid keys here "
+            "to spend your free quota first.")),
     "pacing_rpm_overrides": (
         "text", "", None, None, None, "KAME_PACING_RPM_OVERRIDES",
         "Per-model requests-per-minute limits",
@@ -296,6 +303,12 @@ SETTINGS: Dict[str, tuple] = {
             "No key, no prompt and no answer text is written; only durations, a model name and the same "
             "key fingerprint the panel already shows. Writes only, never interrupts a call, and keeps the"
             " last ~4 MB (the file rotates). Turn this on to stop the writing.")),
+    "prompt_caching": (
+        "choice", "auto", None, None, ("auto", "off"), "KAME_PROMPT_CACHING",
+        "Prompt cache",
+        (
+            "Lets Agent Zero use the provider's prompt cache, which makes repeated long prompts much "
+            "cheaper. Automatic turns it off by itself for a model that refuses it. Off never uses it.")),
     "hedging_disabled": (
         "flag", False, None, None, None, "KAME_HEDGING_DISABLED",
         "Stop adaptive hedging",
@@ -328,8 +341,10 @@ IMPACT: Dict[str, str] = {
     "hedge_cold_reasoning_s": "low",
     "hedge_max_prompt_tokens": "low",
     "share_pool_health": "medium",
+    "key_reserve": "low",
     "pacing_rpm_overrides": "low",
     "key_region_overrides": "low",
+    "prompt_caching": "low",
     "daily_quota_cooldown_seconds": "medium",
     "max_hold_seconds": "medium",
     "unsized_throttle_backoff": "medium",
@@ -377,6 +392,8 @@ WHEN: Dict[str, str] = {
     "hedge_cold_reasoning_s": "Rarely. Same as above, for thinking models.",
     "hedge_max_prompt_tokens": "Rarely. Very long prompts are not duplicated, to save quota.",
     "share_pool_health": "Keep on, so a restart does not spend calls on keys already known to be out.",
+    "key_reserve": "Only if some of your keys are paid and the others are free.",
+    "prompt_caching": "Leave on Automatic. Off only if you never want the provider's cache used.",
     "pacing_rpm_overrides": "Only if you know a model's per-minute limit and KAME keeps hitting it.",
     "key_region_overrides": "Only if one key must be treated as a different region (Vertex, Bedrock).",
     "daily_quota_cooldown_seconds": "Only if your provider's daily quota resets at a known time KAME cannot read.",
@@ -398,6 +415,15 @@ WHEN: Dict[str, str] = {
     "refusal_recorder_disabled": "Only to check whether this part of KAME is behind a problem.",
     "call_timings_disabled": "Only to check whether this part of KAME is behind a problem.",
     "hedging_disabled": "Only to check whether this part of KAME is behind a problem.",
+}
+
+#: 1.8.4.0 (U5). The ONE line a quick control shows under its title; everything else moves behind
+#: its "Why?" toggle. Only the three quick controls have one. The words are identical in the Hermes
+#: port (settings words are shared, decisions/0015).
+LINE: Dict[str, str] = {
+    "hedge_mode": "How hard KAME works to answer sooner.",
+    "model_switch": "When your model cannot answer, the next one on your list does.",
+    "reply_notice": "A short notice after each reply.",
 }
 
 #: 1.8.3.0 (A6): the long text of a setting, shown as the tooltip over its sentence (Hermes `_DETAIL`);
@@ -458,6 +484,7 @@ ADVANCED = frozenset({
     "hedge_cold_reasoning_s",
     "hedge_max_prompt_tokens",
     "share_pool_health",
+    "key_reserve",
     "pacing_rpm_overrides",
     "key_region_overrides",
     "daily_quota_cooldown_seconds",
@@ -466,6 +493,7 @@ ADVANCED = frozenset({
     "unsized_throttle_rest_seconds",
     "unsized_backoff_max_seconds",
     "stream_resume_limit",
+    "prompt_caching",
     "key_log_style",
     "kame_log_full_errors",
     "kame_unusable_response_limit",
@@ -495,6 +523,13 @@ INTEGRAL = frozenset({"hedge_max_legs", "probe_burst_max_legs", "hedge_burst", "
 OFF_OR_AT_LEAST: Dict[str, float] = {"stream_silence_timeout_seconds": 5.0}
 CONSEQUENTIAL = frozenset({"rotation_disabled", "carousel_disabled"})
 
+#: 1.8.4.0: settings that still load (config, ``KAME_`` environment, ``/kame get`` and ``/kame set``)
+#: but are on no shelf of the settings page (Hermes ``settings.HIDDEN``). ``key_reserve``: the owner,
+#: 2026-11-08, a box someone must fill in before it does anything goes against "nothing to
+#: configure", and his fallback list already covers a paid key on another provider. Empty (the
+#: default) leaves every pick as in 1.8.3.1.
+HIDDEN = frozenset({"key_reserve"})
+
 
 #: 1.8.2.9 (U4): the shelves of the settings page, ``(id, title, note, keys)``, in the order they
 #: are shown. Hermes' five, with its titles and notes word for word, and one more after "Rest
@@ -522,7 +557,8 @@ GROUPS = (
       "unsized_throttle_rest_seconds", "unsized_backoff_max_seconds", "stream_resume_limit")),
     ("agentzero", "Agent Zero log and chat",
      "How KAME talks in Agent Zero's chat line and log. These exist only in the Agent Zero version.",
-     ("kame_log_level", "key_log_style", "kame_log_full_errors", "kame_unusable_response_limit")),
+     ("kame_log_level", "key_log_style", "kame_log_full_errors", "kame_unusable_response_limit",
+      "prompt_caching")),
     ("off", "Troubleshooting: turn parts of KAME off",
      "Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding "
      "out whether KAME is behind a problem. Leave them alone unless something is wrong.",
@@ -558,6 +594,7 @@ CHOICE_LABELS = {
     "model_switch": (("auto", "Automatic"), ("timed", "Set time"), ("never", "Never")),
     "first_token_wait": (("auto", "Automatic"), ("timed", "Set time"), ("off", "Off")),
     "reply_notice": (("always", "Every reply"), ("switches", "Only another model"), ("never", "Never")),
+    "prompt_caching": (("auto", "Automatic"), ("off", "Off")),
 }
 #: 1.8.2.8: a number shown only under one answer of a choice.
 DEPENDS_ON = {

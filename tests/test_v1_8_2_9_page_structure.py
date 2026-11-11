@@ -101,7 +101,6 @@ def test_the_overview_reads_top_to_bottom_in_hermes_order():
 def test_hermes_words_are_on_the_page():
     words = [
         "The three you may want to change often. Everything else is in Settings.",
-        "Nothing to report &mdash; every reply went straight out.",
         "All events &rarr;", "All settings &rarr;",
         "Wake this model", "Try this model now", "Wake it", "Try it",
         "Its keys start again as if never tried; a key that is really spent is refused again. No key is deleted.",

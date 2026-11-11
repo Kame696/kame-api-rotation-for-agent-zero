@@ -27,7 +27,11 @@ import {
   keyRows,
   legendItems,
   modelState,
+  lifetimeLine,
+  movesEmptyLine,
   nowSentences,
+  oneCount,
+  sentLine,
   quotaShare,
   ringAria,
   ringModels,
@@ -171,11 +175,14 @@ const EVENT_LABELS = {
   surfaced: ["Passed to Agent Zero", "bad"],
   switch: ["Next key", "good"],
   wait: ["All keys resting", "warn"],
+  // 1.8.4.0 (E1): Agent Zero only; last, so Hermes' order above is untouched
+  cache_off: ["Prompt cache off", "good"],
 };
 
 const EVENT_MEANING = {
   answered: "The key this call went out on answered, first time. The time is the whole call; the reason says how long the first word took.",
   gave_up: "Every key stayed resting past your “Stop waiting” time, so KAME stopped waiting and handed Agent Zero the original refusal.",
+  cache_off: "This model’s provider refused the prompt cache Agent Zero asked for (free Gemini keys have no cache storage). KAME sent the same request again without it, and will not ask this model for the cache for 30 days. Nothing is wrong with your keys.",
   sent: "A request went out on this key. Every request leaves one of these, so a slow answer is visible while it is still coming.",
   denied_model: "The provider refused this key for THIS model only — a plan that does not include it, or an API not switched on. The key is fine everywhere else, and replacing it would change nothing.",
   invalid_key: "The provider said this is not a valid credential. Replace it — waiting will not repair one.",
@@ -225,6 +232,7 @@ const REASON_ID = {
 /** What KAME did next, after an arrow, so every row reads "what happened → what happened next". */
 const EVENT_NEXT = {
   answered: "",
+  cache_off: "the same request went out again without the cache",
   denied_model: "this key skips this model and keeps working on your others",
   gave_up: "Agent Zero got the original error",
   invalid_key: "out of rotation until you replace it (/kame-keys)",
@@ -243,7 +251,7 @@ const EVENT_NEXT = {
 };
 
 /** The kinds that are KAME working, rather than a provider failing. */
-const GOOD_KINDS = new Set(["switch", "recovery", "stitch", "wait", "setting", "sent", "answered", "handover"]);
+const GOOD_KINDS = new Set(["switch", "recovery", "stitch", "wait", "setting", "sent", "answered", "handover", "cache_off"]);
 
 /** Where a rest came from, in one word (Hermes' SIZED_BY_LABELS). */
 const SIZED_BY_LABELS = {
@@ -497,12 +505,15 @@ const model = {
       let words = style.label;
       if (left && code !== "o" && code !== "x") words += ` · ${backIn(left, this.now)}`;
       if (kind && code !== "r" && code !== "f") words += ` · ${KIND_SHORT[kind] || kind}`;
+      // 1.8.4.0 (E4): a key named in "Reserve keys" is used last
+      if ((pool.reserve_keys || []).includes(fingerprint)) words += " · reserve";
       return { fingerprint: String(fingerprint).replace(/^key:/, ""), glyph: style.glyph, colour: style.colour, words };
     });
     return {
       identity: m.identity,
       label: m.label,
       empty: "",
+      sent: sentLine(pool),
       summary: summary.join(" · "),
       unused: !!pool.unused,
       keys,
@@ -525,6 +536,22 @@ const model = {
 
   // -- what KAME did, the quick controls, the details --------------------------------------------
 
+  /** 1.8.4.0 (U2): the empty line of "What KAME did" depends on the state. */
+  get movesEmpty() {
+    return movesEmptyLine(this.view);
+  },
+  /** 1.8.4.0 (U6): the lifetime line, once there is a reply; `star` from 10 saved. */
+  get lifetime() {
+    return lifetimeLine(this.view?.lifetime || this.data?.lifetime);
+  },
+  /** 1.8.4.0 (U5): a quick control shows its title, the buttons and one line; the rest opens behind "Why?". */
+  whyOpen: {},
+  toggleWhy(name) {
+    this.whyOpen = { ...this.whyOpen, [name]: !this.whyOpen[name] };
+  },
+  details(m) {
+    return !m.line || !!this.whyOpen[m.name];
+  },
   get moves() {
     return groupMoves(this.view, 6).map((m) => ({ ...m, ago: m.last_at ? ago(this.now / 1000 - m.last_at) : "" }));
   },
@@ -806,8 +833,8 @@ const model = {
   },
   /** Every kind Agent Zero records, in Hermes' order, with its sentence. */
   get legendKinds() {
-    const recorded = new Set(["denied_model", "gave_up", "invalid_key", "quarantine", "recovery", "rotation", "setting",
-      "stitch", "storm", "stream_drop", "handover", "surfaced", "switch", "wait"]);
+    const recorded = new Set(["cache_off", "denied_model", "gave_up", "invalid_key", "quarantine", "recovery", "rotation",
+      "setting", "stitch", "storm", "stream_drop", "handover", "surfaced", "switch", "wait"]);
     return Object.entries(EVENT_LABELS)
       .filter(([kind]) => recorded.has(kind))
       .map(([kind, [word, tone]]) => ({ kind, word, tone, text: EVENT_MEANING[kind] || "" }));
@@ -1063,8 +1090,10 @@ const model = {
     const active = this.data?.active;
     const stale = !!this.fetchedAt && this.readAgeS > STALE_AFTER_S;
     return {
-      text: active ? (v.totals?.phrase || `${t.ready || 0} of ${t.keys || 0} keys ready`) : "not rotating",
-      tone: this.said.tone,
+      // 1.8.4.0 (U1): the same fraction as the chip and the first sentence
+      text: active ? oneCount(v, this.now).phrase : "not rotating",
+      // 1.8.4.0 (U3): a dot only means something when there is something; at 0 of 0 keys it is neutral
+      tone: oneCount(v, this.now).total ? this.said.tone : "idle",
       replace: (t.rejected || 0) + (t.retired || 0),
       age: stale ? `reading ${duration(this.readAgeS)} old` : "live",
       stale,

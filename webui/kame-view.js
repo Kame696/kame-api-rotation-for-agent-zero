@@ -53,7 +53,9 @@ export const KIND_SHORT = {
 /** One character per kind of move, so a line is never told by colour alone. */
 export const MOVE_ICON = {
   backup: "◐",
+  cache_off: "○",
   denied_model: "!",
+  gave_up: "■",
   invalid_key: "!",
   model_switch: "→",
   quarantine: "■",
@@ -80,6 +82,9 @@ export const KIND_WORDS = {
   setting: "Setting changed",
   model_switch: "Fallback",
   backup: "Backup key",
+  stitch: "Answer continued",
+  gave_up: "Stopped waiting",
+  cache_off: "Prompt cache off",
 };
 
 /** The engine's short reason in a person's words. */
@@ -385,6 +390,65 @@ export function totalsPhrase(totals) {
   return `${Number(totals?.ready) || 0} of ${Number(totals?.keys) || 0} keys ready`;
 }
 
+/** 1.8.4.0 (U1). The ONE fraction the header, the chip and the first sentence all say: the keys of the
+ *  model the next reply goes to. With no such model (nothing ready), the physical keys over all models,
+ *  each key counted once. `{model, ready, total, phrase}`. Pure. */
+export function oneCount(view, nowMs) {
+  const models = ringModels(view).main;
+  const usable = models.find((model) => model.pool && (model.pool.unused || modelState(model, view, nowMs).tone === "good"));
+  let ready;
+  let total;
+  if (usable) {
+    const counts = keyCounts(usable.pool);
+    ready = counts.r + counts.f;
+    total = Number(usable.pool.keys) || 0;
+  } else {
+    ready = Number(view?.totals?.ready) || 0;
+    total = Number(view?.totals?.keys) || 0;
+  }
+  return { model: usable ? usable.label : null, ready, total, phrase: `${ready} of ${total} keys ready` };
+}
+
+/** 1.8.4.0 (U2). What "What KAME did" says when there is no move to list. The state decides, so the line
+ *  is never a claim the screen contradicts. Pure. */
+export function movesEmptyLine(view) {
+  const totals = view?.totals || {};
+  const replied = (view?.replies || []).length > 0 || Number(view?.lifetime?.replies || 0) > 0;
+  if (!replied) return "No replies yet.";
+  if (Number(totals.keys) > 0 && !Number(totals.ready)) return "Waiting for your keys. Nothing went wrong on your side.";
+  return "Nothing to report: every reply went straight out.";
+}
+
+/** 1.8.4.0 (U6). The lifetime line under "What KAME did", or null before the first reply. `star` is true from
+ *  10 saved replies on: the line then ends with a plain link, in that panel only. */
+export function lifetimeLine(lifetime, locale) {
+  const replies = Number(lifetime?.replies || 0);
+  if (!(replies >= 1)) return null;
+  const saved = Number(lifetime?.saved || 0);
+  const since =
+    typeof lifetime?.since === "number" && lifetime.since > 0
+      ? new Date(lifetime.since * 1000).toLocaleDateString(locale, { day: "numeric", month: "short" })
+      : "";
+  return {
+    star: saved >= 10,
+    starText: "A star helps others find it.",
+    text:
+      `${since ? `Since ${since}: ` : ""}${replies.toLocaleString(locale)} ${replies === 1 ? "reply" : "replies"}, ` +
+      `${saved.toLocaleString(locale)} saved from a provider error.`,
+  };
+}
+
+/** 1.8.4.0 (E6). The ring detail's one line about volume. Display only: no percentage and no "left" number,
+ *  because the moment the provider's day resets is not known. Empty for a report that does not carry it. */
+export function sentLine(pool) {
+  if (typeof pool?.sent_24h !== "number") return "";
+  const limit = Number(pool.daily_limit);
+  return (
+    `Sent in the last 24 hours: ${pool.sent_24h.toLocaleString()}.` +
+    (limit > 0 ? ` The provider's own limit: ${limit.toLocaleString()} a day per ${pool.daily_scope === "key" ? "key" : "project"}.` : "")
+  );
+}
+
 /** The physical keys behind `key_groups`: a key shared by several models is ONE entry. A key is
  *  ready when it is ready for any model (the rule `totals` counts by). `[{provider, fingerprint,
  *  api_base, code, until}]`, in the order of the groups. */
@@ -467,12 +531,13 @@ export function nowSentences(view, nowMs, ageS = 0) {
   const models = ringModels(view).main;
   const usable = models.find((model) => model.pool && (model.pool.unused || modelState(model, view, nowMs).tone === "good"));
   const first = models[0];
+  const one = oneCount(view, nowMs);
 
   // -- line 1: what is happening
   let icon = "●";
   const untouched = models.every((model) => !model.pool || !model.pool.keys || model.pool.unused);
   let line1 = usable
-    ? `Ready — your next reply goes to ${usable.label} (${keyCounts(usable.pool).r + keyCounts(usable.pool).f} of ${usable.pool.keys} keys ready).`
+    ? `Ready — your next reply goes to ${usable.label} (${one.phrase}).`
     : untouched
       ? `Ready — nothing has been asked yet.${first ? ` Your first reply goes to ${first.label}.` : ""}`
       : "Nothing is ready right now — see the models below.";
@@ -727,8 +792,9 @@ export function chipSummary(data, nowMs) {
   }
   const said = nowSentences(view, nowMs);
   const totals = view.totals || {};
-  const keys = Number(totals.keys) || 0;
-  const ready = Number(totals.ready) || 0;
+  const one = oneCount(view, nowMs);
+  const keys = one.total;
+  const ready = one.ready;
   let soonest = null;
   for (const group of view.key_groups || []) {
     const left = untilEpoch(group.until_epoch, nowMs);
@@ -746,14 +812,14 @@ export function chipSummary(data, nowMs) {
     tone = "bad";
   }
   const counts = keys
-    ? `${totalsPhrase(totals)}${ready < keys && soonest ? ` · next key ${backIn(soonest, nowMs)}` : ""}`
+    ? `${one.phrase}${ready < keys && soonest ? ` · next key ${backIn(soonest, nowMs)}` : ""}`
     : "";
   return {
     tone,
     label: keys ? `${ready}/${keys}` : "–",
     tip: said.line1,
     ring: chipRingSvg(view),
-    aria: keys ? `KAME API Rotation: ${totalsPhrase(totals)}` : "KAME API Rotation: no key seen yet",
+    aria: keys ? `KAME API Rotation: ${one.phrase}` : "KAME API Rotation: no key seen yet",
     said,
     headline,
     counts,
@@ -963,7 +1029,8 @@ export function chipPopover(data, nowMs) {
   }
   const totals = view?.totals || {};
   const speed = SPEED_LABEL[view?.speed?.mode];
-  const keysLine = Number(totals.keys) ? `${totalsPhrase(totals)}${speed ? ` · Speed: ${speed}` : ""}` : "No pooled key has been used yet";
+  const one = oneCount(view, nowMs);
+  const keysLine = one.total ? `${one.phrase}${speed ? ` · Speed: ${speed}` : ""}` : "No pooled key has been used yet";
   const models = all.slice(0, CHIP_MODELS_MAX).map((model) => {
     const status = chipRowStatus(model, view, nowMs);
     const isMain = hasList && model.rank === 1;

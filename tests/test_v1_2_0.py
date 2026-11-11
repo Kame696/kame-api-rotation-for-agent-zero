@@ -320,8 +320,10 @@ check("F2 the notice is closed on the exits of the carousel (behaviour: test_v1_
       and os.path.exists(os.path.join(ROOT, "tests", "test_v1_8_2_9_review_fixes.py")))
 check("F3 a success closes it as 'resumed'",
       '_kame_wait_notice_finish(st, "resumed")' in _carousel_src)
+# 1.8.4.0 round 2 (F2): a tenth exit - a race leg whose only free key is a reserve key ends as its
+# own failure, and closes the notice on the way out like the other nine.
 check("F4 stop / nudge during the sleep closes it as 'stopped'",
-      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 9)
+      _carousel_src.count('_kame_wait_notice_finish(st, "stopped")') == 10)
 check("F5 the notice never touches the model's history",
       not re.search(r"_kame_wait_notice[\s\S]{0,3000}?(hist_add|history\.|append_message)",
                     _engine_src))
@@ -349,12 +351,13 @@ for _key, _default in (("live_status_disabled", "false"),
           re.search(rf"config\.{_key}\s*=\s*{re.escape(_default)}", _html) is not None)
 
 check("F11 every setting in default_config.yaml is reachable from the screen "
-      "(except the debug-only raw-error dump, which the log level covers)",
+      "(except the debug-only raw-error dump, which the log level covers, and key_reserve, "
+      "hidden before 1.8.4.0 shipped: owner 2026-11-08)",
       all(f"config.{k}" in _html
           for k in re.findall(r"^([a-z_]+):", _yaml_src, re.M)
-          if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs")),
+          if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs", "key_reserve")),
       str([k for k in re.findall(r"^([a-z_]+):", _yaml_src, re.M)
-           if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs")
+           if k not in ("kame_log_full_errors", "kame_wait_notice", "kame_collapse_storm_logs", "key_reserve")
            and f"config.{k}" not in _html]))
 check("F12 the screen uses A0's own settings markup",
       'class="field-title"' in _html and 'class="section-title"' in _html

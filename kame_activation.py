@@ -141,6 +141,9 @@ def activate(agent=None):
                 ("hedging_disabled", "set_hedging_disabled", False),
                 ("pacing_rpm_overrides", "set_pacing_rpm_overrides", ""),
                 ("key_region_overrides", "set_key_region_overrides", ""),
+                # 1.8.4.0: reserve keys (E4) and the prompt cache rule (E1).
+                ("key_reserve", "set_key_reserve", ""),
+                ("prompt_caching", "set_prompt_caching", "auto"),
             ):
                 _fn = getattr(_kame_engine, _setter, None)
                 if _fn is not None:

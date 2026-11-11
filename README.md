@@ -6,8 +6,8 @@
 
 ### What API key rotation should have been: all your keys and models, one agent that never waits.
 
-[![Version](https://img.shields.io/badge/version-1.8.3.1-blue.svg)](CHANGELOG.md)
-[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.14-purple.svg)](#verified)
+[![Version](https://img.shields.io/badge/version-1.8.4.1-blue.svg)](CHANGELOG.md)
+[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -139,6 +139,26 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 | All keys resting | error, run over | **sleeps until the first recovery, and says so in the chat** |
 | Longest a healthy key can be lost | whatever the provider claimed | **1 hour** (`max_hold_seconds`) |
 
+<a id="gateways"></a>
+## 🧭 KAME and the big gateways
+
+LiteLLM, CLIProxyAPI, new-api, Portkey and Bifrost are **gateways**: a server you run, which any client then
+calls through one URL. KAME is a **plugin**: it lives inside Agent Zero, so there is nothing else to start, and it
+sees what only the agent sees — the model you picked, your fallback list, the reply already on screen.
+
+| | Gateways | **KAME** |
+|---|---|---|
+| Runs inside the agent, nothing else to start | no | **yes** |
+| Tells throttle, daily quota, outage, dead key and no credit apart | partly (cooldowns in LiteLLM and Mirrowel's key proxy) | **yes, 82 providers mapped from their own docs** |
+| Waits the provider's own retry time | yes in CLIProxyAPI, LiteLLM and new-api | **yes** |
+| Races a second key when the first word is late | none found by a search of their code (Nov 2026) | **yes** |
+| Tokens and cost per key | **yes** | no |
+| Any client, through one URL | **yes** | no: Agent Zero and Hermes only |
+
+<sub>Where they are ahead, the table says so. Searched in the public repositories of LiteLLM, Bifrost, Portkey,
+CLIProxyAPI, new-api and Mirrowel's LLM-API-Key-Proxy in November 2026; "none found" means the search found none, not
+that none can exist.</sub>
+
 <a id="how"></a>
 ## 🔬 How it works
 
@@ -171,7 +191,26 @@ flowchart TD
 </table>
 
 <details>
-<summary><b>📣 What's new in 1.8.3.1 and the versions before it</b></summary>
+<summary><b>📣 What's new in 1.8.4.1 and the versions before it</b></summary>
+
+> **1.8.4.1 — your prompt cache is back, a blocked prompt stops at once.**
+
+- **Your prompt cache is back.** Since 1.0.4 KAME switched Agent Zero's prompt cache off for every provider,
+  because free Gemini keys refuse it. Now the request goes through; a model that refuses it pays one extra
+  request, is remembered for 30 days and is sent without it. The rule reads the refusal, never the provider's
+  name. The `prompt_caching` setting turns it off.
+- **A prompt no key can answer stops at once.** A provider's safety refusal used to be read as a refused
+  key: every key was tried and rested, and two wordings never stopped at all. Now it goes straight back and no
+  key is punished. The same for Anthropic's "extra usage is required for long context", which only a shorter
+  request can cure.
+- **A reply soon after your model was busy does not wait for it to refuse again.** It starts on the next model
+  of your list and asks yours beside it; whichever starts answering first is shown, yours included.
+- **One number on the screen.** The header, the chip and the sentence give the same count.
+- **What KAME did for you, over time.** `Since 12 Oct: 1,240 replies, 96 saved from a provider error.` Kept on
+  your machine; it survives a restart and Clear pool.
+- **Sent in the last 24 hours**, beside the provider's own daily limit when it states one. Display only.
+- **A very short cut answer is no longer repeated** ("Hello Hello world").
+- **`1. 1.` is gone.** The numbered lists in Settings count once.
 
 > **1.8.3.1 — any model has a way down, one live line, a popover on the chip.** A reply that starts on model X falls back X, then your main model, then the rest of your fallback list; picking another model for a chat no longer switches the help off (a background job is never raced and never switches on its own account, a stopped important job goes down your list once; an empty list still never switches). The chat's "Calling LLM..." line says in seven states what KAME is doing, with the same words as the Hermes version; the chip opens a popover with your models, the last five replies in plain sentences and a button to the page; the page reads the status every second; "Wait for the first token: Off" is 120 seconds. Offline suites 69 / 69 green. Not yet run on a real Agent Zero. See [validation and limits](VALIDATION.md).
 
@@ -200,7 +239,7 @@ flowchart TD
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.3.1 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.4.1 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -355,6 +394,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
+| **1.8.4.1** — offline suites | 80 / 80 suites green; the settings and timings of both ports compared by machine (`tools/parity_check.py`); 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py`) and 300 raced replies, some of them repeating text (`tools/race_chaos.py`): 0 defects; checked against Agent Zero v2.15 (15 of 15 patch points unchanged, 27 of 27 host facts). Not yet run on a real Agent Zero |
 | **1.8.3.1** — offline suites | 69 / 69 suites green (179 new 1.8.3.1 tests, among them `tools/parity_check.py`: the settings and timings of this port and the Hermes port compared by machine). One live session on a real Agent Zero (its own model call, Gemini, 15 keys): 6 / 6 answered, each on its first key, KAME's own wait 0 ms; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
 | **1.8.3.0** — offline suites | 62 / 62 suites green (232 new 1.8.3.0 tests in 10 files, on top of the 341 of 1.8.2.9). Not yet run on a real Agent Zero; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
 | **1.8.2.9** — offline suites | 52 / 52 suites green (341 new 1.8.2.9 tests in 23 files). Never released on its own |
@@ -394,6 +434,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.8.4.1** | Your prompt cache is back, a blocked prompt stops at once | Agent Zero's prompt cache reaches the provider again (a model that refuses it is remembered 30 days); a safety refusal goes straight back instead of walking every key; one key count everywhere; what KAME did over time |
 | **v1.8.3.1** | Any model has a way down, one live line, a popover on the chip | A reply that starts on model X falls back X, then your main model, then the rest of your list; the chat line has seven states with the same words as the Hermes version; a popover on the chip; the page reads the status every second; Wait for the first token: Off is 120 seconds |
 | **v1.8.3.0** | The same page as the Hermes port, your fallback list belongs to your main model | Settings, Events, Background jobs and Overview say what the Hermes page says, in the same order; Fallback is Automatic / Set time / Never; model search in the list rows; the list is used only for a reply that started on your main model; request errors are not blamed on keys; includes all of 1.8.2.9 |
 | **v1.8.2.9** | A page you can read, the wait on the chat line, back to your best model | No pop-up: the wait is said on the chat's own status line and in the chip, one time (left) and one count (keys) everywhere. Menu and page are **API Rotation**: three sentences, a ring per model, what KAME did, details folded; models on one dead key are one row; Hermes' settings shelves; fallback models edited in rows with a model search. A busy best model is asked again on a 20-second clock, best first; no reply waits behind two silent models; speed in plain words (Saver 1x / Balanced up to 1.1x / Faster up to 1.3x, one request on a good reply); named background jobs get a budget (busy answers do not eat it; `KAME_AUX_UNBOUNDED=1` undoes it) and the page says where your quota went; instrument logs rotate. Offline suites 52 / 52 green (341 new 1.8.2.9 tests); not yet run on a real Agent Zero. |

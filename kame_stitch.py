@@ -141,6 +141,7 @@ class Stitcher:
         "_probe",
         "_buffer",
         "_resolved",
+        "_cut",
         "_skip",
         "_skip_at",
         "_boundary",
@@ -171,6 +172,8 @@ class Stitcher:
         self.forwarded = ""
         #: ``""`` until resolved, then ``continuation`` / ``restart`` / ``new``.
         self.mode = ""
+        #: True when the continuation ended on an error or a cut (``flush(cut=True)``), not normally.
+        self._cut = False
 
     # -- feeding ---------------------------------------------------------
 
@@ -193,14 +196,19 @@ class Stitcher:
             return ""
         return self._emit(self._resolve())
 
-    def flush(self) -> str:
+    def flush(self, *, cut: bool = False) -> str:
         """Decide on whatever is still buffered. Returns the last text to show.
 
         Called when the continuation ends — normally, or because it failed.
         After this the stitcher has forwarded everything it will ever forward.
+
+        ``cut`` (1.8.4.0 round 2, F7): the continuation ended on an error or a cut, not
+        normally. Only then may a short continuation that is a beginning of what was shown
+        be read as a restart (R2): a continuation that ended by itself is text.
         """
         if self._resolved:
             return ""
+        self._cut = bool(cut)
         return self._emit(self._resolve())
 
     # -- the decision ----------------------------------------------------
@@ -218,6 +226,30 @@ class Stitcher:
             self.mode = "continuation"
             return self._trim_boundary(buffered[fresh_at[-1] + 1 :])
 
+        # 1.8.4.0 round 2 (R2): the continuation began the answer again and ended, or was cut,
+        # before it got past what was already shown, so every character of it is text the user
+        # has read. Too short for the tail overlap (MIN_OVERLAP) and for the restart test
+        # (RESTART_HEAD), it went out as new text: a cut, then a second cut a word into the
+        # restart, showed "the quick brown the" (Hermes tools/race_chaos.py, seed 0).
+        # F7: only when the continuation was cut, or is long enough (MIN_OVERLAP) to be a real restart;
+        # a short continuation that ended normally ("Yes. ..." then " yes") is text, not a repeat.
+        if fresh_c and seen_c.startswith(fresh_c) and (self._cut or len(fresh_c) >= MIN_OVERLAP):
+            self.mode = "restart"
+            self._skip = len(seen_c)
+            self._skip_at = 0
+            return self._after_resolution(buffered)
+
+        # 1.8.4.0: with less than MIN_OVERLAP comparable characters shown, the tail
+        # overlap below cannot ask (its loop is empty) and the long-head restart test
+        # needs RESTART_HEAD of them, so "Hello" then "Hello world" was shown twice.
+        # A continuation that begins with ALL of a very short seen text is the model
+        # starting again; drop exactly that prefix, nothing more.
+        if seen_c and len(seen_c) < MIN_OVERLAP and fresh_c.startswith(seen_c):
+            self.mode = "restart"
+            self._skip = len(seen_c)
+            self._skip_at = 0
+            return self._after_resolution(buffered)
+
         overlap = _tail_overlap(seen_c, fresh_c)
         if overlap:
             self.mode = "continuation"
@@ -232,8 +264,13 @@ class Stitcher:
             return self._after_resolution(buffered)
 
         self.mode = "new"
-        self._boundary = ""
-        return buffered
+        # 1.8.4.0 round 2 (R5): the request continued ``seen`` with its trailing whitespace
+        # stripped (a provider refuses a prefill that ends in it), so a model that continues
+        # opens with that whitespace again: "fox " then " jumps" showed "fox  jumps", and in a
+        # code block a newline and four spaces, then "    return x", doubled the indent of what
+        # was shown and of what was kept in the history. Only whitespace identical to what was already shown is
+        # consumed; a different newline or indent stays (``_trim_boundary``).
+        return self._trim_boundary(buffered)
 
     def _trim_boundary(self, text: str) -> str:
         """Consume only identical trailing whitespace that was already shown.

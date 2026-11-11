@@ -181,9 +181,11 @@ def test_the_chip_the_page_and_the_engine_say_the_same_count():
         "return { label: chip.label, counts: chip.counts, line1: V.nowSentences(data.view, now).line1,"
         " physical: keys.length, ready: keys.filter(k => k.code === 'r').length, ring: (chip.ring.match(/<path|<circle/g) || []).length };",
         report)
-    assert out["label"] == f"{t['ready']}/{t['keys']}" == "2/3"
+    # 1.8.4.0 (U1): this said 2/3 (every physical key) beside a sentence saying "2 of 2" (the model the next reply
+    # goes to). The chip, the header and the sentence now say that one fraction; the engine's totals stay physical.
+    assert out["label"] == "2/2" and (t["ready"], t["keys"]) == (2, 3)
     assert t["phrase"] == "2 of 3 keys ready"
-    assert t["phrase"] in out["counts"]
+    assert "2 of 2 keys ready" in out["counts"]
     assert out["line1"].endswith("(2 of 2 keys ready).")      # the model's own pool, as on Hermes
     assert out["physical"] == t["keys"] and out["ready"] == t["ready"]
     assert out["ring"] == t["keys"]                 # Q5: one segment per key

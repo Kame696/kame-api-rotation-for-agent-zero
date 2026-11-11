@@ -254,6 +254,13 @@
         </div>
         <div class="field-control"><input type="number" step="any" min="0" max="100" x-model.number="config.kame_unusable_response_limit" x-init="if (config.kame_unusable_response_limit === undefined || config.kame_unusable_response_limit === null) config.kame_unusable_response_limit = 5" /></div>
       </div>
+      <div class="field" x-show="advanced">
+        <div class="field-label">
+          <div class="field-title">Prompt cache <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">Lets Agent Zero use the provider's prompt cache, which makes repeated long prompts much cheaper. Automatic turns it off by itself for a model that refuses it. Off never uses it.<br><i>When to change it: Leave on Automatic. Off only if you never want the provider's cache used.</i></div>
+        </div>
+        <div class="field-control"><select x-model="config.prompt_caching" x-init="if (config.prompt_caching === undefined || config.prompt_caching === null) config.prompt_caching = 'auto'"><option value="auto">Automatic</option><option value="off">Off</option></select></div>
+      </div>
       <details>
         <summary class="section-title">Troubleshooting: turn parts of KAME off</summary>
         <div class="section-description">Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding out whether KAME is behind a problem. Leave them alone unless something is wrong.</div>

@@ -54,6 +54,8 @@ def _settings_meta():
             "impact": getattr(table, "IMPACT", {}).get(name, "low"),
             "when": getattr(table, "WHEN", {}).get(name, ""),
             "detail": getattr(table, "DETAIL", {}).get(name, ""),
+            # 1.8.4.0 (U5): the one line of a quick control; empty for every other setting.
+            "line": getattr(table, "LINE", {}).get(name, ""),
             "units": getattr(table, "UNITS", {}).get(name, ""),
             "integral": name in getattr(table, "INTEGRAL", ()),
             "off_or_at_least": getattr(table, "OFF_OR_AT_LEAST", {}).get(name),

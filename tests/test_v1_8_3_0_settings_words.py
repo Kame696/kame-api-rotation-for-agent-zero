@@ -132,12 +132,13 @@ def test_the_shelves_hold_the_hermes_keys_in_hermes_order_and_the_agent_zero_one
     mine = {g: list(keys) for g, _t, _n, keys in S.GROUPS}
     for group in FIXTURE["groups"]:
         expected = [RENAMED.get(k, k) for k in group["keys"] if k not in HERMES_ONLY]
-        assert mine[group["id"]] == expected, group["id"]
+        # 1.8.4.0 (E1): prompt_caching exists only here (Hermes has no cache flag), last on its shelf
+        assert [k for k in mine[group["id"]] if k != "prompt_caching"] == expected, group["id"]
     assert [g for g, *_ in S.GROUPS] == ["extra", "speed", "keyring", "tuning", "agentzero", "off"]
-    assert mine["agentzero"] == ["kame_log_level", "key_log_style", "kame_log_full_errors", "kame_unusable_response_limit"]
+    assert mine["agentzero"] == ["kame_log_level", "key_log_style", "kame_log_full_errors", "kame_unusable_response_limit", "prompt_caching"]
     every = [k for keys in mine.values() for k in keys]
     assert len(every) == len(set(every))
-    assert set(every) | {"fallback_models"} == set(S.SETTINGS)
+    assert set(every) | {"fallback_models"} | S.HIDDEN == set(S.SETTINGS)  # 1.8.4.0: hidden ones sit on no shelf
 
 
 def test_every_setting_has_a_power_a_sentence_and_the_agent_zero_ones_too():
