@@ -61,6 +61,9 @@ def main() -> int:
 
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    # 1.8.4.2 (S1): remembered trouble is off for the older suites (a failure one of them provokes must not
+    # make a model risky for the next); the 1.8.4.2 suites switch it on for themselves.
+    env.setdefault("KAME_NO_REMEMBERED_TROUBLE", "1")
     failed = []
     for suite in suites:
         if is_pytest_module(suite):

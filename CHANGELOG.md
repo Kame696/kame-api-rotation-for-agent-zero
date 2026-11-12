@@ -1,5 +1,48 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.8.4.2 — A model that keeps failing stops making you wait (2026-11-11)
+
+**In short:** the first reply after a pause used to wait on the best model of your list even when it had been
+failing all week, because KAME forgot every failure on a restart or after a quiet hour.
+
+**What you see**
+
+- **KAME remembers which models keep failing.** It keeps each model's last outcomes on your machine
+  (`model-health.json`, beside the call timings). A model whose latest outcome is a failure, with at least two
+  failures among its last ten within seven days, no longer leads a reply: the reply starts on the next model of
+  your list and the failing one is still asked beside it, so it leads again the moment it answers. Only the
+  provider saying busy, or making you wait past the race trigger, counts. A 429, a quota, a bad request, a stop
+  does not. Nothing new is sent while your best model is healthy. The events tab says it once per reply:
+  `<model> failed 3 of its last 4 tries - this reply starts on <next> and asks it beside`.
+  `KAME_NO_REMEMBERED_TROUBLE=1` turns it off. It never applies to background jobs, under "Never switch" or
+  under "Ignore my fallback list", and it can never stop a reply: with no model after it, the reply goes on the
+  model itself.
+- **A model that is not remembered as failing is tried first.** When a reply moves down your list, the models
+  that are not remembered as failing come first, each group in your own order. Nothing is ever left out.
+- **"Try this model now" forgets the trouble too.** The next reply starts on that model.
+- **A probe that lost is heard to its end.** The ask beside the reply used to be cut the moment the reply's own
+  model spoke, so a recovered best model could never be noticed. It is now heard (off the reply, nothing of it
+  reaches the screen) until its first word, its end, its error or 30 seconds. A word clears its busy window and
+  the next reply starts on it: `<model> answered again beside the last reply - the next reply starts on it`.
+  Silence for 30 seconds opens the window; an error is judged like any other.
+- **A model refused busy beside your reply is not handed the same reply again.** If the next model raced beside
+  your reply was refused busy and the reply then moved down your list, it no longer goes straight back to that
+  model. This holds for that one reply only.
+
+- **The start probe says what it is again.** Since 1.8.2.9 the ask beside a reply that starts on your next model
+  was announced as `no first word after ...` and claimed a second time; it now reads `your best model was busy:
+  asked again beside <next>, the first to answer is shown`, as intended.
+
+**Under the hood**
+
+- New `kame_model_health.py` (optional like the other modules); the settings and events are unchanged. It is read
+  when the plugin loads and every write runs on a timer thread, so neither the event loop nor a reply ever waits
+  for the disk.
+- Checked offline against the new suites `test_v1_8_4_2_model_health`, `test_v1_8_4_2_remembered_trouble`,
+  `test_v1_8_4_2_judged_probe` and `test_v1_8_4_2_leg_busy_avoid`.
+
+---
+
 ## 1.8.4.1 — Your prompt cache is back, a blocked prompt stops at once (2026-11-10)
 
 **In short:** a full audit of 1.8.3.1. 4,200 fault-injected calls found no crash. The cracks were in what the

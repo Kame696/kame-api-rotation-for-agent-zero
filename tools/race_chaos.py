@@ -20,6 +20,10 @@ again. After every reply:
       read from the hop's ``"race"`` flag). A widened leg may (F1), so it is not checked here.
   I4  an exception that reaches the caller is a provider refusal or one of KAME's own, never an
       internal error (AttributeError, KeyError, TypeError, ...)
+  I5  no probe judge survives its deadline (1.8.4.2, S1e): a start probe that lost the race is heard to its
+      first word, its end, its error or 30 s, so thirty-five virtual seconds after the reply none is left.
+      The runs also start with random remembered trouble (S1) on some models: the start decision it adds
+      must never cost a reply (I1) or change what is shown (I2).
 
 Offline, stand-in modules, virtual clock: no Agent Zero installation, no network, nothing written
 outside a temp folder. Mirror of Hermes ``tools/race_chaos.py``.
@@ -45,6 +49,7 @@ from pathlib import Path
 HOME = tempfile.mkdtemp(prefix="kame-a0-race-chaos-")
 os.chdir(HOME)
 os.environ["KAME_RECORDER_DISABLED"] = "1"
+os.environ.pop("KAME_NO_REMEMBERED_TROUBLE", None)     # 1.8.4.2 (S1): remembered trouble is part of the run
 logging.disable(logging.CRITICAL)
 
 CURRENT = Path(__file__).resolve().parents[1]
@@ -194,7 +199,9 @@ def _ordinary_ready(identity, now):
             continue
         if kd.get("retired_at"):
             continue
-        if float(kd.get("sick_until", 0) or 0) > now or float(kd.get("model_until", 0) or 0) > now:
+        # 1.8.4.2: ready means resting for LESS than now, as ``_get_best_key`` reads it (``sick_until < now``): a key
+        # refused at this very instant with a rest of 0 s is not ready yet (seed 314 of the 1.8.4.2 run).
+        if float(kd.get("sick_until", 0) or 0) >= now or float(kd.get("model_until", 0) or 0) >= now:
             continue
         ready += 1
     return ready
@@ -322,6 +329,14 @@ def reset():
         K._KJ.EVENTS.clear()
     H.HEDGE_TRACKER.clear()
     P.PACER.clear()
+    K._KAME_PROBE_JUDGES.clear()
+    if K._KMH is not None:
+        # 1.8.4.2 (S1): no remembered trouble carries over from one seed to the next
+        try:
+            os.unlink(os.path.join(HOME, K._KMH.FILE_NAME))
+        except OSError:
+            pass
+        K._KMH.HEALTH.configure(directory=HOME, calls_path=os.path.join(HOME, "no-calls.jsonl"))
 
 
 def setup_state(rng, reserve=()):
@@ -346,6 +361,10 @@ def setup_state(rng, reserve=()):
             K._KAME_BUSY_UNTIL[ident] = now - rng.uniform(1.0, 20.0)
             K._KAME_BUSY_WINDOW[ident] = 30.0
             K._KAME_PROBED_AT[ident] = now - 60.0
+        if K._KMH is not None and rng.random() < 0.3:
+            # 1.8.4.2 (S1): this model keeps failing - two to four failures lately, the latest one a failure
+            for i in range(rng.choice([2, 3, 4])):
+                K._KMH.HEALTH.note(ident, False, now=now - 120.0 + i)
         pool = K._KAME_KEY_HEALTH[ident]["keys"]
         for k in KEYS:
             r = rng.random()
@@ -407,6 +426,12 @@ def run_one(seed):
         problems.append(f"I2 page {page['full']!r}")
     problems.extend(world.violations)
     took = loop._virtual - started
+    try:
+        loop.run_until_complete(asyncio.sleep(35.0))      # I5: the judges end by their own deadline
+    except BaseException:
+        pass
+    if K._KAME_PROBE_JUDGES:
+        problems.append(f"I5 {len(K._KAME_PROBE_JUDGES)} probe judge(s) survived their deadline")
     try:
         pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
         for t in pending:

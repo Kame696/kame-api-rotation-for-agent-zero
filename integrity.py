@@ -89,6 +89,8 @@ OPTIONAL = (
     "kame_lifetime.py",
     # 1.8.2.9: the budget of a background job. Missing, background jobs keep the 1.8.2.8 wait.
     "kame_aux.py",
+    # 1.8.4.2: the models that keep failing, remembered across restarts. Missing, a reply starts as in 1.8.4.1.
+    "kame_model_health.py",
     "api/kame_settings_set.py",
     # 1.8.2.9: the buttons on the page, the fallback list editor, and the one view both screens read.
     "api/kame_pool_action.py",

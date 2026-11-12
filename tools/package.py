@@ -50,6 +50,7 @@ INCLUDE_FILES = (
     "kame_stitch.py",
     "kame_lifetime.py",
     "kame_aux.py",
+    "kame_model_health.py",
     "kame_journal.py",
     "kame_settings.py",
     "kame_keys.py",
