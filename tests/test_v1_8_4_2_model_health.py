@@ -183,6 +183,22 @@ def test_forget_drops_the_model_here_and_in_the_file(tmp_path):
     assert h.summary(ID) == (1, 1), "an outcome after the forget counts again"
 
 
+def test_an_outcome_in_the_forgets_own_millisecond_still_counts(tmp_path, monkeypatch):
+    """CI on Linux: a live note made in the same millisecond as Clear pool was dropped by the tombstone
+    (every event at or before it goes). A live note now lands just after it; a replayed outcome from before
+    the forget stays forgotten."""
+    h = make(tmp_path)
+    h.note(ID, False, now=time.time() - 50)
+    h.note(ID, False, now=time.time() - 40)
+    frozen = round(time.time(), 3)
+    monkeypatch.setattr(mh.time, "time", lambda: frozen)
+    assert h.forget(lambda ident: ident == ID) == 1
+    h.note(ID, False)
+    assert h.summary(ID) == (1, 1), "the live outcome in the forget's own millisecond counts"
+    h.note(ID, False, now=frozen - 1)
+    assert h.summary(ID) == (1, 1), "an outcome from before the forget stays forgotten"
+
+
 def test_the_save_runs_off_the_callers_thread_at_most_once_per_two_seconds(tmp_path):
     h = make(tmp_path)
     h.note(ID, False, now=NOW)

@@ -350,6 +350,12 @@ class ModelHealth:
             at = round(time.time() if now is None else float(now), 3)
             with self._lock:
                 self.ensure_loaded()
+                if now is None:
+                    # An outcome noted live after a Clear pool counts, even inside the forget's own millisecond
+                    # (the tombstone drops every event at or before it; found by CI on Linux).
+                    cleared_at = self._cleared.get(identity, 0.0)
+                    if at <= cleared_at:
+                        at = round(cleared_at + 0.001, 3)
                 events = self._events.setdefault(identity, [])
                 if call_id and events and self._last_call.get(identity) == call_id:
                     prev_at, prev_ok = events[-1]

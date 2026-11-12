@@ -38,6 +38,8 @@ failing all week, because KAME forgot every failure on a restart or after a quie
 - New `kame_model_health.py` (optional like the other modules); the settings and events are unchanged. It is read
   when the plugin loads and every write runs on a timer thread, so neither the event loop nor a reply ever waits
   for the disk.
+- An outcome noted in the same millisecond as Clear pool is no longer dropped with the cleared ones (found by
+  CI on Linux, where the two land in one millisecond).
 - Checked offline against the new suites `test_v1_8_4_2_model_health`, `test_v1_8_4_2_remembered_trouble`,
   `test_v1_8_4_2_judged_probe` and `test_v1_8_4_2_leg_busy_avoid`.
 
