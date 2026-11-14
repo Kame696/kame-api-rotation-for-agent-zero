@@ -56,54 +56,28 @@ Watch it work in **API Rotation** (central menu).
 </tr>
 </table>
 
-## 🎯 Why people switch to KAME
+## 🎯 Two jobs in one plugin
 
-Round-robin tools cycle your keys blindly and keep hitting the one that just failed. **KAME decides from the error itself** — and it never makes your agent wait for a slow model.
+Most key rotators only do the first one.
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-### ➕ Your quotas add up
-Many free-tier keys, from many projects and accounts, become **one big pool**. 14 Gemini projects = 14× the free quota.
+### 🔁 Rotation — more quota
+All your keys, projects and accounts become **one pool** (14 Gemini projects = 14× the free quota). A `429`, a daily quota or a dead key moves the call to the **next healthy key at once**, and the refused key rests **exactly as long as the provider says**.
 
 </td>
 <td width="50%" valign="top">
 
-### 🛡️ Never stuck on a 429
-A `429`, `RESOURCE_EXHAUSTED`, a `503` or a dead key moves the call to the **next healthy key at once**. A resting key comes back by itself.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### ⚡ Speed first
-A late reply is **raced** by a backup key, then by your **next model**. Whichever answers first is shown, the rest is cut. A reply that **stalls half-way** is picked up again.
-
-</td>
-<td width="50%" valign="top">
-
-### 🔀 Smart model fallback
-The model you picked **leads every reply**. A busy, spent or slow one hands over in seconds - to your main model, then the rest of your list - and is tried first again soon after.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🧠 Reads every error
-The provider's **own retry time**, per-minute vs daily vs out of credit. **82 providers** learned from their own docs, no allowlist.
-
-</td>
-<td width="50%" valign="top">
-
-### 👀 You see everything
-Which **model answered** each reply and how long it took. A live panel with every key, rest and switch.
+### ⚡ Racing — less waiting
+A reply that is **late**, **stops mid-thought** or **goes silent half-way** is sent again to another key or your **next model**. The first to answer is shown, the rest is cut. Extra requests only when a reply is stuck.
 
 </td>
 </tr>
 </table>
+
+Also: 🔀 **your model leads** — every reply starts on the model you picked; your fallback list takes over only when it is busy, spent or slow · 🧠 **reads every error** — 82 providers learned from their own docs · 👀 **you see everything** — which model answered each reply, and how long it took.
 
 ## 🏎️ How fast? Measured live
 
