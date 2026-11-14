@@ -175,6 +175,10 @@ def activate(agent=None):
             _quiet = getattr(_kame_engine, "set_thought_quiet", None)
             if _quiet is not None:
                 _quiet(cfg.get("thought_quiet_s", ""))
+            # v1.9.0.1 (A14): an answer that began and went silent; 45 when missing, 0 = off
+            _answer_quiet = getattr(_kame_engine, "set_answer_quiet", None)
+            if _answer_quiet is not None:
+                _answer_quiet(cfg.get("answer_quiet_s", 45))
         except Exception:
             # Older A0 versions may lack get_plugin_config; fall back to defaults.
             pass

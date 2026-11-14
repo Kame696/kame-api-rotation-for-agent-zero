@@ -137,6 +137,14 @@ hedge_max_prompt_tokens: 32000
 # Environment: KAME_THOUGHT_QUIET_S.
 thought_quiet_s: ""
 
+# v1.9.0.1. How long a reply that has already started to show its answer may
+# stay completely silent (the provider sends nothing at all) before KAME cuts
+# it and asks again to continue it, on another key or on the same key when it
+# is the only one. What you already read stays; nothing is repeated. 45 by
+# default; 0 turns the watch off. A model on your own machine is never cut.
+# Range 0-600. Environment: KAME_ANSWER_QUIET_S.
+answer_quiet_s: 45
+
 # Reserve keys: the short key labels the panel shows, comma separated. A reserve
 # key is used only when every other key of that model cannot answer, and never
 # for a backup request. Leave empty unless some of your keys are paid.

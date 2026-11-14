@@ -380,7 +380,9 @@ def test_a7_4_a_thinking_rescue_keeps_the_next_model_away(scene, monkeypatch):
 
 def test_a7_4_never_a_third_rescue(scene, monkeypatch):
     monkeypatch.setattr(K, "_KAME_CROSS_COLD_S", 0.5)
-    scene.scripts[NEXT] = [("sleep", 30), ("say", "late")]
+    # 1.9.0.1 (A11): a rescue that is silent is no longer waited for - the next free model takes the reply over (see
+    # test_v1_9_0_1_matrix); a rescue that keeps working is, and nothing else is asked beside it
+    scene.scripts[NEXT] = [x for _ in range(30) for x in (("think", "n"), ("sleep", 1.0))] + [("say", "late")]
     scene.scripts[THIRD] = [("say", "a third rescue would answer")]
     ctx, result = scene.reply([[("think", "a"), ("sleep", 500)], [("sleep", 500)]])
     assert result is scene.objs[NEXT]
@@ -394,13 +396,14 @@ def test_a7_4_with_never_switch_or_no_list_the_next_model_is_never_a_rescue(scen
     K.set_model_switch("never")
     ctx, result = scene.reply([[("think", "a"), ("sleep", 9.0), ("say", "back at last")], [("sleep", 500)]])
     assert result is scene.objs["home0"] and not scene.started(NEXT)
-    assert ctx["rescues_asked"] == 1                                   # the other key is still asked once
+    # 1.9.0.1 (A12): the second extra request is another key of the same model, never a sibling model
+    assert ctx["rescues_asked"] == 2
     K.set_model_switch("auto")
     K.set_fallback_models("")
     scene.starts.clear()
     scene.homes = 0
     ctx, result = scene.reply([[("think", "a"), ("sleep", 9.0), ("say", "back at last")], [("sleep", 500)]])
-    assert result is scene.objs["home0"] and not scene.started(NEXT) and ctx["rescues_asked"] == 1
+    assert result is scene.objs["home0"] and not scene.started(NEXT) and ctx["rescues_asked"] >= 1   # the budget of the first reply is partly spent
 
 
 # --- A7 5 - which callback is the real claim ---------------------------------------------------------

@@ -159,6 +159,13 @@
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
+          <div class="field-title">Quiet limit while answering <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">How long a reply that has already started to show its answer may stay completely silent (the provider sends nothing at all) before KAME cuts it and asks again to continue it, on another key or on the same key when it is the only one. What you already read stays; nothing is repeated. 45 seconds by default; 0 turns the watch off. A model running on your own machine is never cut.<br><i>When to change it: Rarely. Only to turn the watch off (0) or to wait longer for a very slow model.</i></div>
+        </div>
+        <div class="field-control"><input type="number" step="any" min="0" max="600" x-model.number="config.answer_quiet_s" x-init="if (config.answer_quiet_s === undefined || config.answer_quiet_s === null) config.answer_quiet_s = 45" /></div>
+      </div>
+      <div class="field" x-show="advanced">
+        <div class="field-label">
           <div class="field-title">Skip backups for very long prompts <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
           <div class="field-description">A backup of a huge prompt spends your token quota twice and never hits a warm cache, so above this size backups are skipped.<br><i>When to change it: Rarely. Very long prompts are not duplicated, to save quota.</i></div>
         </div>

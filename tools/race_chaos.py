@@ -31,6 +31,14 @@ again. After every reply:
       reach the page. The stand-in model now sometimes thinks and then hangs ("thinks then hangs"), sometimes
       thinks and goes quiet for a while before it answers, and the quiet limit is learned, 3 s or off.
 
+  I9  (1.9.0.1, A11-A12) a reply is never left waiting while a free model or key existed that the rules allow.
+      Two worlds are built for it, with nothing else going wrong: "stall_exit" (the home model and the first
+      model of the list think and then hang, a later model of the list answers: the reply must be handed on
+      once both rescues have had their turn) and "first_hang" (only the first request thinks and hangs; one key
+      or four, a list or none, "Never switch" or not: the rescue must be asked, the same key again when it is
+      the only one). Other drawn worlds: a pool with one key, no list, "Never switch", a list with a model of
+      another provider, and a model whose every request hangs (the reply must still end).
+
 Offline, stand-in modules, virtual clock: no Agent Zero installation, no network, nothing written
 outside a temp folder. Mirror of Hermes ``tools/race_chaos.py``.
 
@@ -86,6 +94,7 @@ K.HumanMessage = HumanMessage         # the stand-in modules' message takes no c
 PROVIDER = "google"
 MODELS = ["gemini-race", "gemini-race-two", "gemini-race-three", "gemini-race-four"]
 KEYS = [f"AIzaSyCHAOSA0{i}" + "0" * 27 for i in range(5)]
+OTHER_PROVIDER = "groq"
 ANSWER = ["the ", "quick ", "brown ", "fox ", "jumps"]
 CANON = "".join(ANSWER)
 
@@ -192,6 +201,10 @@ class World:
         self.rng2 = random.Random(seed * 7919 + 17)
         self.deliveries = []    # (race id, leg, "think" | "text", delta): what each race handed to the page
         self.next_req = 0
+        # 1.9.0.1: the world's shape (drawn on a stream of its own, so older seeds draw what they drew)
+        self.mode = None        # None | "all_hang" | "first_hang" | "stall_exit"
+        self.nkeys = len(KEYS)
+        self.shape = "normal"
 
 
 WORLD = {"w": None}
@@ -253,7 +266,17 @@ class LiteLLMChatWrapper:
             done = len(prefix.rstrip())          # continue where the cut answer stopped
             rest = CANON[done:]
             words = [rest] if rest else []
-        if roll < 0.38:
+        forced = None
+        if w.mode == "all_hang" or (w.mode == "first_hang" and req == 1) or \
+                (w.mode == "stall_exit" and self.model_name in MODELS[:2]):
+            forced = "hang"
+        elif w.mode in ("first_hang", "stall_exit"):
+            forced = "fast"
+        if forced == "hang":
+            name, delay, cut = "silent", 90.0, None
+        elif forced == "fast":
+            name, delay, cut = "fast", 0.3, None
+        elif roll < 0.38:
             name, delay, cut = "fast", w.rng.uniform(0.1, 2.0), None
         elif roll < 0.50:
             name, delay, cut = "silent", 90.0, None
@@ -284,7 +307,11 @@ class LiteLLMChatWrapper:
         thoughts = 0
         quiet = 0.0
         think_fail = None
-        if name == "silent" and w.rng2.random() < 0.6:
+        if forced == "hang":
+            thoughts = w.rng2.randint(1, 3)           # it thinks, and then says nothing: the quiet watch's case
+        elif forced == "fast":
+            pass
+        elif name == "silent" and w.rng2.random() < 0.6:
             thoughts = w.rng2.randint(1, 3)
             # review 7: it thinks, and then FAILS (a raced-in leg that fails after it became provisional must
             # rotate the reply, not end it as a stop; a failing provisional must not wait for the provider's timeout)
@@ -336,7 +363,16 @@ models.LiteLLMChatWrapper = LiteLLMChatWrapper
 models.ModelType, models.ModelConfig = ModelType, ModelConfig
 models.get_chat_model = lambda provider, name, model_config=None, **kw: LiteLLMChatWrapper(provider, name)
 sys.modules["models"] = models
-K._kame_provider_keys = lambda provider: list(KEYS) if str(provider).lower() == PROVIDER else []
+def _provider_keys(provider):
+    """The keys of a provider: the first ``nkeys`` of the stand-in's five; a second provider has one."""
+    name = str(provider).lower()
+    if name == PROVIDER:
+        w = WORLD["w"]
+        return list(KEYS[:w.nkeys]) if w is not None else list(KEYS)
+    return ["gsk_CHAOSOTHER" + "0" * 20] if name == OTHER_PROVIDER else []
+
+
+K._kame_provider_keys = _provider_keys
 assert K._kame_bind_entry_points(LiteLLMChatWrapper) in (1, 2), "KAME did not bind the stand-in model"
 
 _real_carousel = K._kame_carousel
@@ -479,13 +515,51 @@ def run_one(seed):
     asyncio.set_event_loop(loop)
     reset()
     reserve = [KEYS[0]] if rng.random() < 0.5 else []
+    hedge = rng.choice(["adaptive", "adaptive", "max", "off"])
+    # 1.9.0.1: the world's shape, on a stream of its own
+    shape_rng = random.Random(seed * 104729 + 31)
+    roll3 = shape_rng.random()
+    shape = ("normal" if roll3 < 0.45 else "one_key" if roll3 < 0.55 else "no_list" if roll3 < 0.65 else
+             "never" if roll3 < 0.73 else "mixed" if roll3 < 0.80 else "all_hang" if roll3 < 0.85 else
+             "first_hang" if roll3 < 0.93 else "stall_exit")
+    listing = "\n".join(f"{PROVIDER}/{m}" for m in MODELS[1:])
+    switch = "auto"
+    nkeys = len(KEYS)
+    mode = None
+    if shape == "one_key":
+        nkeys = 1
+    elif shape == "no_list":
+        listing = ""
+    elif shape == "never":
+        switch = "never"
+    elif shape == "mixed":
+        listing = f"{PROVIDER}/{MODELS[1]}\n{OTHER_PROVIDER}/llama-chaos\n{PROVIDER}/{MODELS[2]}"
+    elif shape == "all_hang":
+        mode = "all_hang"
+    elif shape == "first_hang":
+        mode = "first_hang"
+        nkeys = shape_rng.choice([1, 4])
+        listing, switch = shape_rng.choice([(listing, "auto"), ("", "auto"), (listing, "never")])
+    elif shape == "stall_exit":
+        mode = "stall_exit"
+        nkeys = shape_rng.choice([1, 4])
+    if nkeys == 1 or mode in ("first_hang", "stall_exit"):
+        reserve = []                  # a reserve key and a one-key pool, or a world with nothing else wrong
     K.set_key_reserve(", ".join(K._key_short_id(k) for k in reserve))
-    K.set_hedge_mode(rng.choice(["adaptive", "adaptive", "max", "off"]))
-    K.set_fallback_models("\n".join(f"{PROVIDER}/{m}" for m in MODELS[1:]))
+    K.set_hedge_mode("adaptive" if mode in ("first_hang", "stall_exit") else hedge)
+    K.set_model_switch(switch)
+    K.set_fallback_models(listing)
     WORLD["w"] = world = World(rng, reserve, seed)
-    setup_state(rng, reserve)
+    world.mode, world.nkeys, world.shape = mode, nkeys, shape
+    if mode in ("first_hang", "stall_exit"):
+        K._KAME_FALLBACK_SKIP.clear()     # no remembered trouble: nothing may keep a model from being asked
+    else:
+        setup_state(rng, reserve)
     # 1.8.4.3: the quiet limit is learned (None), 3 s, or the watch is off (0) - drawn on the thoughts' own stream
-    K.set_thought_quiet(world.rng2.choice([None, None, 3.0, 0]))
+    quiet_draw = world.rng2.choice([None, None, 3.0, 0])
+    K.set_thought_quiet(3.0 if mode in ("first_hang", "stall_exit") else quiet_draw)
+    # 1.9.0.1 (A14): the answer watch: 45 s, a short one, or off - on the same stream, after the draw above
+    K.set_answer_quiet(world.rng2.choice([None, None, 4.0, 0]))
     K._KAME_QUIET_SEEDED.clear()
     page = {"full": "", "chunks": "", "thoughts": ""}
 
@@ -526,6 +600,12 @@ def run_one(seed):
     problems.extend(world.violations)
     problems.extend(thought_violations(world.deliveries))     # I6-I8 (1.8.4.3)
     took = loop._virtual - started
+    if world.mode in ("first_hang", "stall_exit") and outcome == "answer" and took > 45.0:
+        # I9: nothing else was wrong, and a model or a key that the rules allow was free
+        problems.append(f"I9 the reply waited {took:.0f}s ({world.shape}, {world.nkeys} key(s)) while a free "
+                        f"model or key existed that the rules allow; asked {world.asked[:8]}")
+    if world.mode in ("first_hang", "stall_exit") and outcome != "answer":
+        problems.append(f"I9 the reply ended with {outcome} in a world where a free model or key answers")
     try:
         loop.run_until_complete(asyncio.sleep(35.0))      # I5: the judges end by their own deadline
     except BaseException:

@@ -149,6 +149,15 @@ SETTINGS: Dict[str, tuple] = {
             "showing live meanwhile. Left alone, KAME learns it for each model: 8 to 20 seconds, longer for "
             "a model that is quiet by nature, never above 90. A number replaces that; 0 turns the watch "
             "off.")),
+    # 1.9.0.1 (A14): same name, default and words as Hermes' answer_quiet_s.
+    "answer_quiet_s": (
+        "number", 45, 0, 600, None, "KAME_ANSWER_QUIET_S",
+        "Quiet limit while answering",
+        (
+            "How long a reply that has already started to show its answer may stay completely silent (the "
+            "provider sends nothing at all) before KAME cuts it and asks again to continue it, on another key or on "
+            "the same key when it is the only one. What you already read stays; nothing is repeated. 45 seconds "
+            "by default; 0 turns the watch off. A model running on your own machine is never cut.")),
     "hedge_max_prompt_tokens": (
         "number", 32000, 1000, 1000000, None, "KAME_HEDGE_MAX_PROMPT_TOKENS",
         "Skip backups for very long prompts",
@@ -352,6 +361,7 @@ IMPACT: Dict[str, str] = {
     "hedge_cold_s": "low",
     "hedge_cold_reasoning_s": "low",
     "thought_quiet_s": "low",
+    "answer_quiet_s": "low",
     "hedge_max_prompt_tokens": "low",
     "share_pool_health": "medium",
     "key_reserve": "low",
@@ -404,6 +414,7 @@ WHEN: Dict[str, str] = {
     "hedge_cold_s": "Rarely. Used only until KAME has learned a model's normal speed.",
     "hedge_cold_reasoning_s": "Rarely. Same as above, for thinking models.",
     "thought_quiet_s": "Rarely. Only to turn the watch off (0) or to set one number for every model.",
+    "answer_quiet_s": "Rarely. Only to turn the watch off (0) or to wait longer for a very slow model.",
     "hedge_max_prompt_tokens": "Rarely. Very long prompts are not duplicated, to save quota.",
     "share_pool_health": "Keep on, so a restart does not spend calls on keys already known to be out.",
     "key_reserve": "Only if some of your keys are paid and the others are free.",
@@ -497,6 +508,7 @@ ADVANCED = frozenset({
     "hedge_cold_s",
     "hedge_cold_reasoning_s",
     "thought_quiet_s",
+    "answer_quiet_s",
     "hedge_max_prompt_tokens",
     "share_pool_health",
     "key_reserve",
@@ -528,6 +540,7 @@ UNITS: Dict[str, str] = {
     "hedge_cold_s": "seconds",
     "hedge_cold_reasoning_s": "seconds",
     "thought_quiet_s": "seconds",
+    "answer_quiet_s": "seconds",
     "hedge_max_prompt_tokens": "tokens",
     "daily_quota_cooldown_seconds": "seconds",
     "max_hold_seconds": "seconds",
@@ -561,7 +574,7 @@ GROUPS = (
      "How KAME keeps answers fast. Already tuned; the first two are the ones worth knowing.",
      ("hedge_mode", "first_token_wait", "stream_silence_timeout_seconds", "hedge_max_legs",
       "probe_burst_max_legs", "hedge_budget_pct", "hedge_burst", "hedge_quantile", "hedge_cold_s",
-      "hedge_cold_reasoning_s", "thought_quiet_s", "hedge_max_prompt_tokens")),
+      "hedge_cold_reasoning_s", "thought_quiet_s", "answer_quiet_s", "hedge_max_prompt_tokens")),
     ("keyring", "Your API keys",
      "One key per account (for Gemini, one per Google project): every key brings its own quota, "
      "and KAME rotates between them.",

@@ -1,5 +1,58 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.9.0.1 — A reply is never left waiting when something else could answer (2026-11-14)
+
+**In short:** 1.9.0.0 had been tried on one provider with a pool of many keys. For other users a reply could
+still wait for the provider's own timeout although something else could have answered: a user with one key had
+no extra request at all, a stalled reply whose two extra requests were also silent had nowhere to go, and a
+reply that began to show text and then went silent was not cut by anything. Nothing is released under this number
+yet.
+
+**What you see**
+
+- **A stalled reply moves on.** A reply that stopped mid-thought gets its two extra requests as before (another
+  key of the same model, then the next model of your list). When both have had their turn - one never opened, one
+  ended, one is past its own late point with no sign of work, or one worked and is itself quiet past the limit -
+  and the reply is still quiet, the reply is handed to the next free model of your list that is not already in the
+  race, as a silent reply is at its slow bound. The model that stalled and a model that never showed work are left
+  alone for a while, as after a slow reply. The events tab says `<model> stopped mid-thought <time> ago and
+  nothing beside it answered`. With no such model (a list of one, "Never switch", no list) the reply keeps
+  waiting, as before; a request that is still working is never cut.
+- **One key, or no list, still gets its extra request.** The first extra request is the same key asked again when
+  the model has only one key (a fresh request is not the stalled one). The second is another key of the same model
+  - or that key again - when no other model may be asked: no list, "Never switch", "Ignore my fallback list", or
+  no model of the list is free. A reply on one key now goes through the same watch as a larger pool (it used to
+  be asked once, with nothing beside it). Never a reserve key; at most two extra requests per reply, counted in
+  "Extra requests".
+- **The only key busy is the model busy.** A busy refusal (503, "overloaded") now proves the model busy when it
+  came from every key the pool has, at most two. A user with one key whose model answers 503 is handed to the next
+  model of the list at once and the model is left alone for the busy window, as a larger pool is after two busy
+  keys. A 429 on the only key is still not "busy".
+- **An answer that began and went silent is cut and continued.** After the first words, a reply that sends nothing
+  at all (no text, no thought, no empty chunk) for the quiet limit is cut by KAME and carried on through the same
+  path as an answer cut by the connection: what you read stays, the next request carries on from it, on another
+  key or on the same key when it is the only one. New setting `answer_quiet_s` (`KAME_ANSWER_QUIET_S`): 45
+  seconds by default, `0` turns it off, a model running on your own machine is never cut, and neither is a
+  background job. The cut counts as a timeout, not as a fault of the key. Any item the host hands to KAME - a
+  word, a thought, an empty delta - proves the stream alive; the history of the owner showed replies silent 300 s
+  and 600 s after their first text, because a provider that sends keep-alive comments never lets the read time out.
+
+**What it costs**
+
+- One extra request for a one-key reply that stalls mid-thought (it was waiting before), and the second extra
+  request in the cases above; a 45 s silence after visible text costs one continuation request. A healthy reply
+  asks nothing more.
+
+**Differences from the Hermes version**
+
+- A tool the provider runs inside the same stream (a web search, code execution) is never cut on Hermes while it
+  runs. Agent Zero's model call hands KAME only text and reasoning deltas, never the events of a provider-side
+  tool, so there is no such event to wait on here: a stream that is silent for the limit is cut, tool or not. Set
+  `answer_quiet_s` higher, or `0`, for a model that runs long provider-side tools.
+- Rescue 2 is the next free model of the list of any provider (it already was); the hand-over goes to the model
+  after it. On Hermes the second extra request is a model of the same provider and the hand-over goes to another
+  provider.
+
 ## 1.9.0.0 — Thoughts stay live, a stalled reply is asked again, a busy model is raced at once (2026-11-13)
 
 Developed as 1.8.4.3: the test file names and the code comments keep that working number, and no 1.8.4.3 was

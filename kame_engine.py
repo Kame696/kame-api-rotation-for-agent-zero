@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.9.0.0"      # developed as 1.8.4.3 (code comments and test names keep that number); none was published
+KAME_VERSION = "1.9.0.1"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -949,6 +949,31 @@ def set_thought_quiet(value) -> None:
         _KAME_THOUGHT_QUIET_S = v
 
 
+#: v1.9.0.1 (A14): how long an answer that has begun to show may stay silent before KAME cuts it and asks again to
+#: continue it. None = 45 s, 0 = no watch. The thought watch above is for a reply that shows nothing yet.
+_KAME_ANSWER_QUIET_S = None
+_KAME_ANSWER_QUIET_DEFAULT_S = 45.0
+
+
+def set_answer_quiet(value) -> None:
+    """v1.9.0.1 (A14): ``answer_quiet_s``. Empty or None = 45 s, 0 = off, 0-600 = that many seconds.
+    Anything that is not a number leaves the setting as it is."""
+    global _KAME_ANSWER_QUIET_S
+    if value is None or (isinstance(value, str) and not value.strip()):
+        _KAME_ANSWER_QUIET_S = None
+        return
+    v = _kame_clamped(value, 0.0, 600.0)
+    if v is not None:
+        _KAME_ANSWER_QUIET_S = v
+
+
+def _kame_answer_quiet_s() -> float:
+    """v1.9.0.1 (A14): the answer quiet limit in seconds; 0 means no watch."""
+    if _KAME_ANSWER_QUIET_S is None:
+        return _KAME_ANSWER_QUIET_DEFAULT_S
+    return max(0.0, float(_KAME_ANSWER_QUIET_S))
+
+
 def _kame_quiet_bound(identity, reasoning):
     """v1.8.4.3 (A2): the quiet bound for this pool in seconds, or None when the watch is off."""
     if _KAME_THOUGHT_QUIET_S is not None:
@@ -1290,6 +1315,7 @@ def current_settings() -> dict:
         "prompt_caching": _KAME_PROMPT_CACHING,
         **{name: _KAME_HEDGE_VALUES[name] for name in _KAME_HEDGE_NUMBERS},
         "thought_quiet_s": "" if _KAME_THOUGHT_QUIET_S is None else _KAME_THOUGHT_QUIET_S,   # 1.8.4.3 (A2)
+        "answer_quiet_s": _kame_answer_quiet_s(),                                             # 1.9.0.1 (A14)
         "kame_log_level": _KAME_LOG_LEVEL,
         "daily_quota_cooldown_seconds": _KAME_DAILY_COOLDOWN_S,
         "max_hold_seconds": _KAME_MAX_HOLD_S,
@@ -1576,6 +1602,7 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_HEDGE_COLD_REASONING_S", lambda v: set_hedge_number("hedge_cold_reasoning_s", v)),
         ("KAME_HEDGE_MAX_PROMPT_TOKENS", lambda v: set_hedge_number("hedge_max_prompt_tokens", v)),
         ("KAME_THOUGHT_QUIET_S", set_thought_quiet),      # 1.8.4.3 (A2)
+        ("KAME_ANSWER_QUIET_S", set_answer_quiet),        # 1.9.0.1 (A14)
         # v1.8.2.9: 1 = background jobs wait like the chat (the 1.8.2.8 behaviour).
         ("KAME_AUX_UNBOUNDED", lambda v: set_aux_unbounded(v)),
     )
@@ -6957,7 +6984,13 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         cross, busy_cross_id = _kame_busy_cross(ctx, cross, True)
     if hedging_on and stream:
         _kame_seed_triggers(identity, reasoning)
-    if not hedging_on and not burst_keys and not silence and not slow and not cross:
+    # v1.9.0.1 (A12): the quiet watch needs hedging to be allowed, not a second key: a user with one key has a
+    # reply that stops mid-thought too, and its rescue is the same key asked again. Backups and triggers still need
+    # two keys (``hedging_on``).
+    watch_hedging = (_KH is not None and _kame_hedge_mode() != "off" and not _KAME_CAROUSEL_DISABLED
+                     and ctx.get("aux_task") is None)
+    watch_wanted = _kame_watch_on(ctx, watch_hedging, stream, burst_keys, reasoning)
+    if not hedging_on and not watch_wanted and not burst_keys and not silence and not slow and not cross:
         t0 = time.monotonic()
         _kame_count_request(ctx, identity)   # 1.8.2.9 (E8)
         try:
@@ -6971,7 +7004,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     race = _KameRace(ctx)
     race.burst = bool(burst_keys)
     race.busy_cross = busy_cross_id
-    race.watch = _kame_watch_on(ctx, hedging_on, stream, burst_keys, reasoning)
+    race.watch = watch_wanted
     if race.watch:
         # v1.8.4.3 (A4): a new attempt starts clean; what an earlier one decided is not this one's
         ctx["rescued"] = False
@@ -6987,6 +7020,10 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     r1_at = 0.0
     r1_late = 0.0
     r2_tried = False
+    r2_leg = None          # 1.9.0.1 (A11): the second rescue, kept so "both had their turn" can be read
+    r2_at = 0.0
+    r2_late = 0.0
+    stall_handed = False
 
     def sweep(skip=None):
         """Judge every leg that ended and was not looked at yet (second review N2)."""
@@ -7214,6 +7251,19 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     due = max(due, second)
                 q_left = max(0.0, due - time.monotonic())
                 wait_for = q_left if wait_for is None else min(wait_for, q_left)
+            elif (prov_on and race.winner is None and r2_tried and not stall_handed and q_bound != float("inf")):
+                # v1.9.0.1 (A11): the moment both rescues will have had their turn
+                due = race.last_work_at + q_bound
+                for r_leg, r_late in ((r1_leg, r1_late), (r2_leg, r2_late)):
+                    if r_leg is None or race.tasks[r_leg].done():
+                        continue
+                    if r_leg in race.first_work and r_leg in race.last_work:
+                        due = max(due, race.last_work[r_leg] + q_bound)
+                    else:
+                        due = max(due, race.started[r_leg] + r_late)
+                q_left = due - time.monotonic()
+                if q_left > 0:       # already past: the hand-over was tried (or has no exit) - no busy loop
+                    wait_for = q_left if wait_for is None else min(wait_for, q_left)
             claim_waiter = asyncio.ensure_future(race.claimed.wait())
             waiters = [race.tasks[l] for l in running] + [claim_waiter]
             stir_waiter = None
@@ -7247,7 +7297,48 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                         and (r1_leg is None or race.tasks[r1_leg].done() or now_q - r1_at >= 2.0 * q_bound
                              or (r1_leg not in race.first_work and now_q - race.started[r1_leg] >= r1_late))):
                     r2_tried = True
-                    _kame_start_rescue_model(owner, ctx, race, identity, quiet)
+                    r2_leg = _kame_start_rescue_model(owner, ctx, race, identity, quiet)
+                    if r2_leg is None and not _kame_stall_exit_open(ctx, identity, race):
+                        # v1.9.0.1 (A12): no other model may be asked and the reply has nowhere to be handed to
+                        # (no list, "Never switch", nothing free): rescue 2 is another key of this model, or
+                        # that same key again
+                        r2_leg = _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoning,
+                                                        est_tokens, st, quiet, second=True)
+                        r2_pool = identity
+                    else:
+                        r2_pool = (race.cross_legs.get(r2_leg) or {}).get("identity") or identity
+                    if r2_leg is not None:
+                        r2_at = now_q
+                        r2_late = _kame_rescue_late(r2_pool, reasoning, q_bound)
+                # v1.9.0.1 (A11): both rescues have had their turn and the reply is still quiet: a later model of
+                # the list is asked instead of waiting for the provider's own timeout (the hand-over a silent
+                # reply gets at its slow bound). With no such model the reply keeps waiting, as before.
+                if (r1_tried and r2_tried and not stall_handed and quiet >= q_bound
+                        and _kame_rescue_exhausted(race, r1_leg, r1_late, now_q, q_bound)
+                        and _kame_rescue_exhausted(race, r2_leg, r2_late, now_q, q_bound)
+                        and _kame_stall_exit_open(ctx, identity, race)):
+                    stall_handed = True
+                    waited_q = now_q - race.started[0]
+                    cut_silent = [l for l in race.running() if l not in race.first_work]
+                    await race.cancel_all()
+                    _kame_learn_cut_silent(ctx, race, cut_silent, stream, reasoning)
+                    _kame_note_busy(identity, first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S, kind="slow",
+                                    call_id=call_id)
+                    for c_leg, c_entry in race.cross_legs.items():   # a model that never showed work is left alone too
+                        if c_leg not in race.first_work:
+                            _kame_note_busy(c_entry["identity"], first=_KAME_SLOW_FIRST_S, ceiling=_KAME_SLOW_MAX_S,
+                                            kind="slow", call_id=call_id)
+                    for c_entry in race.cross_legs.values():
+                        # a model of the list that has had its turn beside this reply is not handed the same reply
+                        listed = ctx.setdefault("leg_busy", [])
+                        if not any(_kame_names_match(c_entry["identity"], other) for other in listed):
+                            listed.append(c_entry["identity"])
+                        ctx.setdefault("leg_busy_at", {})[c_entry["identity"]] = time.time()
+                    # the thoughts that reached the screen are not an answer: the reply may still move on
+                    ctx["progress"]["reasoning"] = False
+                    raise _KameSlowModel(f"{_kame_model_label(identity)} stopped mid-thought "
+                                         f"{_fmt_duration(quiet)} ago and nothing beside it answered "
+                                         f"(asked for {_fmt_duration(waited_q)})")
                 continue
             # v1.8.2.8 (Hermes D12): the next model of the list races a silent reply.
             if cross and time.monotonic() >= race.started[0] + cross[0][1] and \
@@ -7382,22 +7473,65 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         raise
 
 
-def _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoning, est_tokens, st, quiet):
+def _kame_rescue_late(pool, reasoning, q_bound) -> float:
+    """1.8.4.3 (L5): after this long from its own start a rescue that has shown NOTHING is late - never past twice
+    the bound. One number for rescue 1, rescue 2 and the hand-over's "exhausted" (1.9.0.1)."""
+    stats = _kame_first_word_stats(pool, reasoning)
+    return float(min(2.0 * q_bound, _KAME_CROSS_COLD_S if not stats else max(_KAME_CROSS_MIN_S, 3.0 * stats[0])))
+
+
+def _kame_rescue_exhausted(race, leg, late, now, q_bound) -> bool:
+    """v1.9.0.1 (A11): has this rescue had its turn? It never opened, it ended, it is past its own late point with
+    no sign of work, or it worked and is itself quiet past the bound."""
+    if leg is None or race.tasks[leg].done():
+        return True
+    if leg not in race.first_work:
+        return now - race.started[leg] >= late
+    return now - race.last_work.get(leg, race.first_work[leg]) >= q_bound
+
+
+def _kame_stall_exit_open(ctx, identity, race) -> bool:
+    """v1.9.0.1 (A11): could a reply that stopped mid-thought be handed to a model of the list that is not in this
+    race? The switch is on and allowed for this call (a main chat call, nothing of an ANSWER shown: the thoughts on
+    the screen are not one), the list has a free model, and no hand-over was refused a moment ago."""
+    try:
+        if (not _KAME_FALLBACK_MODELS or not _kame_switch_on() or _KAME_CAROUSEL_DISABLED
+                or _kame_hedge_mode() == "off" or race.burst or not ctx.get("entry_name")
+                or not _kame_main(ctx) or ctx.get("shown") or (ctx.get("progress") or {}).get("any")
+                or time.monotonic() < ctx.get("fallback_next_walk", 0.0)):
+            return False
+        return _kame_free_entry_outside(ctx, identity, race) is not None
+    except Exception:
+        return False
+
+
+def _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoning, est_tokens, st, quiet,
+                           second=False):
     """v1.8.4.3 (A4): rescue 1 - the provisional leg went quiet, so ask the same model on another key. It is a
     backup request: behind ``may_start_backup`` and the pressure gate, never a reserve key. Only when the
     provisional leg is a leg of the HOME model: a raced-in model's keys belong to its own nested call, so
-    nothing opens beside it (the next model of the list is rescue 2). Returns the new leg or None."""
+    nothing opens beside it (the next model of the list is rescue 2). Returns the new leg or None.
+
+    v1.9.0.1 (A12): when no other key exists (a one-key pool, or every other key is already in the race) the SAME
+    key is asked again - a fresh request is not the stalled one. ``second`` is rescue 2 when no other model may be
+    asked: another key of the model, or that same key again."""
     try:
         if race.provisional in race.cross_legs or _KH is None:
             return None
         healthy, _total = _kame_pool_counts(identity, all_keys)
+        more = _kame_pick_more(identity, all_keys, set(race.keys.values()), 1)
+        same_key = False
+        if not more:
+            key0 = race.keys.get(race.provisional)
+            if key0 is None:
+                return None
+            if len(set(all_keys)) > 1 and _KAME_KEY_RESERVE and _kame_is_reserve(identity, key0):
+                return None        # a reserve key is never a backup (1.8.4.0, E4)
+            more, same_key = [key0], True
         if not _KH.HEDGE_TRACKER.may_start_backup(
-                identity, healthy_count=healthy,
+                identity, healthy_count=max(healthy, 2) if same_key else healthy,
                 under_pressure=_kame_under_pressure(identity, all_keys),
                 stream=stream, reasoning=reasoning, est_prompt_tokens=est_tokens):
-            return None
-        more = _kame_pick_more(identity, all_keys, set(race.keys.values()), 1)
-        if not more:
             return None
         leg = len(race.tasks)
         race.start(owner, leg, more[0])
@@ -7408,7 +7542,8 @@ def _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoni
         _kame_ledger("rescue")
         _kame_event("backup", identity, more[0],
                     reason=f"{_kame_model_label(identity)} stopped mid-thought {quiet:.0f}s ago with nothing "
-                           "shown yet - another key races it; the first to answer is shown")
+                           + ("shown yet - the same key is asked again beside it; the first to answer is shown"
+                              if same_key else "shown yet - another key races it; the first to answer is shown"))
         return leg
     except Exception:
         return None
@@ -7876,11 +8011,93 @@ def _kame_note_busy(identity, first=None, ceiling=None, kind="busy", call_id=Non
         _KAME_PROBED_AT[identity] = now
 
 
-def _kame_is_busy(identity, busy_keys) -> bool:
-    """Two keys busy in this call, or one while the provider is known busy:
-    the window and as long again after it (inside the window a call is passed
+class _KameAnswerQuiet(ConnectionError):
+    """v1.9.0.1 (A14): KAME cut an answer that had shown text and then said nothing for the quiet limit. A
+    ``ConnectionError`` on purpose: classified as a timeout and continued as a connection the provider dropped."""
+
+
+def _kame_answer_quiet_for(owner, ctx) -> float:
+    """v1.9.0.1 (A14): seconds an answer that has begun may stay silent before KAME cuts it, or 0 - no watch.
+
+    A chat stream only (not a background job, not a request Agent Zero reads as one answer), never a model that
+    runs on this machine (a long prefill or a slow CPU is not a stall), and not inside a model raced beside a
+    reply: the outer call owns the watch, it sees the winner's words. Never raises."""
+    try:
+        if ctx.get("call_type") != "Chat" or ctx.get("aux_task") is not None or _KAME_CAROUSEL_DISABLED:
+            return 0.0
+        hop = _KAME_FALLBACK_HOP.get()
+        if isinstance(hop, dict) and hop.get("race"):
+            return 0.0
+        if _kame_looks_local(_kame_api_base(owner, ctx)):
+            return 0.0
+        return _kame_answer_quiet_s()
+    except Exception:
+        return 0.0
+
+
+async def _kame_with_answer_watch(owner, ctx, make_attempt):
+    """v1.9.0.1 (A14, R4): run one attempt; once its answer has begun (the first visible text) and nothing arrives
+    for the quiet limit, cut the attempt and raise ``_KameAnswerQuiet``, which the carousel judges as a timeout and
+    continues through the mid-answer path (what the user read stays, the next request carries on from it).
+
+    The attempt runs INLINE in the caller's task (the live status line finds its agent on the stack, so a task of
+    its own would lose it): the deadline is ``asyncio.timeout``, moved by every item the host hands to KAME
+    (``_kame_stamp_item``). F1: ANY item stamps the clock - a word, a thought, an empty delta - the watch is for a
+    stream that went silent, not one that is not "working". F2: Agent Zero's model call hands KAME only text and
+    reasoning deltas, so the event of a tool the provider runs on its side cannot reach it; none is tracked.
+    ``make_attempt`` builds the attempt coroutine; without a watch it is simply awaited."""
+    quiet_s = _kame_answer_quiet_for(owner, ctx)
+    if quiet_s <= 0.0 or not hasattr(asyncio, "timeout"):
+        # review (2026-11-14): ``asyncio.timeout`` is Python 3.11+; on an older Python the watch steps aside
+        return await make_attempt()
+    progress = ctx["progress"]
+    progress["visible_at"] = None
+    progress["last_item_at"] = None
+    cm = None
+    try:
+        async with asyncio.timeout(None) as cm:
+            progress["answer_watch"] = (cm, quiet_s, asyncio.get_running_loop())
+            return await make_attempt()
+    except TimeoutError:
+        if cm is not None and cm.expired():
+            raise _KameAnswerQuiet(f"KAME: read timed out - the answer was silent for {quiet_s:.0f}s after it "
+                                   "had begun; cut, to be continued")
+        raise
+    finally:
+        progress.pop("answer_watch", None)
+
+
+def _kame_stamp_item(progress, visible) -> None:
+    """v1.9.0.1 (A14): the host handed KAME an item (a delta, even an empty one): the stream is alive. ``visible``
+    is text the user can read; the first one arms the answer watch, every item after it moves its deadline."""
+    now = time.monotonic()
+    progress["last_item_at"] = now
+    if visible and progress.get("visible_at") is None:
+        progress["visible_at"] = now
+    watch = progress.get("answer_watch")
+    if watch is not None and progress.get("visible_at") is not None:
+        try:
+            cm, quiet_s, loop = watch
+            cm.reschedule(loop.time() + quiet_s)
+        except Exception:
+            pass
+
+
+def _kame_busy_need(keys=None) -> int:
+    """v1.9.0.1 (A13, R3): how many busy keys prove the MODEL busy - every key the pool has, at most two. A user
+    with one key whose only key answers 503 is as busy as a 14-key user after two busy keys."""
+    try:
+        n = len(set(keys)) if keys else 0
+    except TypeError:
+        n = 0
+    return min(2, n) if n else 2
+
+
+def _kame_is_busy(identity, busy_keys, keys=None) -> bool:
+    """Two keys busy in this call (1.9.0.1: every key the pool has, at most two), or one while the provider is
+    known busy: the window and as long again after it (inside the window a call is passed
     down the list without a request; the first knock after it decides alone)."""
-    if len(busy_keys) >= 2:
+    if len(busy_keys) >= _kame_busy_need(keys):
         return True
     return bool(busy_keys) and time.time() < _KAME_BUSY_UNTIL.get(identity, 0.0) + _KAME_BUSY_FIRST_S
 
@@ -8654,6 +8871,7 @@ async def _kame_carousel(self, ctx):
     _denied = {}            # key -> status, for keys that refused this model on this call
     _busy_keys = set()      # v1.8.2.8: keys that failed on the provider's side (busy)
     _busy_noted = [False]   # the busy window opened once per call
+    _busy_need = _kame_busy_need(all_keys)      # 1.9.0.1 (A13): every key the pool has, at most two
     _aux_walked = False     # 1.8.2.9 review H1: an important job tried the list once while the model was busy
 
     def _absorb_race(skip=None):
@@ -8676,7 +8894,7 @@ async def _kame_carousel(self, ctx):
             # provider's answer too; a busy model moves after the first round.
             if _kame_busy_failure(identity, _rk, _rkind, _rsc):
                 _busy_keys.add(_rk)
-        if len(_busy_keys) >= 2 and not _busy_noted[0] and not ctx.get("probe_noted"):
+        if len(_busy_keys) >= _busy_need and not _busy_noted[0] and not ctx.get("probe_noted"):
             _busy_noted[0] = True
             _kame_note_busy(identity, call_id=_call_id)
         _fl = ctx.get("flight")
@@ -8783,7 +9001,7 @@ async def _kame_carousel(self, ctx):
             _eta_fo = _next_recovery_seconds(identity, all_keys)
             _thr = _kame_switch_threshold(identity, ctx)
             _waited = time.perf_counter() - _call_started_at
-            _busy_now = _KAME_MODEL_SWITCH != "never" and _kame_is_busy(identity, _busy_keys)
+            _busy_now = _KAME_MODEL_SWITCH != "never" and _kame_is_busy(identity, _busy_keys, all_keys)
             if _aux is not None:
                 # 1.8.2.9 (E7): a background job waits for a key only when that fits its budget.
                 if (not _aux.budget.may_wait) or (_eta_fo or 0.0) > _aux.remaining():
@@ -8903,13 +9121,14 @@ async def _kame_carousel(self, ctx):
         _kame_prepare_continuation(self, ctx, identity)
         _kame_say_attempt(ctx, st, attempt_no)      # 1.8.3.1 (D2): the live line, from the first attempt
         try:
-            result, key = await _kame_raced_attempt(
+            # v1.9.0.1 (A14): an answer that began and went silent is cut here, whatever shape the attempt has
+            result, key = await _kame_with_answer_watch(self, ctx, lambda: _kame_raced_attempt(
                 self, ctx, key, burst_keys=_burst, attempt_no=attempt_no, call_id=_call_id,
                 call_started_at=_call_started_at, st=st,
                 # v1.8.4.3 (A9): this model said "busy" on a key of this reply. Not for the circle's own probe: the
                 # circle asks the list on its clock, and a raced leg refused there would take the model off this
                 # reply's ladder (leg_busy) and end the circle, so the best model's keys would be hammered
-                busy_first=bool(_busy_keys) and not _circle_probe)
+                busy_first=bool(_busy_keys) and not _circle_probe))
 
             # v1.0.6 / v1.0.9: an answer with no content at all. Usually a transient
             # provider hiccup or a safety-filtered completion - the KEY is fine - so
@@ -9203,12 +9422,12 @@ async def _kame_carousel(self, ctx):
                             _kame_note_busy(identity, call_id=_call_id)
                     elif (len(_busy_keys) == 1 and not _busy_noted[0] and _hop_f is None
                           and time.time() >= _KAME_BUSY_UNTIL.get(identity, 0.0)
-                          and _kame_is_busy(identity, _busy_keys)):
+                          and _kame_is_busy(identity, _busy_keys, all_keys)):
                         # the first knock after the window said "busy" again: the window reopens
                         # (otherwise every reply for the next half minute knocks once more)
                         _busy_noted[0] = True
                         _kame_note_busy(identity, call_id=_call_id)
-            if len(_busy_keys) >= 2 and not _busy_noted[0]:
+            if len(_busy_keys) >= _busy_need and not _busy_noted[0]:
                 _busy_noted[0] = True
                 _kame_note_busy(identity, call_id=_call_id)
             if _KAME_CAROUSEL_DISABLED:
@@ -9231,7 +9450,7 @@ async def _kame_carousel(self, ctx):
                     # v1.8.2.8: a busy provider moves at once ("auto"); otherwise
                     # once the user has waited past the switch time.
                     else "your provider is busy" if (_KAME_MODEL_SWITCH != "never"
-                                                    and _kame_is_busy(identity, _busy_keys))
+                                                    and _kame_is_busy(identity, _busy_keys, all_keys))
                     else "no answer in time" if (0 < _kame_switch_threshold(identity, ctx)
                                                  < time.perf_counter() - _call_started_at)
                     else "")
@@ -9319,6 +9538,7 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
         wrapped_response = None
     else:
         async def wrapped_response(delta, full):
+            _kame_stamp_item(progress, bool(delta))      # 1.9.0.1 (A14)
             stitcher = ctx.get("stitcher")
             if stitcher is not None:
                 # v1.8.2.7: a continuation. The stitcher drops what repeats the
@@ -9341,6 +9561,7 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
         wrapped_reasoning = None
     else:
         async def wrapped_reasoning(delta, full):
+            _kame_stamp_item(progress, False)            # 1.9.0.1 (A14)
             progress["reasoning"] = True
             if not progress.get("first_sign_at"):
                 progress["first_sign_at"] = time.time()
@@ -9350,6 +9571,7 @@ def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_call
         wrapped_tokens = None
     else:
         async def wrapped_tokens(text, tokens):
+            _kame_stamp_item(progress, bool(text))       # 1.9.0.1 (A14)
             progress["any"] = True
             if not progress.get("first_text_at"):
                 progress["first_text_at"] = time.time()

@@ -1,3 +1,18 @@
+# Agent Zero 1.9.0.1 validation
+
+## 1.9.0.1 - verified runtime
+
+Offline only. No real Agent Zero session was run for this version. 88 / 88 suites green (30 new tests in
+`test_v1_9_0_1_matrix`, which ports the Hermes audit matrix: a stalled reply handed to the next free model, one key
+and no list, "Never switch", the only key busy, an answer that began and went silent); `tools/chaos.py --hedge`
+(400 seeds x 12 calls): 0 defects; `tools/race_chaos.py` (seeds 0-159, with worlds of one key, no list, "Never
+switch", a model of another provider, a model whose every request hangs, and the two worlds of the new invariant
+I9 - a reply is never left waiting while a free model or key existed that the rules allow): 0 defects, and with the
+hand-over of a stalled reply switched off it finds I9 on all 5 stall_exit seeds of the range; `tools/parity_check.py`:
+clean (the new `answer_quiet_s` equals Hermes' in default, range and words); `tools/authorship_check.py`: ok; the
+package builds. Not covered: a provider-side tool inside one stream (Agent Zero's model call never hands KAME such
+an event, see CHANGELOG).
+
 # Agent Zero 1.9.0.0 validation (developed as 1.8.4.3)
 
 ## Verified runtime
