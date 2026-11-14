@@ -171,6 +171,10 @@ def activate(agent=None):
                                        ("hedge_max_prompt_tokens", 32000)):
                 if _hedge_number is not None:
                     _hedge_number(_setting, cfg.get(_setting, _default))
+            # v1.8.4.3 (A2): empty or missing = learned for each model; 0 = the watch is off
+            _quiet = getattr(_kame_engine, "set_thought_quiet", None)
+            if _quiet is not None:
+                _quiet(cfg.get("thought_quiet_s", ""))
         except Exception:
             # Older A0 versions may lack get_plugin_config; fall back to defaults.
             pass

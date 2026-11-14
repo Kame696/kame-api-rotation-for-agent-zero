@@ -47,7 +47,8 @@ def test_an_overloaded_model_moves_to_the_next_model_after_two_keys(fake_models)
     ctx, _ = make_ctx(streaming({}, fail={k: overloaded for k in KEYS}, log=log))
     result = run(ctx)
     assert result[0] == "fallback answer from google/gemini-3.7-flash"
-    assert len(log) == 2
+    # 1.8.4.3 (A9): the second key's request goes out beside the next model and is cut when it answers
+    assert len([k for k in log if not k.startswith("cancelled:")]) == 2
     assert "busy" in K._KAME_LAST_MODEL_SWITCH["reason"]
     assert time.time() < K._KAME_BUSY_UNTIL[ID]                 # the busy model is remembered
 
@@ -311,7 +312,7 @@ def test_after_my_time_still_moves_a_busy_model_at_once(fake_models):
     log = []
     ctx, _ = make_ctx(streaming({}, fail={k: overloaded for k in KEYS}, log=log))
     assert run(ctx)[0] == "fallback answer from google/gemini-3.7-flash"
-    assert len(log) == 2
+    assert len([k for k in log if not k.startswith("cancelled:")]) == 2     # 1.8.4.3 (A9): see above
 
 
 def test_an_explicit_choice_in_the_environment_beats_a_legacy_number(monkeypatch):

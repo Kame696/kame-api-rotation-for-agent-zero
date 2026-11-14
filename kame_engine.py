@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.8.4.2"
+KAME_VERSION = "1.9.0.0"      # developed as 1.8.4.3 (code comments and test names keep that number); none was published
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -931,6 +931,34 @@ _KAME_HEDGE_NUMBERS = {               # Hermes names, defaults and ranges
     "hedge_max_prompt_tokens": (32000.0, 1000.0, 1000000.0),
 }
 _KAME_HEDGE_VALUES = {k: v[0] for k, v in _KAME_HEDGE_NUMBERS.items()}
+#: v1.8.4.3 (A2): how long a reply may stay quiet after it started thinking, with nothing shown, before a rescue
+#: leg is asked. None = learned for each model (kame_hedging.quiet_bound), 0 = the watch is off (1.8.4.2
+#: exactly), a number = that many seconds for every model.
+_KAME_THOUGHT_QUIET_S = None
+
+
+def set_thought_quiet(value) -> None:
+    """v1.8.4.3 (A2): ``thought_quiet_s``. Empty or None = learned, 0 = off, 0.5-120 = that many seconds.
+    Anything that is not a number leaves the setting as it is."""
+    global _KAME_THOUGHT_QUIET_S
+    if value is None or (isinstance(value, str) and not value.strip()):
+        _KAME_THOUGHT_QUIET_S = None
+        return
+    v = _kame_clamped(value, 0.0, 120.0)
+    if v is not None:
+        _KAME_THOUGHT_QUIET_S = v
+
+
+def _kame_quiet_bound(identity, reasoning):
+    """v1.8.4.3 (A2): the quiet bound for this pool in seconds, or None when the watch is off."""
+    if _KAME_THOUGHT_QUIET_S is not None:
+        return None if _KAME_THOUGHT_QUIET_S <= 0 else float(_KAME_THOUGHT_QUIET_S)
+    if _KH is None:
+        return 20.0
+    try:
+        return float(_KH.HEDGE_TRACKER.quiet_bound(identity, reasoning))
+    except Exception:
+        return 20.0
 
 
 def _kame_hedge_mode() -> str:
@@ -1261,6 +1289,7 @@ def current_settings() -> dict:
         "key_reserve": _KAME_KEY_RESERVE,
         "prompt_caching": _KAME_PROMPT_CACHING,
         **{name: _KAME_HEDGE_VALUES[name] for name in _KAME_HEDGE_NUMBERS},
+        "thought_quiet_s": "" if _KAME_THOUGHT_QUIET_S is None else _KAME_THOUGHT_QUIET_S,   # 1.8.4.3 (A2)
         "kame_log_level": _KAME_LOG_LEVEL,
         "daily_quota_cooldown_seconds": _KAME_DAILY_COOLDOWN_S,
         "max_hold_seconds": _KAME_MAX_HOLD_S,
@@ -1546,6 +1575,7 @@ def _kame_apply_env_overrides() -> None:
         ("KAME_HEDGE_COLD_S", lambda v: set_hedge_number("hedge_cold_s", v)),
         ("KAME_HEDGE_COLD_REASONING_S", lambda v: set_hedge_number("hedge_cold_reasoning_s", v)),
         ("KAME_HEDGE_MAX_PROMPT_TOKENS", lambda v: set_hedge_number("hedge_max_prompt_tokens", v)),
+        ("KAME_THOUGHT_QUIET_S", set_thought_quiet),      # 1.8.4.3 (A2)
         # v1.8.2.9: 1 = background jobs wait like the chat (the 1.8.2.8 behaviour).
         ("KAME_AUX_UNBOUNDED", lambda v: set_aux_unbounded(v)),
     )
@@ -5526,7 +5556,12 @@ def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ct
             elapsed_before_s=max(0.0, (time.perf_counter() - call_started_perf)
                                  - (time.time() - started_wall)),
             pool_waited_before_s=getattr(st, "cooldown_overhead_s", None),
-            rest_s=rest, rest_source=rest_source, call_id=call_id, **extra,
+            rest_s=rest, rest_source=rest_source, call_id=call_id,
+            # v1.8.4.3 (A4): only a watched reply has these; the answered attempt carries them
+            longest_quiet_s=ctx.get("quiet_longest") if outcome == "ok" else None,
+            rescued=bool(ctx.get("rescued")) if outcome == "ok" else False,
+            rescues_asked=int(ctx.get("rescues_asked") or 0) if outcome == "ok" else 0,
+            **extra,
         )
     except TypeError:   # an older kame_journal.py beside this engine
         try:
@@ -5666,10 +5701,12 @@ def _kame_remembered_risky(identity, ctx=None) -> bool:
         return False
 
 
-def _kame_entry_risky(identity) -> bool:
-    """Is any identity of this list entry remembered as failing? (1.8.4.2, S1d; no switch conditions)"""
+def _kame_entry_risky(identity, retest=False) -> bool:
+    """Is any identity of this list entry remembered as failing? (1.8.4.2, S1d; no switch conditions)
+    ``retest`` (1.8.4.3, A10): a model whose retest is due does not count - the choices among the models that are
+    NOT the one the reply was asked for look at it again. The question about the model in use stays plain."""
     try:
-        return bool(_KMH is not None and _KMH.HEALTH.risky_entry(identity, _kame_names_match))
+        return bool(_KMH is not None and _KMH.HEALTH.risky_entry(identity, _kame_names_match, retest=retest))
     except Exception:
         return False
 
@@ -5681,7 +5718,9 @@ def _kame_prefer_not_risky(entries):
         if (len(entries) < 2 or _KMH is None or _KMH.disabled()
                 or _KAME_NO_MODEL_FALLBACK or _KAME_MODEL_SWITCH == "never"):
             return entries
-        flags = [_kame_entry_risky(e["identity"]) for e in entries]
+        # 1.8.4.3 (A10): every caller (start target, stand-in, circle order, moved title) chooses among models that
+        # are not the one in use; one whose retest is due is a candidate again, in the list's own order
+        flags = [_kame_entry_risky(e["identity"], retest=True) for e in entries]
         if not any(flags) or all(flags):
             return entries
         return [e for e, f in zip(entries, flags) if not f] + [e for e, f in zip(entries, flags) if f]
@@ -5755,8 +5794,34 @@ def _kame_busy_window_or_tail(identity, now):
     return True, stamp
 
 
-def _kame_stamp_is_due(stamp, now) -> bool:
-    return stamp is None or now < stamp or now - stamp >= _KAME_PROBE_EVERY_S
+def _kame_stamp_is_due(stamp, now, every=None) -> bool:
+    return stamp is None or now < stamp or now - stamp >= (_KAME_PROBE_EVERY_S if every is None else every)
+
+
+#: 1.8.4.3 (A10): a best model remembered as failing and NOT in a busy window (or its tail) is asked beside a reply
+#: every 20 s x 2^(k-2) for k >= 2 trailing failures, at most this long.
+_KAME_PROBE_DEAD_MAX_S = 300.0
+
+
+def _kame_probe_every(identity, now=None) -> float:
+    """1.8.4.3 (A10): seconds between two asks of this model beside a reply. 20 s, except for a model that is
+    remembered as failing and is not in a busy window or its tail (a dead model, not a storm): 20 s x 2^(k-2), k = its
+    trailing failures (k >= 2), at most 300 s. Its first answer clears it. Any error answers 20 s."""
+    try:
+        now = time.time() if now is None else now
+        if _KMH is None or _KMH.disabled():
+            return _KAME_PROBE_EVERY_S
+        if _kame_busy_window_or_tail(identity, now)[0]:
+            return _KAME_PROBE_EVERY_S
+        if not _KMH.HEALTH.risky_entry(identity, _kame_names_match):
+            return _KAME_PROBE_EVERY_S
+        k = max((_KMH.HEALTH.trailing_failures(i) for i in _KMH.HEALTH.identities()
+                 if _kame_names_match(i, identity)), default=0)
+        if k < 2:
+            return _KAME_PROBE_EVERY_S
+        return float(min(_KAME_PROBE_DEAD_MAX_S, _KAME_PROBE_EVERY_S * (2.0 ** (k - 2))))
+    except Exception:
+        return _KAME_PROBE_EVERY_S
 
 
 def _kame_probe_due(identity, now=None) -> bool:
@@ -6072,6 +6137,20 @@ class _KameRace:
         self.kept = set()           # 1.8.4.2 (S1e): legs that lost but are heard to their end, not cut
         self.word_at = {}           # 1.8.4.2 (S1e): leg id -> when a kept leg showed its first working token
         self.judging = set()        # 1.8.4.2 (S1e): kept legs a judge was started for
+        # v1.8.4.3 (A3): the quiet watch. ``watch`` is set by the driver; without it nothing below is used and
+        # the race is 1.8.4.2's, byte for byte. The provisional leg is the first one to show work (a thought,
+        # say): its thoughts reach the screen live, but only a leg's first VISIBLE token is the real claim.
+        self.watch = False
+        self.provisional = None     # the leg whose thoughts are live and whose sentence is awaited
+        self.provisional_at = None  # when it became provisional
+        self.rescue_legs = set()    # legs asked again because the provisional went quiet
+        self.first_work = {}        # leg -> monotonic time of its first working token
+        self.last_work = {}         # leg -> monotonic time of its last working token
+        self.max_gap = {}           # leg -> its longest quiet between two working tokens, before the claim
+        self.pre_visible = {}       # leg -> how many working tokens it showed before its first visible one
+        self.last_work_at = None    # when ANY leg last showed a working token (the quiet clock)
+        self.stirred = asyncio.Event()   # a provisional claim was made: the driver starts its quiet clock
+        self.busy_cross = None      # v1.8.4.3 (A9): the leg raced from its first instant after a busy refusal
 
     def keeps(self, other, winner):
         """1.8.4.2 (S1e): is ``other`` the start probe (the busy or failing best model, leg 0) that lost to a
@@ -6099,17 +6178,45 @@ class _KameRace:
                     task.cancel()
         return self.winner == leg
 
+    def _claim_provisional(self, leg):
+        """v1.8.4.3 (A3): the first leg to show work (not yet a sentence) is the provisional one. Every leg that
+        has shown no sign of work is cut, as ``_claim`` cuts them (a kept start probe excepted); the provisional
+        leg's thoughts go on to Agent Zero live. ``claimed`` is NOT set: only the real claim sets it."""
+        self.provisional = leg
+        self.provisional_at = time.monotonic()
+        for other, task in self.tasks.items():
+            if other != leg and not task.done() and other not in self.first_work:
+                if self.keeps(other, leg):
+                    self.kept.add(other)
+                    continue
+                task.cancel()
+        self.stirred.set()
+
     def shims(self, leg, progress):
         """Callbacks for one leg: the first chunk claims the race; only the
-        winner's chunks reach Agent Zero (through the call's own shims)."""
+        winner's chunks reach Agent Zero (through the call's own shims).
+
+        v1.8.4.3 (A3): while the quiet watch is on, a thought is not the claim: the first working leg is
+        provisional and its thoughts pass live; a sentence (``response_callback``, or ``tokens_callback`` of a
+        call that has no ``response_callback``) is the real claim."""
         outer = self.ctx
 
         def make(name, marks_answer):
             target = outer.get(name)
             if target is None:
                 return None
+            visible = (name == "response_callback"
+                       or (name == "tokens_callback" and outer.get("response_callback") is None))
 
             async def shim(a, b):
+                watching = self.watch and self.winner is None
+                if watching and not a:
+                    # v1.8.4.3 (A3): an empty delta is no work and no sign: it moves nothing
+                    return await target(a, b) if leg == self.provisional else None
+                if watching and leg in self.kept:
+                    # a kept start probe speaks: its word is heard by its judge, nothing of it is shown
+                    self.word_at.setdefault(leg, time.monotonic())
+                    raise asyncio.CancelledError()
                 now = time.time()
                 if not progress.get("first_sign_at"):
                     progress["first_sign_at"] = now
@@ -6119,6 +6226,22 @@ class _KameRace:
                         progress["first_text_at"] = now
                 else:
                     progress["reasoning"] = True
+                if watching:
+                    # the work-time record: how long each leg stayed quiet between two working tokens
+                    mono = time.monotonic()
+                    before = self.last_work.get(leg)
+                    if before is not None:
+                        self.max_gap[leg] = max(self.max_gap.get(leg, 0.0), mono - before)
+                    self.first_work.setdefault(leg, mono)
+                    self.last_work[leg] = mono
+                    self.last_work_at = mono
+                    if not visible:
+                        self.pre_visible[leg] = self.pre_visible.get(leg, 0) + 1
+                        if self.provisional is None:
+                            self._claim_provisional(leg)
+                        if leg == self.provisional:
+                            return await target(a, b)      # live: the thoughts of the leg awaited
+                        return None                        # a rescue (or any other leg) thinking: nothing is shown
                 if not self._claim(leg):
                     if leg in self.kept:
                         if not a:
@@ -6146,16 +6269,18 @@ class _KameRace:
         self.tasks[leg] = asyncio.ensure_future(self.ctx["attempt"](owner, key, leg_ctx))
         return self.tasks[leg]
 
-    def start_cross(self, owner, leg, entry, probe=False, race_leg=True):
+    def start_cross(self, owner, leg, entry, probe=False, race_leg=True, why=None, ledger_kind="race"):
         """v1.8.2.8 (Hermes D12): a leg that asks the NEXT MODEL of the list - a whole
         KAME call on that model, inside a fallback hop, its words shown only if it
         shows work first. Its failure is its own: never judged on this pool's keys.
         ``probe`` (1.8.2.9): the model was known busy and this ask is its probe.
         ``race_leg`` (1.8.4.0 round 2, F2): True for the cross launch and the start probe, False
         for the widen. It goes into the hop as ``"race"``: a race leg is a backup request, so its
-        carousel never rotates onto a reserve key (E4)."""
+        carousel never rotates onto a reserve key (E4).
+        ``why`` / ``ledger_kind`` (1.8.4.3): a rescue leg says "stopped mid-thought" in the reply row and is
+        counted as a rescue, not as a race."""
         ctx = self.ctx
-        _kame_ledger("race")   # 1.8.2.9: the next model beside the reply is an extra request
+        _kame_ledger(ledger_kind)   # 1.8.2.9: the next model beside the reply is an extra request
         progress = {"any": False, "reasoning": False, "first_sign_at": None, "first_text_at": None}
         rc, rsc, tc = self.shims(leg, progress)
 
@@ -6165,7 +6290,8 @@ class _KameRace:
                                             "race": bool(race_leg),
                                             # 1.8.3.1 (D3): the reply row says why (as `_kame_cross_won` words it)
                                             # (1.8.4.2: a start that is only remembered trouble says no "busy")
-                                            "why": ("" if ctx.get("probe_risky") else
+                                            "why": (why if why is not None else
+                                                    "" if ctx.get("probe_risky") else
                                                     "busy" if ctx.get("probe_primary") else "slow")})
             main_token = _KAME_RACED_MAIN.set(True)
             try:
@@ -6402,6 +6528,7 @@ def _kame_seed_triggers(identity, reasoning):
     """Hermes 1.8.2.5: once per model per process, the backup trigger learns the
     first-word times this machine already recorded (calls.jsonl), so it is tuned
     from the first call after a restart instead of after twenty."""
+    _kame_seed_quiet(identity)      # v1.8.4.3 (A4): the quiet bound learns its history the same way
     if _KH is None or _KJ is None or (identity, reasoning) in _KAME_SEEDED:
         return
     _KAME_SEEDED.add((identity, reasoning))
@@ -6533,6 +6660,8 @@ def _kame_after_answer(identity, ctx, call_started_perf) -> None:
             row["waited_s"] = round(float(facts["waited_s"]), 1)
         if ctx.get("backup_won"):
             row["backup"] = True                              # a backup key of the same model answered first
+        if ctx.get("rescued"):
+            row["rescued"] = True                             # 1.8.4.3: it stopped mid-thought, another leg answered
         # 1.8.4.0 (E5): the lifetime line. "Saved" = a chat reply answered after at least one failed
         # attempt in this call (another key, a stand-in model, or a cut finished elsewhere). A race the
         # next model won by being faster is a stand-in, but nothing failed, and the line says "provider
@@ -6743,8 +6872,59 @@ async def _kame_finish_continuation(ctx, result):
     except Exception:
         return result
 
+def _kame_busy_cross(ctx, cross, busy_first):
+    """v1.8.4.3 (A9): ``(cross list, identity moved or None)``. This model answered "busy" on a key of this
+    reply (``busy_first``), so the retry is raced by the next model of the list from its first instant (time 0)
+    instead of waiting for the cross timer (3 x the usual first word) to collect the evidence the refusal
+    already gave. The first entry this reply has not already heard busy as a race leg (``ctx["leg_busy"]``)
+    moves to the front; the others keep their own times. With no cross list (a background job, "Never
+    switch", a continuation, nothing free) or every entry heard busy, the list is left as it is."""
+    if not busy_first or not cross:
+        return cross, None
+    heard = list(ctx.get("leg_busy") or ())
+    for i, (entry, _at) in enumerate(cross):
+        if not any(_kame_names_match(entry["identity"], other) for other in heard):
+            ordered = list(cross)
+            ordered.insert(0, (ordered.pop(i)[0], 0.0))
+            return ordered, entry["identity"]
+    return cross, None
+
+
+def _kame_watch_on(ctx, hedging_on, stream, burst_keys, reasoning) -> bool:
+    """v1.8.4.3 (A4): is the quiet watch on for this attempt? Streaming, hedging on (which already means: hedge
+    mode not off, not a background job, a pool of two keys or more), keys not asked together, the setting not 0,
+    and the call is NOT itself a race leg inside a fallback hop: the outer race owns the watch, there is no
+    rescue inside a rescue."""
+    if not (stream and hedging_on) or burst_keys:
+        return False
+    if _KAME_THOUGHT_QUIET_S is not None and _KAME_THOUGHT_QUIET_S <= 0:
+        return False
+    hop = _KAME_FALLBACK_HOP.get()
+    if isinstance(hop, dict) and hop.get("race"):
+        return False
+    return True
+
+
+def _kame_seed_quiet(identity) -> None:
+    """v1.8.4.3 (A4): once per model per process, the quiet bound learns the longest quiet of the answered
+    watched replies already in calls.jsonl, as the backup trigger learns the first-word times."""
+    if _KH is None or _KJ is None or identity in _KAME_QUIET_SEEDED:
+        return
+    _KAME_QUIET_SEEDED.add(identity)
+    try:
+        history = getattr(_KJ, "quiet_history", None)
+        samples = (history() or {}).get(identity) if history is not None else None
+        if samples:
+            _KH.HEDGE_TRACKER.seed_quiet(identity, samples)
+    except Exception:
+        pass
+
+
+_KAME_QUIET_SEEDED = set()
+
+
 async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0, call_id="",
-                              call_started_at=0.0, st=None):
+                              call_started_at=0.0, st=None, busy_first=False):
     """One attempt that may grow backup legs. Returns ``(result, winning_key)``.
 
     Raises the exception of the LAST leg to fail, with ``_kame_leg_key`` and
@@ -6772,6 +6952,9 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         # 1.8.4.2 (review): a copy - ``cross.pop(0)`` below emptied the very list that later says "this is the
         # start probe", so since 1.8.2.9 its event read "no first word" and its ask was claimed a second time
         cross = list(probe_cross)
+    busy_cross_id = None
+    if busy_first and cross and not probe_cross and not burst_keys and stream:
+        cross, busy_cross_id = _kame_busy_cross(ctx, cross, True)
     if hedging_on and stream:
         _kame_seed_triggers(identity, reasoning)
     if not hedging_on and not burst_keys and not silence and not slow and not cross:
@@ -6787,7 +6970,23 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
 
     race = _KameRace(ctx)
     race.burst = bool(burst_keys)
+    race.busy_cross = busy_cross_id
+    race.watch = _kame_watch_on(ctx, hedging_on, stream, burst_keys, reasoning)
+    if race.watch:
+        # v1.8.4.3 (A4): a new attempt starts clean; what an earlier one decided is not this one's
+        ctx["rescued"] = False
+        ctx["rescues_asked"] = 0
+        ctx.pop("quiet_longest", None)
+        _kame_seed_quiet(identity)
     race_wall = time.time()
+    # v1.8.4.3 (A4): the quiet watch. ``q_bound`` is fixed when a provisional leg appears (for ITS model);
+    # rescue 1 = another key of the same model, rescue 2 = the next model of the list; each is tried once.
+    q_bound = None
+    r1_tried = False
+    r1_leg = None
+    r1_at = 0.0
+    r1_late = 0.0
+    r2_tried = False
 
     def sweep(skip=None):
         """Judge every leg that ended and was not looked at yet (second review N2)."""
@@ -6845,13 +7044,15 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     else:
         triggers = []
     empties = []   # legs that answered with nothing, kept in case nobody does better
+    cross_failed = {}   # 1.8.4.3 (review 1): raced-in leg -> (error, seconds); its failure is its own (D12)
     slow_at = None    # monotonic time of the slow bound (review R3: may move for a raced model)
     slow_extended = False
     widened = 0       # 1.8.2.9 (E3): models added at the slow bound (at most _KAME_WIDEN_MAX)
     said_waiting = False
     try:
         while True:
-            running = race.running()
+            # 1.8.4.3 (review 4): a kept start probe is judged once, by ``judge_kept``; it answers nothing here
+            running = [l for l in race.running() if l not in race.kept]
             if race.winner is not None:
                 win = race.tasks[race.winner]
                 race.keep_probe_if_lost()                    # 1.8.4.2 (S1e)
@@ -6863,6 +7064,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 except BaseException as exc:
                     _kame_tag(exc, race.keys[race.winner], time.monotonic() - race.started[race.winner])
                     raise
+                if race.watch:
+                    _kame_watch_finish(ctx, race, race.winner, identity, stream, reasoning)   # 1.8.4.3 (A4)
                 if race.winner in race.cross_legs:
                     _kame_cross_won(ctx, identity, race)
                     return result, race.keys[race.winner]
@@ -6879,7 +7082,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
             ended = []
             for leg in sorted(race.tasks):
                 task = race.tasks[leg]
-                if not task.done() or getattr(task, "_kame_seen", False):
+                if not task.done() or getattr(task, "_kame_seen", False) or leg in race.kept:
                     continue
                 task._kame_seen = True
                 if task.cancelled():
@@ -6890,6 +7093,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                         race.winner = leg       # it answered without streaming: still the answer
                     elif exc is not None:
                         _kame_note_leg_busy(ctx, race, leg)      # 1.8.4.2 (L1)
+                        cross_failed[leg] = (exc, time.monotonic() - race.started[leg])   # 1.8.4.3 (review 1)
                     continue                    # its failure is its own (D12)
                 ended.append((leg, task.exception(), time.monotonic() - race.started[leg]))
             if race.winner is not None and race.winner in race.cross_legs:
@@ -6915,6 +7119,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     _kame_judge_leg(identity, race.keys[f_leg], f_exc, f_el, ctx, attempt_no,
                                     call_id, race_wall, call_started_at, st)
                 await race.cancel_all(except_leg=leg)
+                if race.watch:
+                    _kame_watch_finish(ctx, race, leg, identity, stream, reasoning)   # 1.8.4.3 (A4)
                 _kame_race_learn(ctx, race, leg, stream, reasoning)
                 if leg > 0 and not race.burst:
                     with _KAME_LOCK:
@@ -6922,7 +7128,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 return result, race.keys[leg]
             empties.extend(answers)  # an empty leg waits for the others (Hermes 1.8.2.4)
             terminal = next(((l, x, e) for l, x, e in failures if _is_terminal_error(x)), None)
-            running = race.running()
+            running = [l for l in race.running() if l not in race.kept]
             if terminal is not None or (failures and not running and not empties):
                 # This failure goes to the carousel; the others are judged here.
                 last = terminal or failures[-1]
@@ -6938,6 +7144,23 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                                 call_id, race_wall, call_started_at, st)
                 _kame_tag(f_exc, race.keys[f_leg], f_el)
                 race.last_failure = f_exc
+            # v1.8.4.3 (review 1, 2): the provisional leg FAILED. Unless another running leg has already worked (that
+            # one is the watch's job), the silent legs are cut (counted, censored) and the failure is raised at once,
+            # as 1.8.4.2 did: nothing waits for a provider's timeout behind a leg that is gone.
+            if race.watch and race.provisional is not None and race.winner is None:
+                p_leg = race.provisional
+                if p_leg in race.cross_legs:
+                    p_fail = cross_failed.get(p_leg)
+                else:
+                    p_fail = next(((f_exc, f_el) for f_leg, f_exc, f_el in failures if f_leg == p_leg), None)
+                if p_fail is not None and not any(l in race.first_work for l in running):
+                    p_exc = p_fail[0]
+                    if not isinstance(p_exc, _KameSwitchModel):
+                        cut = list(running)
+                        await race.cancel_all()
+                        _kame_learn_cut_silent(ctx, race, cut, stream, reasoning)
+                        _kame_tag(p_exc, race.keys[p_leg], p_fail[1])
+                        raise p_exc
             if not running:
                 if empties:
                     # Every leg that answered answered empty: hand back the first.
@@ -6947,31 +7170,84 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 # what this attempt ended with (already judged: second review N4).
                 if race.last_failure is not None:
                     raise race.last_failure
+                if cross_failed:       # 1.8.4.3 (review 1): a raced-in leg that failed is the last word, not a stop
+                    c_leg = max(cross_failed)
+                    c_exc, c_el = cross_failed[c_leg]
+                    if not isinstance(c_exc, _KameSwitchModel):
+                        _kame_tag(c_exc, race.keys[c_leg], c_el)
+                        raise c_exc
                 raise asyncio.CancelledError()
+            # v1.8.4.3 (A4): a provisional leg appeared - its model's quiet bound starts the quiet clock
+            if race.stirred.is_set():
+                race.stirred.clear()
+            if race.watch and race.provisional is not None and q_bound is None:
+                p_entry = race.cross_legs.get(race.provisional)
+                p_pool = p_entry["identity"] if p_entry else identity
+                _kame_seed_quiet(p_pool)
+                q_bound = _kame_quiet_bound(p_pool, reasoning)
+                if q_bound is None:
+                    q_bound = float("inf")     # the setting went to 0 while the reply ran: nothing more to ask
+            prov_on = race.watch and race.provisional is not None
             # Wait for the next event: a leg ends, the race is claimed, or a trigger.
             wait_for = None
-            if triggers and len(race.tasks) < max_legs:
+            if triggers and len(race.tasks) < max_legs and not prov_on:
                 due = race.started[0] + triggers[0]
                 wait_for = max(0.0, due - time.monotonic())
-            if silence and race.winner is None:
+            if silence and race.winner is None and not prov_on:
                 s_left = max(0.0, race.started[0] + silence - time.monotonic())
                 wait_for = s_left if wait_for is None else min(wait_for, s_left)
             if slow and slow_at is None:
                 slow_at = race.started[0] + slow
-            if slow and race.winner is None:
+            if slow and race.winner is None and not prov_on:
                 s_left = max(0.0, slow_at - time.monotonic())
                 wait_for = s_left if wait_for is None else min(wait_for, s_left)
-            if cross and race.winner is None:
+            if cross and race.winner is None and not prov_on:
                 c_left = max(0.0, race.started[0] + cross[0][1] - time.monotonic())
                 wait_for = c_left if wait_for is None else min(wait_for, c_left)
+            if prov_on and race.winner is None and not r2_tried and q_bound != float("inf"):
+                # the quiet clock: when the next rescue could be due (1.8.4.3, A4 / L5)
+                due = race.last_work_at + q_bound
+                if r1_tried and r1_leg is not None and not race.tasks[r1_leg].done():
+                    second = r1_at + 2.0 * q_bound
+                    if r1_leg not in race.first_work:
+                        second = min(second, race.started[r1_leg] + r1_late)
+                    due = max(due, second)
+                q_left = max(0.0, due - time.monotonic())
+                wait_for = q_left if wait_for is None else min(wait_for, q_left)
             claim_waiter = asyncio.ensure_future(race.claimed.wait())
+            waiters = [race.tasks[l] for l in running] + [claim_waiter]
+            stir_waiter = None
+            if race.watch and race.provisional is None:
+                stir_waiter = asyncio.ensure_future(race.stirred.wait())
+                waiters.append(stir_waiter)
             try:
-                done, _ = await asyncio.wait([race.tasks[l] for l in running] + [claim_waiter],
-                                             timeout=wait_for, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(waiters, timeout=wait_for, return_when=asyncio.FIRST_COMPLETED)
             finally:
                 if not claim_waiter.done():
                     claim_waiter.cancel()
+                if stir_waiter is not None and not stir_waiter.done():
+                    stir_waiter.cancel()
             if done or race.winner is not None:
+                continue
+            # v1.8.4.3 (A4): the provisional leg's reply has gone quiet - ask it again (once on another key of
+            # its model, once on the next model of the list). Nothing else may fire while a leg is thinking.
+            if prov_on and q_bound != float("inf"):
+                now_q = time.monotonic()
+                quiet = now_q - race.last_work_at
+                if not r1_tried and quiet >= q_bound:
+                    r1_tried, r1_at = True, now_q
+                    r1_leg = _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoning,
+                                                    est_tokens, st, quiet)
+                    if r1_leg is not None:
+                        _stats = _kame_first_word_stats(identity, reasoning)
+                        r1_late = float(min(2.0 * q_bound,
+                                            _KAME_CROSS_COLD_S if not _stats
+                                            else max(_KAME_CROSS_MIN_S, 3.0 * _stats[0])))
+                if (r1_tried and not r2_tried and quiet >= q_bound
+                        and (r1_leg is None or race.tasks[r1_leg].done() or now_q - r1_at >= 2.0 * q_bound
+                             or (r1_leg not in race.first_work and now_q - race.started[r1_leg] >= r1_late))):
+                    r2_tried = True
+                    _kame_start_rescue_model(owner, ctx, race, identity, quiet)
                 continue
             # v1.8.2.8 (Hermes D12): the next model of the list races a silent reply.
             if cross and time.monotonic() >= race.started[0] + cross[0][1] and \
@@ -6985,7 +7261,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     probe = _kame_claim_entry(entry)     # 1.8.2.9: a busy model is asked only if due
                     if probe is None:
                         continue                         # another conversation took this model's ask
-                race.start_cross(owner, len(race.tasks), entry, probe)
+                is_busy_cross = bool(race.busy_cross and entry["identity"] == race.busy_cross)
+                race.start_cross(owner, len(race.tasks), entry, probe, why="busy" if is_busy_cross else None)
                 _fl = ctx.get("flight")
                 if isinstance(_fl, dict):   # data for the status line (phase C): who is racing the reply
                     _fl["racing"] = [e["label"] for e in race.cross_legs.values()]
@@ -7001,6 +7278,13 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     _kame_event("model_switch", identity,
                                 reason=f"your best model was busy: asked again beside {entry['label']}, "
                                        "the first to answer is shown")
+                elif is_busy_cross:
+                    # v1.8.4.3 (A9): said instead of "no first word after 0.0s"
+                    _status = ctx.get("busy_status")
+                    _kame_event("model_switch", identity,
+                                reason=f"{_kame_model_label(identity)} said it is busy"
+                                       f"{f' ({_status})' if _status else ''} - {entry['label']} "
+                                       "(your next model) is asked beside the retry; the first to answer is shown")
                 else:
                     _kame_event("model_switch", identity,
                                 reason=f"no first word after {_fmt_duration(time.monotonic() - race.started[0])}: "
@@ -7069,8 +7353,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     "(stream_silence_timeout_seconds)")
                 _kame_tag(exc, race.keys[0], time.monotonic() - race.started[0])
                 raise exc
-            if not triggers:
-                continue
+            if not triggers or (race.watch and race.provisional is not None):
+                continue       # 1.8.4.3 (A4): a leg that is thinking is not "no sign of work": no backup trigger
             # A trigger passed with no sign of work: maybe start a backup.
             triggers.pop(0)
             healthy, _total = _kame_pool_counts(identity, all_keys)
@@ -7098,10 +7382,146 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         raise
 
 
+def _kame_start_rescue_key(owner, ctx, race, identity, all_keys, stream, reasoning, est_tokens, st, quiet):
+    """v1.8.4.3 (A4): rescue 1 - the provisional leg went quiet, so ask the same model on another key. It is a
+    backup request: behind ``may_start_backup`` and the pressure gate, never a reserve key. Only when the
+    provisional leg is a leg of the HOME model: a raced-in model's keys belong to its own nested call, so
+    nothing opens beside it (the next model of the list is rescue 2). Returns the new leg or None."""
+    try:
+        if race.provisional in race.cross_legs or _KH is None:
+            return None
+        healthy, _total = _kame_pool_counts(identity, all_keys)
+        if not _KH.HEDGE_TRACKER.may_start_backup(
+                identity, healthy_count=healthy,
+                under_pressure=_kame_under_pressure(identity, all_keys),
+                stream=stream, reasoning=reasoning, est_prompt_tokens=est_tokens):
+            return None
+        more = _kame_pick_more(identity, all_keys, set(race.keys.values()), 1)
+        if not more:
+            return None
+        leg = len(race.tasks)
+        race.start(owner, leg, more[0])
+        race.rescue_legs.add(leg)
+        ctx["rescues_asked"] = len(race.rescue_legs)
+        _kame_say(ctx, "racing", st)
+        _KH.HEDGE_TRACKER.note_hedge(identity)
+        _kame_ledger("rescue")
+        _kame_event("backup", identity, more[0],
+                    reason=f"{_kame_model_label(identity)} stopped mid-thought {quiet:.0f}s ago with nothing "
+                           "shown yet - another key races it; the first to answer is shown")
+        return leg
+    except Exception:
+        return None
+
+
+def _kame_start_rescue_model(owner, ctx, race, identity, quiet):
+    """v1.8.4.3 (A4): rescue 2 - the next free model of the list, outside the race, asked as a race leg (a
+    backup request: never a reserve key). Returns the new leg or None."""
+    try:
+        if (_kame_hedge_mode() == "off" or race.burst or not _kame_cross_allowed(ctx)
+                or not _KAME_FALLBACK_MODELS or not _kame_switch_on()):
+            return None            # no list, "Never switch" / "Ignore my fallback list": no other model is asked
+        entry = _kame_free_entry_outside(ctx, identity, race)
+        if entry is None or not _kame_race_ready(entry["identity"]):
+            return None
+        probe = _kame_claim_entry(entry)
+        if probe is None:
+            return None            # another conversation took this model's ask
+        leg = len(race.tasks)
+        quiet_entry = race.cross_legs.get(race.provisional)
+        quiet_model = quiet_entry["identity"] if quiet_entry else identity
+        race.start_cross(owner, leg, entry, probe, race_leg=True, why="stopped mid-thought",
+                         ledger_kind="rescue")
+        race.rescue_legs.add(leg)
+        ctx["rescues_asked"] = len(race.rescue_legs)
+        flight = ctx.get("flight")
+        if isinstance(flight, dict):
+            flight["racing"] = [e["label"] for e in race.cross_legs.values()]
+        _kame_event("model_switch", identity,
+                    reason=f"{_kame_model_label(quiet_model)} stopped mid-thought {quiet:.0f}s ago with nothing "
+                           f"shown yet - {entry['label']} (your list) races it; the first to answer is shown")
+        return leg
+    except Exception:
+        return None
+
+
+def _kame_watch_finish(ctx, race, winner, identity, stream, reasoning) -> None:
+    """v1.8.4.3 (A4): what a watched race learns and says once its answering leg is known. Never raises.
+
+    * the winner's longest quiet before its first visible token is the model's quiet sample (when it showed at
+      least two working tokens first - one odd reply never moves the bound);
+    * a cut leg that HAD worked teaches its own first sign, uncensored (a stalled leg had a normal first word;
+      the censored bound ``_kame_race_learn`` gives a silent leg would be false data for it);
+    * a rescue leg that answered first is counted and said."""
+    try:
+        if _KH is None:
+            return
+        entry = race.cross_legs.get(winner)
+        pool = entry["identity"] if entry else identity
+        if race.pre_visible.get(winner, 0) >= 2 and winner in race.max_gap:
+            gap = race.max_gap[winner]
+            _KH.HEDGE_TRACKER.record_quiet(pool, gap)
+            ctx["quiet_longest"] = gap
+        if stream:
+            for leg, first in race.first_work.items():
+                if leg == winner:
+                    continue
+                other = race.cross_legs.get(leg)
+                _KH.HEDGE_TRACKER.record_latency(other["identity"] if other else identity,
+                                                 max(0.0, first - race.started[leg]),
+                                                 stream=True, reasoning=reasoning)
+        if winner in race.rescue_legs:
+            ctx["rescued"] = True
+            _kame_ledger("rescue_won")
+            _kame_event("model_switch" if entry else "backup", identity,
+                        reason=f"the rescue answered first, {time.monotonic() - race.started[0]:.1f}s after the "
+                               "first request - the quiet one was cut")
+    except Exception:
+        pass
+
+
 #: 1.8.4.2 (S1e): how long a start probe that lost the race is heard before it is called silent.
 _KAME_PROBE_JUDGE_S = 30.0
 _KAME_PROBE_JUDGE_STEP_S = 0.2
 _KAME_PROBE_JUDGES = set()       # the judge tasks that are still running (tests and the chaos run read it)
+
+
+def _kame_readmit_leg_busy(ctx, now) -> None:
+    """1.8.4.3 (review 6): a model refused busy in this reply is a candidate again only after ``_KAME_PROBE_EVERY_S``
+    since its refusal (or when its own probe is due), so a circle round cannot hand the reply straight back to it."""
+    try:
+        stamps = ctx.get("leg_busy_at") or {}
+        keep = []
+        for i in (ctx.get("leg_busy") or ()):
+            if now - float(stamps.get(i, 0.0)) >= _KAME_PROBE_EVERY_S:
+                continue
+            busy, stamp = _kame_busy_state(i, now)       # its own probe clock, when it has a busy window
+            if busy and _kame_stamp_is_due(stamp, now):
+                continue
+            keep.append(i)
+    except Exception:
+        keep = []
+    if keep:
+        ctx["leg_busy"] = keep
+    else:
+        ctx.pop("leg_busy", None)
+        ctx.pop("leg_busy_at", None)
+
+
+def _kame_learn_cut_silent(ctx, race, legs, stream, reasoning) -> None:
+    """1.8.4.3 (review 2): silent legs cut because the provisional leg failed teach their lower bound (censored), as
+    a leg cut at a claim does. Home legs only. Never raises."""
+    try:
+        if _KH is None or not stream or race.burst:
+            return
+        now = time.monotonic()
+        for leg in legs:
+            if leg in race.cross_legs or leg in race.first_work:
+                continue
+            _KH.HEDGE_TRACKER.record_latency(ctx["identity"], max(0.0, now - race.started[leg]), stream=True,
+                                             reasoning=reasoning, censored=True)
+    except Exception:
+        pass
 
 
 def _kame_note_leg_busy(ctx, race, leg) -> None:
@@ -7131,6 +7551,7 @@ def _kame_note_leg_busy(ctx, race, leg) -> None:
         listed = ctx.setdefault("leg_busy", [])
         if not any(_kame_names_match(ident, other) for other in listed):
             listed.append(ident)
+        ctx.setdefault("leg_busy_at", {})[ident] = time.time()     # 1.8.4.3 (review 6): when it was refused
         if not _kame_busy_state(ident, time.time())[0]:
             _kame_health_note(ident, False, ctx.get("kame_call_id"))
     except Exception:
@@ -7220,18 +7641,29 @@ def _kame_cross_won(ctx, identity, race):
     # 1.8.3.1 (review R14): the next model leads the race - the chat's line says who answers instead
     if entry.get("identity"):
         _kame_say(ctx, "standin", model=_kame_live_name(identity), other=_kame_live_name(entry["identity"]))
-    if not ctx.get("probe_primary"):
+    rescued = race.winner in race.rescue_legs      # 1.8.4.3 (A4): the home model stopped mid-thought, it is not busy
+    # 1.8.4.3 (review 5): only a rescue of a HOME leg says the home model is not busy; a rescue of a raced-in leg
+    # won after the home model had lost to it, as in any cross win
+    quiet_was_home = rescued and race.provisional not in race.cross_legs
+    if not ctx.get("probe_primary") and not quiet_was_home:
         # 1.8.2.9 (E2): losing the START probe is not proof the model is still busy.
         _kame_note_busy(identity, call_id=ctx.get("kame_call_id"))
     for leg, other in race.cross_legs.items():   # raced in before the winner and still silent
-        if leg != race.winner and not race.progress.get(leg, {}).get("first_sign_at"):
+        # 1.8.4.3 (6.35): a rescue leg that lost was asked late and says nothing about its model; a leg that
+        # worked was not silent
+        if (leg != race.winner and leg not in race.rescue_legs and leg not in race.first_work
+                and not race.progress.get(leg, {}).get("first_sign_at")):
             _kame_note_busy(other["identity"], call_id=ctx.get("kame_call_id"))
-    why = ("your best model keeps failing" if ctx.get("probe_risky") else
+    why = ("stopped mid-thought" if rescued else
+           "your model said it is busy" if (race.busy_cross and entry.get("identity") == race.busy_cross) else
+           "your best model keeps failing" if ctx.get("probe_risky") else
            "your provider is busy" if ctx.get("probe_primary") else "slower than usual")
     with _KAME_LOCK:
         _KAME_SPEED_STATS["model_switches"] = _KAME_SPEED_STATS.get("model_switches", 0) + 1
         _KAME_LAST_MODEL_SWITCH.update({"from": identity, "to": entry.get("label", ""),
                                         "reason": f"{why}: raced", "at": time.time()})
+    if rescued:
+        return                  # the rescue's own words were said when it won (_kame_watch_finish)
     _kame_event("model_switch", identity,
                 reason=f"{why}: {entry.get('label', 'the next model')} answered first, "
                        f"{_fmt_duration(time.monotonic() - race.started[0])} after the request")
@@ -7276,12 +7708,14 @@ def _kame_race_learn(ctx, race, winner, stream, reasoning):
         if race.burst:
             return  # legs asked together started at once: a loser says nothing new
         for leg, started in race.started.items():
-            if leg == winner:
-                continue
+            if leg == winner or leg in race.first_work:
+                continue       # 1.8.4.3: a cut leg that had worked taught its own first sign (_kame_watch_finish)
             else:
                 # A cut leg was slower than the winner's FIRST SIGN, not than
                 # its whole answer: the lower bound is taken at the cut.
                 cut_at = race.claim_at if race.claim_at is not None else now
+                if race.provisional_at is not None and started <= race.provisional_at:
+                    cut_at = race.provisional_at   # 1.8.4.3 (review 3): cut when a thought showed, not at the claim
                 bound = max(0.0, cut_at - started)
                 # Only a real lower bound: a backup cut 0.1 s after it started
                 # says nothing about a model the winner needed 0.3 s for, and
@@ -7782,10 +8216,12 @@ def _kame_start_probe_allowed(ctx, identity) -> bool:
         # 1.8.4.2 (S1c): a model remembered as failing counts like the window for this decision. It has no
         # window, so its own last ask (the stamp a risky start leaves) paces it: at most once per 20 s.
         _risky = False
+        _every = None                  # 1.8.4.3 (A10): a dead (not busy) model is asked on a back-off clock
         if not _busy_or_tail and _KAME_FALLBACK_HOP.get() is None and _kame_remembered_risky(identity, ctx):
             _risky = True
             _stamp = _kame_probed_stamp(identity)
-        if not (_busy_or_tail or _risky) or not _kame_stamp_is_due(_stamp, now):
+            _every = _kame_probe_every(identity, now)
+        if not (_busy_or_tail or _risky) or not _kame_stamp_is_due(_stamp, now, _every):
             return False
         if not _kame_race_ready(identity):
             # 1.8.4.0 round 2 (R1): the probe is a race leg, and only a reserve key of this model is
@@ -7800,7 +8236,7 @@ def _kame_start_probe_allowed(ctx, identity) -> bool:
         entry = first[0][0]
         if _risky:
             with _KAME_LOCK:      # atomic: the ask of a risky model goes to one conversation per 20 s
-                if not _kame_stamp_is_due(_kame_probed_stamp(identity), now):
+                if not _kame_stamp_is_due(_kame_probed_stamp(identity), now, _every):
                     return False
                 _KAME_PROBED_AT[identity] = now
             ctx["probe_risky"] = _KMH.HEALTH.entry_summary(identity, _kame_names_match)
@@ -7883,6 +8319,10 @@ async def _kame_circle_step(owner, ctx, identity, all_keys, last_exc=None, last_
             _kame_status_line(ctx, None)
             raise
         _kame_status_line(ctx, None)
+        # v1.8.4.3 (A9): a list model raced at once after a 503 is on this reply's leg_busy list (1.8.4.2, L1: a hand-over
+        # never goes straight back to it). A circle round comes after a wait of its own clock, so that moment has
+        # passed: the list is asked again, as before A9 (otherwise a list model that recovered could never answer).
+        _kame_readmit_leg_busy(ctx, time.time())
         # The best model first: one ask, one key.
         if _kame_claim_probe(identity):
             ctx["circle_probe"] = True
@@ -8155,7 +8595,8 @@ def speed_report() -> dict:
     out["mode"] = mode
     out["cap_pct"] = 0
     out["paused_until"] = {}
-    out["hour"] = {"replies": 0, "backup": 0, "race": 0, "burst": 0, "circle": 0, "extra_pct": None}
+    out["hour"] = {"replies": 0, "backup": 0, "race": 0, "burst": 0, "circle": 0,
+                   "rescue": 0, "rescue_won": 0, "extra_pct": None}
     out["since_start"] = dict(out["hour"])
     if _KH is not None:
         try:
@@ -8464,7 +8905,11 @@ async def _kame_carousel(self, ctx):
         try:
             result, key = await _kame_raced_attempt(
                 self, ctx, key, burst_keys=_burst, attempt_no=attempt_no, call_id=_call_id,
-                call_started_at=_call_started_at, st=st)
+                call_started_at=_call_started_at, st=st,
+                # v1.8.4.3 (A9): this model said "busy" on a key of this reply. Not for the circle's own probe: the
+                # circle asks the list on its clock, and a raced leg refused there would take the model off this
+                # reply's ladder (leg_busy) and end the circle, so the best model's keys would be hammered
+                busy_first=bool(_busy_keys) and not _circle_probe)
 
             # v1.0.6 / v1.0.9: an answer with no content at all. Usually a transient
             # provider hiccup or a safety-filtered completion - the KEY is fine - so
@@ -8747,6 +9192,7 @@ async def _kame_carousel(self, ctx):
             _is_busy_failure = _kame_busy_failure(identity, key, kind, sc)
             if _is_busy_failure:
                 _busy_keys.add(key)
+                ctx["busy_status"] = sc      # v1.8.4.3 (A9): the words of the retry's race say what it answered
                 _hop_f = _KAME_FALLBACK_HOP.get()
                 if _KAME_MODEL_SWITCH != "never" and _kame_main(ctx):
                     if (_circle_probe or ctx.get("probe_primary") or (_hop_f and _hop_f.get("probe"))):

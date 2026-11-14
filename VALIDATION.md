@@ -1,3 +1,13 @@
+# Agent Zero 1.9.0.0 validation (developed as 1.8.4.3)
+
+## Verified runtime
+
+Offline only. No real Agent Zero session was run for this version. 87 / 87 suites green (93 new tests in
+`test_v1_8_4_3_quiet_guard`, `test_v1_8_4_3_busy_cross` and `test_v1_8_4_3_retest`); `tools/chaos.py --hedge`
+(400 seeds x 12 calls): 0 defects; `tools/race_chaos.py` (150 raced replies, with a stand-in model that thinks and
+then hangs or fails, and three new invariants on what reaches the page): 0 defects; `tools/parity_check.py`: clean (one
+written difference, the default of `thought_quiet_s`); `tools/authorship_check.py`: ok; the package builds.
+
 # Agent Zero 1.8.3.1 validation
 
 ## Verified runtime

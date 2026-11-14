@@ -1,5 +1,98 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.9.0.0 — Thoughts stay live, a stalled reply is asked again, a busy model is raced at once (2026-11-13)
+
+Developed as 1.8.4.3: the test file names and the code comments keep that working number, and no 1.8.4.3 was
+published.
+
+**In short:** a model that started to think and then went silent could keep the reply waiting for the
+provider's whole timeout, because the race ended at the first sign of work and nothing watched the winner after
+it. And a model that had just said "busy" still made the retry wait for a timer before the next model of your
+list was asked.
+
+**What you see**
+
+- **A thinking reply is watched until it shows something, and its thoughts keep showing live.** The first sign
+  of work (a thought included) still cuts the requests that are silent, but the request that showed it is only
+  the provisional winner: its thoughts go to Agent Zero as they arrive, exactly as in 1.8.4.2, and it wins at its
+  first sentence. If it goes quiet for longer than the limit with nothing shown, a reply that stopped
+  mid-thought is asked again on another key of the same model and, if that one is silent too, on the next model
+  of your list. The first sentence wins; at most two extra requests per reply. A reply that does not stall is
+  the 1.8.4.2 reply, thought for thought. The thoughts of an extra request never reach the screen; only its
+  sentence does, and the quiet request is cut when that happens. Agent Zero stores only the answering request's
+  own result, so nothing of the quiet one is ever kept.
+- **The limit is learned for each model.** Three times the 95th percentile of the model's own quiet gaps, 8 to
+  20 seconds; 20 seconds before it has learned; and never shorter than 1.25 times a quiet the model has shown in
+  at least two replies and at least one reply in ten (a model that is quiet by nature is not asked twice on every
+  long reply), never above 90 seconds. A healthy thinking model shows gaps of about 2 seconds. The history is
+  read back from `calls.jsonl` after a restart. The new setting `thought_quiet_s` (`KAME_THOUGHT_QUIET_S`) sets
+  one number for every model; `0` turns the watch off (the 1.8.4.2 behaviour); empty is learned.
+- **The cost is one extra request when a healthy model is quiet past its limit.** That happens when it writes a
+  very large tool call in one piece (Gemini). On the Hermes version, where this was measured, it is at most about
+  3.5 % of tool replies with the limit at 20 seconds. The request is counted in "Extra requests", and the page
+  says how many of them re-asked a reply that stopped mid-thought and how many answered first. The second
+  extra request does not wait twice the limit for a first one that is silent: it opens at that one's own late
+  point. A request that worked and lost teaches the speed tracker its real first word, not a censored one.
+- **A model that says it is busy is raced at once.** When the model in use answers 503 ("high demand",
+  "overloaded") or a timeout the provider itself answered on a key, the retry on the next key no longer runs
+  alone until the race timer (three times the usual first word, 8 seconds at least): the next model of your list
+  is asked beside it from the first instant, and the first to answer is shown. The events tab says
+  `<model> said it is busy (503) - <next> (your next model) is asked beside the retry; the first to answer is
+  shown`. If the next model answers, the busy one is left alone for 30 seconds (doubling while it repeats), as
+  after two busy keys; if the retry answers first, nothing is noted against either model. Measured on the Hermes
+  version: 16 % of replies in two weeks met a 503 before their answer. Cost: one request on the next model for
+  such a reply, counted in "Extra requests"; before, the same model was asked about as often 8 to 12 seconds
+  later.
+- **A model that was left out is looked at again.** 1.8.4.2 put a model remembered as failing last among the
+  models of your list (the start target, the stand-in, the circle, a moved title) and nothing ever asked it again,
+  so a fast model that failed once during an outage stayed behind for a week. Now it stays behind only until its
+  retest is due: its latest failure plus 10 minutes, doubled for every failure in a row, at most 2 hours. Then it
+  is a candidate in the order of your list again; an answer clears it, another failure makes the next look wait
+  twice as long. The model your reply was asked for keeps the 1.8.4.2 rule: asked beside the reply, never made to
+  lead it. A model that is still failing costs one request per look.
+- **A dead best model is asked less often.** The ask beside a reply of a main model remembered as failing, when it
+  is not inside a busy window or its tail, is due every 20 seconds times two for every failure in a row beyond the
+  first: 20, 40, 80, 160 seconds, then every 5 minutes. Inside a busy window (a storm of 503) or its tail it stays
+  every 20 seconds. Its first answer clears it at once.
+- **What no rotation can do.** When a provider refuses every model of your list at once (2026-11-13: three
+  minutes of 503 on four models of one provider), nothing in a one-provider list can answer. KAME keeps asking
+  and shows the first that answers; a model of another provider at the end of your list is what answers in that
+  minute.
+- **Not for background jobs, nor with hedging off.** They keep the 1.8.4.2 behaviour. Nor inside a model that is
+  itself raced beside a reply: the outer reply owns the watch. Under "Never switch" (or "Ignore my fallback
+  list", or with no list) no other model is ever asked, neither for a stalled reply nor for a busy one; the
+  other key of the same model still is.
+- **One difference from the Hermes version.** There, a raced-in model that goes quiet is asked again on another
+  of its own keys. Here its keys belong to its own call, so a quiet raced-in model is asked again on the next
+  model of your list instead.
+- **Two more differences from the Hermes version.** (1) The second extra request (the next model of your list)
+  is not asked for a burst, a reply that asked several keys together: there it is lost here and kept there.
+  (2) With `thought_quiet_s` empty, the limit is the learned one once a model has 10 quiet samples; the Hermes
+  table shows 20 as its empty default, which this page cannot write without turning every reset into a fixed 20 s.
+- **Events are longer.** The line of an event keeps 200 characters instead of 120, so a sentence that names two
+  models is not cut in the middle.
+- **Recorded.** Replies watched while they thought carry `ms_longest_quiet` and `rescued` in `calls.jsonl`, and
+  `rescues_asked` (1 or 2) when an extra request was asked. A reply that was re-asked is left out of the
+  first-word history, because its first sign was the quiet request's.
+
+**Under the hood**
+
+- `kame_hedging.py`: `record_quiet`, `seed_quiet`, `quiet_bound`; the speed ledger counts `rescue` (an extra
+  request, inside the share) and `rescue_won` (a count).
+- `kame_engine.py`: the race has a provisional claim and a real claim (`_KameRace`); the quiet watch and its two
+  extra requests live in the raced attempt; `_kame_busy_cross` moves the first entry of the cross list to time 0.
+- `kame_model_health.py`: `trailing_failures`, `retest_due` and `risky_entry(..., retest=True)`; the engine reads
+  them in `_kame_prefer_not_risky` and in `_kame_probe_every`. A circle round forgets the models raced at once
+  after a 503 in this reply, so a list model that recovered can answer it.
+- Checked offline against the new suites `test_v1_8_4_3_quiet_guard`, `test_v1_8_4_3_busy_cross` and
+  `test_v1_8_4_3_retest`, and
+  `tools/race_chaos.py`, whose stand-in model now thinks and then hangs, or thinks and stays quiet before it
+  answers, with three more invariants (after the winner's first sentence nothing of another request reaches the
+  page; no sentence of a loser; the thoughts shown come from one request). No real Agent Zero session was run
+  for this version.
+
+---
+
 ## 1.8.4.2 — A model that keeps failing stops making you wait (2026-11-11)
 
 **In short:** the first reply after a pause used to wait on the best model of your list even when it had been

@@ -103,7 +103,7 @@ def test_only_the_first_two_of_each_shelf_show_until_asked_and_a_changed_one_nev
     assert base == ["hedge_mode", "first_token_wait"]
     more = run_store("await store.refresh(); store.showAdvanced = true; return store.settingCards.find(c => c.id === 'speed').rows.length;",
                      loaded())
-    assert more == 10      # the eleventh (first-token seconds) waits for "Set time"
+    assert more == 11      # the twelfth (first-token seconds) waits for "Set time" (1.8.4.3: thought_quiet_s is the eleventh)
     # a number that was changed stays on show with the toggle off
     changed = run_store(
         "await store.refresh(); const c = store.settingCards.find(c => c.id === 'speed'); return [c.title, c.rows.map(m => m.name)];",

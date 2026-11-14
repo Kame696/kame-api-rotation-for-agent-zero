@@ -128,6 +128,15 @@ hedge_cold_s: 6
 hedge_cold_reasoning_s: 30
 hedge_max_prompt_tokens: 32000
 
+# v1.8.4.3. How long a reply may stay quiet after it started thinking, with
+# nothing shown yet, before it is asked again on another key (and later on the
+# next model of your list). Its thoughts keep showing live meanwhile. Empty
+# (default): learned for each model - 8 to 20 seconds, longer for a model that
+# is quiet by nature, never above 90; 20 before it has learned. A number
+# replaces that; 0 turns the watch off. Range 0-120.
+# Environment: KAME_THOUGHT_QUIET_S.
+thought_quiet_s: ""
+
 # Reserve keys: the short key labels the panel shows, comma separated. A reserve
 # key is used only when every other key of that model cannot answer, and never
 # for a backup request. Leave empty unless some of your keys are paid.

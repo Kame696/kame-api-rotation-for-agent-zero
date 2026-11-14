@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 MAX_EVENTS = 10
 MAX_AGE_S = 7 * 86400.0
 MIN_FAILS = 2
+#: 1.8.4.3 (A10): a model left out as failing is looked at again after its latest failure + RETEST_FIRST_S x 2^(k-1)
+#: (k = trailing failures), at most RETEST_MAX_S.
+RETEST_FIRST_S = 600.0
+RETEST_MAX_S = 7200.0
 FILE_NAME = "model-health.json"
 SCHEMA = 1
 ENV_OFF = "KAME_NO_REMEMBERED_TROUBLE"
@@ -462,12 +466,51 @@ class ModelHealth:
         except Exception:
             return []
 
-    def risky_entry(self, entry: str, same: Callable[[str, str], bool]) -> bool:
-        """Any known identity that ``same(identity, entry)`` calls this chain entry is risky."""
+    def trailing_failures(self, identity: str, now: Optional[float] = None) -> int:
+        """1.8.4.3 (A10): how many of the latest outcomes in the window are failures in a row (0 when the
+        latest is an answer, or nothing is known)."""
+        try:
+            if disabled() or not identity:
+                return 0
+            with self._lock:
+                self.ensure_loaded()
+                k = 0
+                for _at, ok in reversed(self._window(identity, now)):
+                    if ok:
+                        break
+                    k += 1
+                return k
+        except Exception:
+            return 0
+
+    def retest_due(self, identity: str, now: Optional[float] = None) -> bool:
+        """1.8.4.3 (A10): is a model remembered as failing due another look? Its latest failure plus
+        ``RETEST_FIRST_S`` x 2^(k-1), k = ``trailing_failures``, at most ``RETEST_MAX_S``. False for a model that is
+        not remembered as failing (nothing to retest)."""
+        try:
+            stamp = time.time() if now is None else float(now)
+            if not self.risky(identity, now=stamp):
+                return False
+            with self._lock:
+                window = self._window(identity, stamp)
+                if not window:
+                    return False
+                last_at = window[-1][0]
+            k = max(1, self.trailing_failures(identity, now=stamp))
+            wait = min(RETEST_MAX_S, RETEST_FIRST_S * (2.0 ** (k - 1)))
+            return stamp - last_at >= wait
+        except Exception:
+            return False
+
+    def risky_entry(self, entry: str, same: Callable[[str, str], bool], retest: bool = False) -> bool:
+        """Any known identity that ``same(identity, entry)`` calls this chain entry is risky. With ``retest``
+        (1.8.4.3, A10) an identity whose retest is due does not count: the choices among the models that are not
+        the one in use look at it again."""
         try:
             if disabled():
                 return False
-            return any(self.risky(ident) for ident in self.identities() if same(ident, entry))
+            return any(self.risky(ident) and not (retest and self.retest_due(ident))
+                       for ident in self.identities() if same(ident, entry))
         except Exception:
             return False
 

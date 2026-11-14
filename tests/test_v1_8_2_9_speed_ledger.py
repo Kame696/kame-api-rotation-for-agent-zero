@@ -15,7 +15,7 @@ from test_v1_8_2_7_speed_fallback import (  # noqa: F401  (fixtures are used by 
 import kame_engine as K
 import kame_hedging as H
 
-FIELDS = {"replies", "backup", "race", "burst", "circle", "extra_pct"}
+FIELDS = {"replies", "backup", "race", "burst", "circle", "rescue", "rescue_won", "extra_pct"}  # 1.8.4.3 (A1): two more
 
 
 @pytest.fixture(autouse=True)

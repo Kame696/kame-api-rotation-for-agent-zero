@@ -106,7 +106,12 @@ def test_kind_numbers_defaults_units_and_switches_are_hermes_ones(hermes_key):
     mine, row = TWIN[hermes_key], HERMES[hermes_key]
     kind, default, low, high, choices, env = S.SETTINGS[mine][:6]
     assert kind == {"number": "number", "flag": "flag", "string": "choice" if row["choice_order"] else "text"}[row["kind"]]
-    if row["kind"] == "number":
+    if row["kind"] == "number" and mine == "thought_quiet_s":
+        # 1.8.4.3 (A10 parity note): Hermes shows 20 (used before a model has learned); an unset key is never written
+        # there. Here a reset writes the table default, so the default is empty (= learned), never a fixed 20.
+        assert default == "" and (float(low), float(high)) == (row["min"], row["max"]) and row["default"] == 20.0
+        assert S.UNITS.get(mine, "") == row["units"]
+    elif row["kind"] == "number":
         assert (float(low), float(high), float(default)) == (row["min"], row["max"], row["default"]), mine
         assert S.UNITS.get(mine, "") == row["units"], mine
         assert (mine in S.INTEGRAL) == (row["step"] == 1), mine

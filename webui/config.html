@@ -152,6 +152,13 @@
       </div>
       <div class="field" x-show="advanced">
         <div class="field-label">
+          <div class="field-title">Quiet limit while thinking <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
+          <div class="field-description">How long a reply may stay quiet after it started thinking, with nothing shown yet, before KAME asks it again on another key (and later on the next model of your list). Its thoughts keep showing live meanwhile. Left alone, KAME learns it for each model: 8 to 20 seconds, longer for a model that is quiet by nature, never above 90. A number replaces that; 0 turns the watch off.<br><i>When to change it: Rarely. Only to turn the watch off (0) or to set one number for every model.</i></div>
+        </div>
+        <div class="field-control"><input type="number" step="any" min="0" max="120" x-model.number="config.thought_quiet_s" x-init="if (config.thought_quiet_s === undefined || config.thought_quiet_s === null) config.thought_quiet_s = ''" /></div>
+      </div>
+      <div class="field" x-show="advanced">
+        <div class="field-label">
           <div class="field-title">Skip backups for very long prompts <span style="opacity:.55;font-size:.8em">●○○ Low</span></div>
           <div class="field-description">A backup of a huge prompt spends your token quota twice and never hits a warm cache, so above this size backups are skipped.<br><i>When to change it: Rarely. Very long prompts are not duplicated, to save quota.</i></div>
         </div>

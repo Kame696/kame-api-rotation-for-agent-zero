@@ -131,6 +131,10 @@ ALLOWED = {
         "(tests/test_v1_8_3_0_settings_words.py writes the same reason)",
     ("setting", "prompt_caching", "exists"):
         "Agent Zero hands KAME the host's request for provider prompt caching (explicit_caching); Hermes has no such flag",
+    ("setting", "thought_quiet_s", "default"):
+        "1.8.4.3: unset = learned for each model in both ports. Hermes' table shows 20 (what a model uses before it "
+        "has learned) and an unset key is never written; Agent Zero's page and `/kame reset` write the table default, "
+        "and 20 there would turn every reset into a fixed 20 s, so the default is empty",
     ("constant", "a reading is called old after (s)"):
         "not the same clock: Hermes re-reads a file its backend republishes every 20 s (75 s = three misses); "
         "Agent Zero's page fetches the live status every second, so 30 s without a good read already means the "

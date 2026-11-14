@@ -6,7 +6,7 @@
 
 ### What API key rotation should have been: all your keys and models, one agent that never waits.
 
-[![Version](https://img.shields.io/badge/version-1.8.4.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0.0-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-lightgrey.svg)](#privacy)
@@ -191,7 +191,29 @@ flowchart TD
 </table>
 
 <details>
-<summary><b>📣 What's new in 1.8.4.2 and the versions before it</b></summary>
+<summary><b>📣 What's new in 1.9.0.0 and the versions before it</b></summary>
+
+> **1.9.0.0 — thoughts stay live, a stalled reply is asked again, a busy model is raced at once.**
+> (Developed as 1.8.4.3; no 1.8.4.3 was published.)
+
+- **Thoughts keep showing live, and a reply that stops mid-thought is asked again.** A model that started to
+  think but shows no sentence yet is watched: its thoughts reach the screen as they arrive. If it goes quiet for
+  longer than its limit with nothing shown, the same request is asked again on another key and, if that one is
+  silent too, on the next model of your list; the first sentence wins. The limit is learned for each model
+  (8 to 20 seconds, longer for a model that is quiet by nature, never above 90; 20 before it has learned). It
+  costs one extra request when a healthy model is quiet past its limit (Gemini writing a very large tool call in
+  one piece), counted in "Extra requests" with how many answered first. `thought_quiet_s` /
+  `KAME_THOUGHT_QUIET_S`: a number for every model, `0` = off.
+- **What it does when a model says busy.** After a 503 ("high demand", "overloaded") on a key, the retry is raced
+  by the next model of your list from its first instant instead of after a timer. One request on the next model
+  for such a reply.
+- **A model left out is looked at again; a dead best model is asked less often.** A list model remembered as
+  failing stays behind only until its retest is due (10 minutes after its latest failure, doubling per failure in a
+  row, at most 2 hours); your main model, when remembered as failing and not in a busy window, is asked beside a
+  reply every 20, 40, 80, 160 seconds, then every 5 minutes.
+- **What no rotation can do.** If a provider refuses every model of your list at once, nothing in a one-provider
+  list can answer; a model of another provider at the end of the list is what answers then.
+- Not for background jobs, not with hedging off; under "Never switch" no other model is asked.
 
 > **1.8.4.2 — a model that keeps failing stops making you wait.**
 
@@ -251,7 +273,7 @@ flowchart TD
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.8.4.2 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.0 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -373,6 +395,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 | `pacing_rpm_overrides` | empty | Requests per minute per model, e.g. `google:gemini/gemini-2.5-flash=10`; KAME also learns them from real 429s (`KAME_PACING_RPM_OVERRIDES`) |
 | `key_region_overrides` | empty | Region per key for Vertex / Bedrock behind an endpoint that hides it, `k3f9a1=us-central1` (`KAME_KEY_REGION_OVERRIDES`) |
 | `hedge_budget_pct` · `hedge_burst` · `hedge_quantile` · `hedge_cold_s` · `hedge_cold_reasoning_s` · `hedge_max_prompt_tokens` | `10` · `3` · `90` · `6` · `30` · `32000` | The speed boost's numbers, same as Hermes (`KAME_HEDGE_*`) |
+| `thought_quiet_s` | empty (learned) | How long a reply may stay quiet after it started thinking, with nothing shown yet, before it is asked again on another key and later on the next model of your list; its thoughts keep showing live. Empty: learned for each model (8 to 20 s, never above 90; 20 s before it has learned). A number replaces it, `0` turns the watch off (`KAME_THOUGHT_QUIET_S`) |
 | `max_hold_seconds` | `3600` | No key sits out longer than this (`KAME_MAX_HOLD`) |
 | `unsized_throttle_backoff` | on | The 1-2-4-8s ladder for Gemini's bare `RESOURCE_EXHAUSTED` (`KAME_UNSIZED_BACKOFF`) |
 | `unsized_backoff_max_seconds` | `64` | Where that ladder stops growing (`KAME_UNSIZED_BACKOFF_MAX`) |
@@ -406,6 +429,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
+| **1.9.0.0** — offline suites | 87 / 87 suites green (82 new tests); 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 150 raced replies whose stand-in model thinks and then hangs (`tools/race_chaos.py`): 0 defects. Not run on a real Agent Zero |
 | **1.8.4.2** — offline suites | 84 / 84 suites green; 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same mechanism, measured live in the Hermes port: the first reply after a restart, with the main model failing, gave its first text in 2.9 s instead of about 20 s. Not yet run on a real Agent Zero |
 | **1.8.4.1** — offline suites | 80 / 80 suites green; the settings and timings of both ports compared by machine (`tools/parity_check.py`); 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py`) and 300 raced replies, some of them repeating text (`tools/race_chaos.py`): 0 defects; checked against Agent Zero v2.15 (15 of 15 patch points unchanged, 27 of 27 host facts). Not yet run on a real Agent Zero |
 | **1.8.3.1** — offline suites | 69 / 69 suites green (179 new 1.8.3.1 tests, among them `tools/parity_check.py`: the settings and timings of this port and the Hermes port compared by machine). One live session on a real Agent Zero (its own model call, Gemini, 15 keys): 6 / 6 answered, each on its first key, KAME's own wait 0 ms; remote native acceptance, the reply-path cost and the idle CPU have not been measured for this version |
@@ -447,6 +471,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.0** | Thoughts stay live, a stalled reply is asked again, a busy model is raced at once | A thinking reply's thoughts keep showing live; one that goes quiet past a limit learned for each model is asked again on another key, then on the next model of your list; after a 503 the retry is raced by the next model from its first instant. Developed as 1.8.4.3 (none was published); offline suites only, not yet run on a real Agent Zero |
 | **v1.8.4.2** | A model that keeps failing stops making you wait | A main model remembered as failing no longer leads the reply: the next model of your list answers at once while yours is asked beside it, and yours leads again the moment it answers; a model refused busy is not handed the same reply twice |
 | **v1.8.4.1** | Your prompt cache is back, a blocked prompt stops at once | Agent Zero's prompt cache reaches the provider again (a model that refuses it is remembered 30 days); a safety refusal goes straight back instead of walking every key; one key count everywhere; what KAME did over time |
 | **v1.8.3.1** | Any model has a way down, one live line, a popover on the chip | A reply that starts on model X falls back X, then your main model, then the rest of your list; the chat line has seven states with the same words as the Hermes version; a popover on the chip; the page reads the status every second; Wait for the first token: Off is 120 seconds |

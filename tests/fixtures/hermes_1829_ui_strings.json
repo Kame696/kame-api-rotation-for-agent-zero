@@ -56,6 +56,7 @@
         "hedge_quantile",
         "hedge_cold_s",
         "hedge_cold_reasoning_s",
+        "thought_quiet_s",
         "hedge_max_prompt_tokens"
       ]
     },
@@ -484,6 +485,29 @@
       "consequential": false,
       "default": 30.0,
       "env": "KAME_HEDGE_COLD_REASONING_S",
+      "group": "speed",
+      "choice_order": null,
+      "choice_labels": {},
+      "choice_help": {},
+      "choice_footnote": ""
+    },
+    {
+      "key": "thought_quiet_s",
+      "kind": "number",
+      "title": "Quiet limit while thinking",
+      "help": "How long a reply may stay quiet after it started thinking, with nothing shown yet, before KAME asks it again on another key (and later on the next model of your list). Its thoughts keep showing live meanwhile. Left alone, KAME learns it for each model: 8 to 20 seconds, longer for a model that is quiet by nature, never above 90. A number replaces that; 0 turns the watch off.",
+      "when": "Rarely. Only to turn the watch off (0) or to set one number for every model.",
+      "detail": "How long a reply may stay quiet after it started thinking, with nothing shown yet, before KAME asks it again on another key (and later on the next model of your list). Its thoughts keep showing live meanwhile. Left alone, KAME learns it for each model: 8 to 20 seconds, longer for a model that is quiet by nature, never above 90. A number replaces that; 0 turns the watch off.",
+      "impact": "low",
+      "advanced": true,
+      "units": "seconds",
+      "min": 0.0,
+      "max": 120.0,
+      "step": null,
+      "off_or_at_least": null,
+      "consequential": false,
+      "default": 20.0,
+      "env": "KAME_THOUGHT_QUIET_S",
       "group": "speed",
       "choice_order": null,
       "choice_labels": {},
@@ -986,385 +1010,385 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2083
+      "hermes_line": 2085
     },
     {
       "hermes": "What KAME did",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2127
+      "hermes_line": 2129
     },
     {
       "hermes": "Quick controls",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2307
+      "hermes_line": 2313
     },
     {
       "hermes": "Getting started",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4051
+      "hermes_line": 4057
     },
     {
       "hermes": "Nothing to report: every reply went straight out.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2195
+      "hermes_line": 2197
     },
     {
       "hermes": "No replies yet.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2188
+      "hermes_line": 2190
     },
     {
       "hermes": "Waiting for your keys. Nothing went wrong on your side.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2192
+      "hermes_line": 2194
     },
     {
       "hermes": "A star helps others find it.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 2217
+      "hermes_line": 2219
     },
     {
       "hermes": "Why?",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2449
+      "hermes_line": 2455
     },
     {
       "hermes": "All events →",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2174
+      "hermes_line": 2176
     },
     {
       "hermes": "All settings →",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2313
+      "hermes_line": 2319
     },
     {
       "hermes": "The three you may want to change often. Everything else is in Settings.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2307
+      "hermes_line": 2313
     },
     {
       "hermes": "Wake this model",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2020
+      "hermes_line": 2022
     },
     {
       "hermes": "Try this model now",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2032
+      "hermes_line": 2034
     },
     {
       "hermes": "Wake it",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2013
+      "hermes_line": 2015
     },
     {
       "hermes": "Its keys start again as if never tried; a key that is really spent is refused again. No key is deleted.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 1999
+      "hermes_line": 2001
     },
     {
       "hermes": "In the order of your fallback list: KAME starts every reply on 1, and goes down the list when a model is busy, slow or out of quota.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2081
+      "hermes_line": 2083
     },
     {
       "hermes": "One ring per provider and model. A key spent on one model keeps its allowance on another.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2082
+      "hermes_line": 2084
     },
     {
       "hermes": "Also used by background jobs",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2088
+      "hermes_line": 2090
     },
     {
       "hermes": "Background jobs and your quota",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2274
+      "hermes_line": 2280
     },
     {
       "hermes": "Titles, summaries and other side jobs spend the same per-model quota as your chats.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2273
+      "hermes_line": 2279
     },
     {
       "hermes": "Nothing wrong.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1591
+      "hermes_line": 1593
     },
     {
       "hermes": "Every model is busy — KAME keeps asking, your best first, until one answers.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1607
+      "hermes_line": 1609
     },
     {
       "hermes": "No model can answer right now — KAME waits for the first key to come back.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1608
+      "hermes_line": 1610
     },
     {
       "hermes": "Nothing is ready right now — see the models below.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1532
+      "hermes_line": 1534
     },
     {
       "hermes": "Answering now",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1507
+      "hermes_line": 1509
     },
     {
       "hermes": "Everything works without changing anything here. Changes apply on the next message and survive restarts.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3077
+      "hermes_line": 3083
     },
     {
       "hermes": "KAME settings · all at their defaults",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3079
+      "hermes_line": 3085
     },
     {
       "hermes": "Reset to defaults",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3101
+      "hermes_line": 3107
     },
     {
       "hermes": "Clear pool",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3106
+      "hermes_line": 3112
     },
     {
       "hermes": "Clear events",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3111
+      "hermes_line": 3117
     },
     {
       "hermes": "Hide advanced settings",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3120
+      "hermes_line": 3126
     },
     {
       "hermes": "Reset everything",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3132
+      "hermes_line": 3138
     },
     {
       "hermes": "Clear the pool",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3145
+      "hermes_line": 3151
     },
     {
       "hermes": "Settings that are already tuned or only one unusual setup needs. Hidden unless you changed them.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3116
+      "hermes_line": 3122
     },
     {
       "hermes": "Hide these switches",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2849
+      "hermes_line": 2855
     },
     {
       "hermes": "Empties the event list on the Events page. Nothing else changes.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3110
+      "hermes_line": 3116
     },
     {
       "hermes": "Only clears rotation and quarantine; it does not delete any key.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3105
+      "hermes_line": 3111
     },
     {
       "hermes": "Last replies",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3892
+      "hermes_line": 3898
     },
     {
       "hermes": "Right now",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4565
+      "hermes_line": 4571
     },
     {
       "hermes": "This Hermes process",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4577
+      "hermes_line": 4583
     },
     {
       "hermes": "Keys asked together",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4587
+      "hermes_line": 4593
     },
     {
       "hermes": "Still waiting",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3793
+      "hermes_line": 3799
     },
     {
       "hermes": "Power: how much this changes what you notice. High = every conversation, Medium = one situation, Low = fine-tuning.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2417
+      "hermes_line": 2423
     },
     {
       "hermes": "When to change it: ",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2466
+      "hermes_line": 2472
     },
     {
       "hermes": "Reset every setting?",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3141
+      "hermes_line": 3147
     },
     {
       "hermes": "Clear the pool?",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3153
+      "hermes_line": 3159
     },
     {
       "hermes": "Every key starts again as if it had never been tried: cooldowns, quarantines and the request history are forgotten. This does not delete any key, and a key that is genuinely spent will simply be refused again.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3148
+      "hermes_line": 3154
     },
     {
       "hermes": "Turn it on",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2551
+      "hermes_line": 2557
     },
     {
       "hermes": "This KAME reports no settings.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2860
+      "hermes_line": 2866
     },
     {
       "hermes": "Not sorted into any of the groups above.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2912
+      "hermes_line": 2918
     },
     {
       "hermes": "empty = not used",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2798
+      "hermes_line": 2804
     },
     {
       "hermes": "Saving…",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3068
+      "hermes_line": 3074
     },
     {
       "hermes": "Nothing anywhere mentions this one, so the built-in default is in force.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2351
+      "hermes_line": 2357
     },
     {
       "hermes": "is set in the environment, which outranks everything else.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2348
+      "hermes_line": 2354
     },
     {
       "hermes": "This one counts whole things, so it takes a whole number.",
@@ -1385,385 +1409,385 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2554
+      "hermes_line": 2560
     },
     {
       "hermes": "Show the ",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2849
+      "hermes_line": 2855
     },
     {
       "hermes": "Reading this list",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4014
+      "hermes_line": 4020
     },
     {
       "hermes": "The background calls Hermes makes on its own",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3825
+      "hermes_line": 3831
     },
     {
       "hermes": "Each word on this list, and what it means.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4014
+      "hermes_line": 4020
     },
     {
       "hermes": "KAME rotating",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3963
+      "hermes_line": 3969
     },
     {
       "hermes": "providers refusing",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3972
+      "hermes_line": 3978
     },
     {
       "hermes": "Rotations, recoveries, continued answers and waits — the plugin doing its job.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3965
+      "hermes_line": 3971
     },
     {
       "hermes": "What the providers said. A refusal here is not a fault in KAME; it is what KAME is for.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3974
+      "hermes_line": 3980
     },
     {
       "hermes": "Everything in the buffer, newest first.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3956
+      "hermes_line": 3962
     },
     {
       "hermes": "Every background call in the buffer, newest first.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3841
+      "hermes_line": 3847
     },
     {
       "hermes": "all tasks",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3839
+      "hermes_line": 3845
     },
     {
       "hermes": "What went wrong",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3276
+      "hermes_line": 3282
     },
     {
       "hermes": "What the provider actually sent, with anything key-shaped removed before it was stored.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3638
+      "hermes_line": 3644
     },
     {
       "hermes": "Click to see what the provider actually said.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3450
+      "hermes_line": 3456
     },
     {
       "hermes": "see the error",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3538
+      "hermes_line": 3544
     },
     {
       "hermes": "Keys appear as fingerprints: a hash, never a prefix of the key itself. Provider error text is scrubbed before it is written down, because a provider can quote your own prompt back inside an error.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3940
+      "hermes_line": 3946
     },
     {
       "hermes": "The model that wrote each of the last replies of your conversation (each step of a reply that uses tools is a reply of its own), the time to its first word and in total. A model from your fallback list says which model it answered for.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3889
+      "hermes_line": 3895
     },
     {
       "hermes": "Nothing of that kind yet.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4002
+      "hermes_line": 4008
     },
     {
       "hermes": "Nothing recorded yet. Every rotation, refusal, cut answer and continuation appears here as it happens.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4003
+      "hermes_line": 4009
     },
     {
       "hermes": "KAME is running and has not been asked to route a call yet in this process.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3695
+      "hermes_line": 3701
     },
     {
       "hermes": "An empty list above means nothing failed.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3698
+      "hermes_line": 3704
     },
     {
       "hermes": "Everything below is what it last knew, not what is happening now.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3692
+      "hermes_line": 3698
     },
     {
       "hermes": "KAME keeps trying, as configured.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3797
+      "hermes_line": 3803
     },
     {
       "hermes": "Auxiliary model calls",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3829
+      "hermes_line": 3835
     },
     {
       "hermes": "Click a task to see only its calls.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3825
+      "hermes_line": 3831
     },
     {
       "hermes": "They share the same keys and the same pools as the chat (one pool per provider and model), so this is only a separate view, never a separate rotation.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3825
+      "hermes_line": 3831
     },
     {
       "hermes": "Naming this chat",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3373
+      "hermes_line": 3379
     },
     {
       "hermes": "Shrinking a long conversation",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3374
+      "hermes_line": 3380
     },
     {
       "hermes": "The key this call went out on answered, first time.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3188
+      "hermes_line": 3194
     },
     {
       "hermes": "The provider refused this key for THIS model only",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3191
+      "hermes_line": 3197
     },
     {
       "hermes": "The provider said this is not a valid credential. Replace it — waiting will not repair one.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3192
+      "hermes_line": 3198
     },
     {
       "hermes": "This key was rested for a minute or more before it will be offered again.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3193
+      "hermes_line": 3199
     },
     {
       "hermes": "A key answered after KAME had already rotated at least once. The rotation worked.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3194
+      "hermes_line": 3200
     },
     {
       "hermes": "This key was rested briefly and the next call went somewhere else.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3195
+      "hermes_line": 3201
     },
     {
       "hermes": "An answer that was cut short was continued on another key and joined back up.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3197
+      "hermes_line": 3203
     },
     {
       "hermes": "A lot of keys refused at once, which is usually the provider rather than your keys.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3198
+      "hermes_line": 3204
     },
     {
       "hermes": "The provider stopped in the middle of an answer.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3199
+      "hermes_line": 3205
     },
     {
       "hermes": "Your model could not answer now — its provider said it is busy (overloaded, or timing out on several keys), it was far slower than usual, or every key was resting — so this reply fell back to the next model of your fallback list. The next reply starts on your best model again.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3200
+      "hermes_line": 3206
     },
     {
       "hermes": "The previous key did not answer, so KAME asked this one instead — or a slow reply got a backup key racing it.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3202
+      "hermes_line": 3208
     },
     {
       "hermes": "Every key was resting, so KAME waited instead of spending a request it knew would be refused.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3203
+      "hermes_line": 3209
     },
     {
       "hermes": "the next request uses another key",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3243
+      "hermes_line": 3249
     },
     {
       "hermes": "the key sits out, the others carry on",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3241
+      "hermes_line": 3247
     },
     {
       "hermes": "out of rotation until you replace it (/kame-keys)",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3240
+      "hermes_line": 3246
     },
     {
       "hermes": "keys keep rotating; repeats are counted, not listed",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3247
+      "hermes_line": 3253
     },
     {
       "hermes": "continuing on another key from where it stopped",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3248
+      "hermes_line": 3254
     },
     {
       "hermes": "shown to you as one answer",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3246
+      "hermes_line": 3252
     },
     {
       "hermes": "no request is sent until a key is back",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3252
+      "hermes_line": 3258
     },
     {
       "hermes": "the next model of your list answers this reply",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3249
+      "hermes_line": 3255
     },
     {
       "hermes": "the provider rejected the request itself",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3362
+      "hermes_line": 3368
     },
     {
       "hermes": "a rate limit with no quota number",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3365
+      "hermes_line": 3371
     },
     {
       "hermes": "The provider said how long. This wait is its number, not ours.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3522
+      "hermes_line": 3528
     },
     {
       "hermes": "Nothing in the response said how long. This wait is a fallback.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3523
+      "hermes_line": 3529
     },
     {
       "hermes": "Fingerprint of the source actually installed. Compare it with the build you deployed.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4408
+      "hermes_line": 4414
     },
     {
       "hermes": "to replace",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 1504
+      "hermes_line": 1506
     },
     {
       "hermes": "not rotating",
@@ -1784,133 +1808,133 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4359
+      "hermes_line": 4365
     },
     {
       "hermes": "Reading the pool…",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4422
+      "hermes_line": 4428
     },
     {
       "hermes": "This install is incomplete — KAME is not rotating.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 1595
+      "hermes_line": 1597
     },
     {
       "hermes": "Re-deploy the whole plugin directory. A copy that does not recurse drops core/ ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4473
+      "hermes_line": 4479
     },
     {
       "hermes": "and leaves a plugin that registers, reports itself active, and does nothing.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4473
+      "hermes_line": 4479
     },
     {
       "hermes": "KAME is loaded but every call keeps the key Hermes resolved: ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4502
+      "hermes_line": 4508
     },
     {
       "hermes": "The numbers below are the last reading, not the current one — ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4376
+      "hermes_line": 4382
     },
     {
       "hermes": "the backend is probably restarting.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4376
+      "hermes_line": 4382
     },
     {
       "hermes": " left rotation — the provider refused ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4517
+      "hermes_line": 4523
     },
     {
       "hermes": "so KAME no longer offers ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4517
+      "hermes_line": 4523
     },
     {
       "hermes": "Nothing was deleted: paste the replacement over ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4517
+      "hermes_line": 4523
     },
     {
       "hermes": "back by itself. Your other keys are carrying every turn meanwhile.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4517
+      "hermes_line": 4523
     },
     {
       "hermes": " just refused and ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4529
+      "hermes_line": 4535
     },
     {
       "hermes": " still being tried. ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4529
+      "hermes_line": 4535
     },
     {
       "hermes": "One refusal is not proof — an expired token a second from refreshing sends the same thing — ",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4529
+      "hermes_line": 4535
     },
     {
       "hermes": " in a row, with nothing working in between.",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4529
+      "hermes_line": 4535
     },
     {
       "hermes": "Ready — your next reply goes to ",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1529
+      "hermes_line": 1531
     },
     {
       "hermes": " old — Hermes may be restarting.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1598
+      "hermes_line": 1600
     },
     {
       "hermes": "KAME is loaded but not rotating — see the note below.",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1601
+      "hermes_line": 1603
     },
     {
       "hermes": "Idle. A key is ready, so the next call goes straight out.",
@@ -1945,252 +1969,252 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4581
+      "hermes_line": 4587
     },
     {
       "hermes": "answered after a rotation",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4581
+      "hermes_line": 4587
     },
     {
       "hermes": "Surfaced",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4582
+      "hermes_line": 4588
     },
     {
       "hermes": "errors KAME let through",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4582
+      "hermes_line": 4588
     },
     {
       "hermes": "Rotations",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3965
+      "hermes_line": 3971
     },
     {
       "hermes": "Fallbacks",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4584
+      "hermes_line": 4590
     },
     {
       "hermes": "replies your fallback list answered: the model was busy, resting or too slow",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4584
+      "hermes_line": 4590
     },
     {
       "hermes": "quota ran out, so several keys were tried at once",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4587
+      "hermes_line": 4593
     },
     {
       "hermes": "Waited",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4589
+      "hermes_line": 4595
     },
     {
       "hermes": "Answers cut",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4591
+      "hermes_line": 4597
     },
     {
       "hermes": "the provider stopped mid-sentence",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4591
+      "hermes_line": 4597
     },
     {
       "hermes": "Continued",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4593
+      "hermes_line": 4599
     },
     {
       "hermes": "finished on another key, as one reply",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4593
+      "hermes_line": 4599
     },
     {
       "hermes": "Backend process ",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4631
+      "hermes_line": 4637
     },
     {
       "hermes": "/kame for the same picture in the chat, /kame-quota per key and model, /kame-keys to add keys in bulk",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4635
+      "hermes_line": 4641
     },
     {
       "hermes": "KAME API Rotation is made by ",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4681
+      "hermes_line": 4687
     },
     {
       "hermes": "github.com/Kame696",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4647
+      "hermes_line": 4653
     },
     {
       "hermes": "⭐ Star it on GitHub",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4684
+      "hermes_line": 4690
     },
     {
       "hermes": "Made by KAME",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4694
+      "hermes_line": 4700
     },
     {
       "hermes": "KAME API Rotation is designed and built by ",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4692
+      "hermes_line": 4698
     },
     {
       "hermes": ". Free and MIT-licensed. If it saves your conversations from rate limits, a star on GitHub helps other people find it — it costs nothing.",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4692
+      "hermes_line": 4698
     },
     {
       "hermes": "⭐ Star on GitHub",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4699
+      "hermes_line": 4705
     },
     {
       "hermes": "KAME on GitHub (Kame696)",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4700
+      "hermes_line": 4706
     },
     {
       "hermes": "Report a problem",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4701
+      "hermes_line": 4707
     },
     {
       "hermes": "KAME has not served this model yet",
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2976
+      "hermes_line": 2982
     },
     {
       "hermes": "(your model)",
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2974
+      "hermes_line": 2980
     },
     {
       "hermes": "not used yet",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1459
+      "hermes_line": 1461
     },
     {
       "hermes": "out for today",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1296
+      "hermes_line": 1298
     },
     {
       "hermes": "busy — asked again soon",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1469
+      "hermes_line": 1471
     },
     {
       "hermes": "no key used yet",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1501
+      "hermes_line": 1503
     },
     {
       "hermes": "out of credit",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1309
+      "hermes_line": 1311
     },
     {
       "hermes": "daily quota spent",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1310
+      "hermes_line": 1312
     },
     {
       "hermes": "per-minute limit",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1315
+      "hermes_line": 1317
     },
     {
       "hermes": "key revoked",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1317
+      "hermes_line": 1319
     },
     {
       "hermes": "refused as a credential",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1308
+      "hermes_line": 1310
     },
     {
       "hermes": "out of rotation — replace it",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1298
+      "hermes_line": 1300
     },
     {
       "hermes": "refused — still being tried",
@@ -2204,98 +2228,98 @@
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1931
+      "hermes_line": 1933
     },
     {
       "hermes": "out for today (dotted)",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 1932
+      "hermes_line": 1934
     },
     {
       "hermes": "Not for this model",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3163
+      "hermes_line": 3169
     },
     {
       "hermes": "Bad key",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3165
+      "hermes_line": 3171
     },
     {
       "hermes": "Key benched",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3166
+      "hermes_line": 3172
     },
     {
       "hermes": "Answered on retry",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3167
+      "hermes_line": 3173
     },
     {
       "hermes": "Key rests",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3168
+      "hermes_line": 3174
     },
     {
       "hermes": "Setting changed",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3170
+      "hermes_line": 3176
     },
     {
       "hermes": "Provider outage",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3172
+      "hermes_line": 3178
     },
     {
       "hermes": "Answer cut",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3173
+      "hermes_line": 3179
     },
     {
       "hermes": "Next key",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3176
+      "hermes_line": 3182
     },
     {
       "hermes": "All keys resting",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3177
+      "hermes_line": 3183
     },
     {
       "hermes": "Passed to Hermes",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3175
+      "hermes_line": 3181
     },
     {
       "hermes": "just now",
       "files": [
         "kame-view.js"
       ],
-      "hermes_line": 3296
+      "hermes_line": 3302
     }
   ],
   "adapted": [
@@ -2305,7 +2329,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2039,
+      "hermes_line": 2041,
       "reason": "Agent Zero keeps its keys in Settings > API keys, one comma-separated field per provider"
     },
     {
@@ -2314,7 +2338,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 2273,
+      "hermes_line": 2279,
       "reason": "Agent Zero has no profiles; the sentence stops before the Hermes-only clause"
     },
     {
@@ -2323,7 +2347,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4067,
+      "hermes_line": 4073,
       "reason": "same advice, pointing at Agent Zero's own Settings > API keys"
     },
     {
@@ -2332,7 +2356,7 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2350,
+      "hermes_line": 2356,
       "reason": "Agent Zero keeps its plugin settings in its own settings store, not in config.yaml"
     },
     {
@@ -2350,7 +2374,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3089,
+      "hermes_line": 3095,
       "reason": "Agent Zero has no .env of its own for this: the sentence names the settings it reads"
     },
     {
@@ -2359,7 +2383,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3100,
+      "hermes_line": 3106,
       "reason": "Hermes stores the settings in .env lines; Agent Zero stores them in its plugin settings"
     },
     {
@@ -2368,7 +2392,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3134,
+      "hermes_line": 3140,
       "reason": "same promise without the .env clause; Agent Zero's fallback list is part of its settings and is kept"
     },
     {
@@ -2377,7 +2401,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3940,
+      "hermes_line": 3946,
       "reason": "Agent Zero's list records the decisions and the failures, not one row per call (the Last replies card carries the answers)"
     },
     {
@@ -2386,7 +2410,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 3867,
+      "hermes_line": 3873,
       "reason": "Agent Zero's jobs are not Hermes' auxiliary tasks"
     },
     {
@@ -2395,7 +2419,7 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 3982,
+      "hermes_line": 3988,
       "reason": "Agent Zero's tab is called Background jobs"
     },
     {
@@ -2404,7 +2428,7 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 4376,
+      "hermes_line": 4382,
       "reason": "Agent Zero's page reads the status on demand; Hermes' reads a file the backend writes"
     },
     {
@@ -2413,7 +2437,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4426,
+      "hermes_line": 4432,
       "reason": "there is no snapshot file on Agent Zero: the page asks the plugin directly"
     },
     {
@@ -2431,7 +2455,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4576,
+      "hermes_line": 4582,
       "reason": "Agent Zero's side calls are its background jobs, not an auxiliary lane"
     },
     {
@@ -2440,7 +2464,7 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4631,
+      "hermes_line": 4637,
       "reason": "Agent Zero reads its status every few seconds (the footer says how many), Hermes reads a local file every second"
     },
     {
@@ -2449,7 +2473,7 @@
       "files": [
         "kame-panel-store.js"
       ],
-      "hermes_line": 2993,
+      "hermes_line": 2999,
       "reason": "Agent Zero edits the list on its own tab; Hermes uses its command line"
     },
     {
@@ -2458,14 +2482,14 @@
       "files": [
         "kame-panel.html"
       ],
-      "hermes_line": 4223,
+      "hermes_line": 4229,
       "reason": "the card is the 1.8.2.8 'what the host looks like' card, named for the host"
     }
   ],
   "not_ported": [
     {
       "hermes": "Waiting for the first snapshot…",
-      "hermes_line": 4721,
+      "hermes_line": 4727,
       "reason": "Hermes' second entry of the form, under Settings > Plugins, has no Agent Zero twin: the form lives only on this page"
     }
   ]

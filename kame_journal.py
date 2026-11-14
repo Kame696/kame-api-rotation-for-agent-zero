@@ -268,7 +268,9 @@ class Events:
                 "kind": str(kind if kind in _KINDS else ROTATION),
                 "identity": str(identity or ""),
                 "key": str(key or "")[:8],
-                "reason": str(reason or "")[:120],
+                # 1.8.4.3: 200, not 120 - the sentences of a rescue and of a busy retry name two models and would
+                # be cut in the middle of "the first to answer is shown"
+                "reason": str(reason or "")[:200],
                 "code": int(code) if isinstance(code, int) and not isinstance(code, bool) else None,
                 "seconds": round(float(seconds), 1) if seconds is not None else None,
                 "detail": redact(detail) if detail else "",
@@ -552,10 +554,45 @@ def first_word_history(now: Optional[float] = None) -> Dict[str, List[float]]:
                         continue
                     if row.get("channel") == "secondary":
                         continue   # 1.8.2.9: a background job's first word says nothing about the chat's
+                    if row.get("rescued") is True:
+                        # 1.8.4.3: a rescue answered. The row's first sign is what the user first saw (the
+                        # quiet leg's thoughts), and that leg may be another model's: not this identity's.
+                        continue
                     ms = row.get("ms_to_first_sign") or row.get("ms_to_first_text")
                     at = row.get("at")
                     identity = row.get("identity")
                     if not identity or not isinstance(ms, (int, float)) or ms <= 0:
+                        continue
+                    if isinstance(at, (int, float)) and now - at > HISTORY_MAX_AGE_S:
+                        continue
+                    out.setdefault(identity, deque(maxlen=HISTORY_PER_IDENTITY)).append(ms / 1000.0)
+        except OSError:
+            continue
+    return {identity: list(samples) for identity, samples in out.items()}
+
+
+def quiet_history(now: Optional[float] = None) -> Dict[str, List[float]]:
+    """``{identity: [longest quiet in seconds, oldest first]}`` from calls.jsonl (1.8.4.3, A4).
+
+    The twin of :func:`first_word_history` for the rows a watched reply wrote (``ms_longest_quiet``), so the
+    quiet bound a model has learned survives a restart. Answered chat rows only, the same window and cap per
+    model. Reads only; any failure returns what was read so far."""
+    now = time.time() if now is None else now
+    out: Dict[str, Deque[float]] = {}
+    for path in generations(CALLS_FILE):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if row.get("outcome") != "ok" or row.get("channel") == "secondary":
+                        continue
+                    ms = row.get("ms_longest_quiet")
+                    at = row.get("at")
+                    identity = row.get("identity")
+                    if not identity or not isinstance(ms, (int, float)) or isinstance(ms, bool) or ms <= 0:
                         continue
                     if isinstance(at, (int, float)) and now - at > HISTORY_MAX_AGE_S:
                         continue
@@ -573,7 +610,9 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
                 elapsed_before_s: Optional[float] = None,
                 pool_waited_before_s: Optional[float] = None,
                 rest_s: Optional[float] = None, rest_source: str = "",
-                call_id: str = "", channel: str = "main", task: str = "chat") -> None:
+                call_id: str = "", channel: str = "main", task: str = "chat",
+                longest_quiet_s: Optional[float] = None, rescued: bool = False,
+                rescues_asked: int = 0) -> None:
     """One attempt, as durations. Never a key, a prompt or an answer.
 
     1.8.2.9: ``channel`` is ``main`` (the conversation) or ``secondary`` (a background job of Agent
@@ -604,6 +643,14 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
             row["rest_s"] = round(float(rest_s), 1)
             if rest_source:
                 row["rest_source"] = str(rest_source)
+        # 1.8.4.3 (A4): only a watched reply has these. ``ms_longest_quiet`` is the answering leg's longest
+        # quiet before its first visible token, ``rescued`` that another leg answered a reply that stopped
+        # mid-thought, ``rescues_asked`` how many rescue legs (0-2) were asked, so waste can be counted.
+        if longest_quiet_s is not None or rescued:
+            row["ms_longest_quiet"] = _ms(longest_quiet_s)
+            row["rescued"] = bool(rescued)
+        if isinstance(rescues_asked, int) and not isinstance(rescues_asked, bool) and rescues_asked > 0:
+            row["rescues_asked"] = int(rescues_asked)
         _append(CALLS_FILE, CALLS_CEILING, row)
     except Exception:
         pass

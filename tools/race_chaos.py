@@ -24,6 +24,12 @@ again. After every reply:
       first word, its end, its error or 30 s, so thirty-five virtual seconds after the reply none is left.
       The runs also start with random remembered trouble (S1) on some models: the start decision it adds
       must never cost a reply (I1) or change what is shown (I2).
+  I6  (1.8.4.3, A7.11) after the first sentence of a race has reached the page, nothing of any other leg
+      reaches it: no thought, no word. Read at the race's own callbacks, leg by leg.
+  I7  no visible chunk of a loser: every sentence a race delivers comes from one leg.
+  I8  the thoughts a race delivers come from one leg, the provisional one: a rescue leg's thoughts never
+      reach the page. The stand-in model now sometimes thinks and then hangs ("thinks then hangs"), sometimes
+      thinks and goes quiet for a while before it answers, and the quiet limit is learned, 3 s or off.
 
 Offline, stand-in modules, virtual clock: no Agent Zero installation, no network, nothing written
 outside a temp folder. Mirror of Hermes ``tools/race_chaos.py``.
@@ -176,12 +182,16 @@ def gone(model):
 
 
 class World:
-    def __init__(self, rng, reserve):
+    def __init__(self, rng, reserve, seed=0):
         self.rng = rng
         self.reserve = set(reserve)
         self.asked = []
         self.violations = []
         self.ctxs = []          # the context of every KAME call of this reply (F5 reads resume_noprogress)
+        # 1.8.4.3: thoughts. A stream of its own, so the draws of every older seed stay what they were.
+        self.rng2 = random.Random(seed * 7919 + 17)
+        self.deliveries = []    # (race id, leg, "think" | "text", delta): what each race handed to the page
+        self.next_req = 0
 
 
 WORLD = {"w": None}
@@ -235,6 +245,8 @@ class LiteLLMChatWrapper:
                 # I3b (R1): a cross leg and the start probe are backup requests; they never take a reserve key
                 w.violations.append(f"I3b race leg asked a reserve key on {self.model_name}")
         roll = w.rng.random()
+        w.next_req += 1
+        req = w.next_req
         prefix = _continued_from(messages)
         words = list(ANSWER)
         if prefix and CANON.startswith(prefix.rstrip()) and w.rng.random() < 0.5 and not REPEATS:
@@ -267,6 +279,32 @@ class LiteLLMChatWrapper:
             name, delay, cut = "empty", w.rng.uniform(0.1, 1.0), 0
             words = []
         w.asked.append((self.model_name, key[-6:], name + ("+cont" if words != list(ANSWER) and words else "")))
+        # 1.8.4.3 (A7.11): thoughts. A silent request sometimes THINKS first and then hangs; a fast one
+        # sometimes thinks and then stays quiet for a while before it answers. Own random stream (rng2).
+        thoughts = 0
+        quiet = 0.0
+        think_fail = None
+        if name == "silent" and w.rng2.random() < 0.6:
+            thoughts = w.rng2.randint(1, 3)
+            # review 7: it thinks, and then FAILS (a raced-in leg that fails after it became provisional must
+            # rotate the reply, not end it as a stop; a failing provisional must not wait for the provider's timeout)
+            if w.rng2.random() < 0.35:
+                think_fail = w.rng2.choice(["503", "cut"])
+        elif name == "fast" and w.rng2.random() < 0.3:
+            thoughts = w.rng2.randint(1, 3)
+            quiet = w.rng2.uniform(0.5, 25.0)
+            if w.rng2.random() < 0.35:      # review 7: ... or it thinks, goes quiet, and then fails
+                think_fail = w.rng2.choice(["503", "cut"])
+        if thoughts and reasoning_callback is not None:
+            for n in range(thoughts):
+                await asyncio.sleep(w.rng2.uniform(0.1, 0.5))
+                await reasoning_callback(f"<think {req}.{n}> ", f"<think {req}>")
+            await asyncio.sleep(quiet)
+        if think_fail is not None:
+            await asyncio.sleep(w.rng2.uniform(0.2, 6.0))
+            if think_fail == "503":
+                raise busy()
+            raise ConnectionError("peer closed connection without sending complete message body")
         await asyncio.sleep(delay)
         full = ""
         for i, word in enumerate(words):
@@ -312,6 +350,59 @@ async def _recording_carousel(self, ctx):
 
 
 K._kame_carousel = _recording_carousel
+
+_real_shims = K._KameRace.shims
+_RACE_IDS = __import__("itertools").count(1)
+
+
+def _tagged_shims(self, leg, progress):
+    """1.8.4.3 (I6-I8): note, race by race and leg by leg, everything that is handed to the page. The call's
+    own callbacks are wrapped while the race builds this leg's shims, so the record is exactly what the
+    shim delivered (a cut or hidden chunk never reaches its target)."""
+    saved = {}
+    if not hasattr(self, "_chaos_id"):
+        self._chaos_id = next(_RACE_IDS)       # id() is reused once a race is freed: a counter is not
+    for name in ("response_callback", "reasoning_callback", "tokens_callback"):
+        target = self.ctx.get(name)
+        if target is None:
+            continue
+        saved[name] = target
+        kind = "think" if name == "reasoning_callback" else "text"
+
+        async def tagged(a, b, _t=target, _kind=kind, _leg=leg, _race=self._chaos_id):
+            if WORLD["w"] is not None:
+                WORLD["w"].deliveries.append((_race, _leg, _kind, a))
+            return await _t(a, b)
+        self.ctx[name] = tagged
+    try:
+        return _real_shims(self, leg, progress)
+    finally:
+        self.ctx.update(saved)
+
+
+K._KameRace.shims = _tagged_shims
+
+
+def thought_violations(deliveries):
+    """I6, I7, I8 over the deliveries of one reply, grouped by race."""
+    problems = []
+    races = collections.OrderedDict()
+    for race, leg, kind, delta in deliveries:
+        races.setdefault(race, []).append((leg, kind, delta))
+    for n, events in enumerate(races.values()):
+        texts = [(i, leg) for i, (leg, kind, _d) in enumerate(events) if kind == "text" and _d]
+        if texts:
+            first_i, winner = texts[0]
+            late = [(leg, kind) for leg, kind, _d in events[first_i + 1:] if leg != winner]
+            if late:
+                problems.append(f"I6 race {n}: after leg {winner}'s first sentence the page got {late[:3]}")
+            other = {leg for _i, leg in texts if leg != winner}
+            if other:
+                problems.append(f"I7 race {n}: sentences of legs {sorted(other)} besides the winner {winner}")
+        thinkers = {leg for leg, kind, _d in events if kind == "think" and _d}
+        if len(thinkers) > 1:
+            problems.append(f"I8 race {n}: thoughts of legs {sorted(thinkers)} reached the page, one leg may")
+    return problems
 
 
 # --- one reply -------------------------------------------------------------------------------------------
@@ -374,9 +465,10 @@ def setup_state(rng, reserve=()):
                 pool[k]["model_until"] = now + rng.choice([30.0, 600.0])
 
 
-async def call_chat_model(owner, on_text):
+async def call_chat_model(owner, on_text, on_think=None):
     """Named as Agent Zero's own turn, so KAME reads this call as the conversation itself."""
-    return await owner.unified_call(messages=[K.HumanMessage(content="hi")], response_callback=on_text)
+    return await owner.unified_call(messages=[K.HumanMessage(content="hi")], response_callback=on_text,
+                                    reasoning_callback=on_think)
 
 
 def run_one(seed):
@@ -390,13 +482,20 @@ def run_one(seed):
     K.set_key_reserve(", ".join(K._key_short_id(k) for k in reserve))
     K.set_hedge_mode(rng.choice(["adaptive", "adaptive", "max", "off"]))
     K.set_fallback_models("\n".join(f"{PROVIDER}/{m}" for m in MODELS[1:]))
-    WORLD["w"] = world = World(rng, reserve)
+    WORLD["w"] = world = World(rng, reserve, seed)
     setup_state(rng, reserve)
-    page = {"full": "", "chunks": ""}
+    # 1.8.4.3: the quiet limit is learned (None), 3 s, or the watch is off (0) - drawn on the thoughts' own stream
+    K.set_thought_quiet(world.rng2.choice([None, None, 3.0, 0]))
+    K._KAME_QUIET_SEEDED.clear()
+    page = {"full": "", "chunks": "", "thoughts": ""}
 
     async def on_text(delta, full):
         page["full"] = full
         page["chunks"] += delta or ""
+        return None
+
+    async def on_think(delta, full):
+        page["thoughts"] += delta or ""
         return None
 
     owner = LiteLLMChatWrapper(PROVIDER, MODELS[0])
@@ -405,7 +504,7 @@ def run_one(seed):
     real0 = time.process_time()
     outcome = "answer"
     try:
-        result = loop.run_until_complete(asyncio.wait_for(call_chat_model(owner, on_text), timeout=3600))
+        result = loop.run_until_complete(asyncio.wait_for(call_chat_model(owner, on_text, on_think), timeout=3600))
         text = result[0] if isinstance(result, tuple) else str(getattr(result, "response", result) or "")
         if not CANON.startswith(text):
             problems.append(f"I2 returned {text!r}")
@@ -425,6 +524,7 @@ def run_one(seed):
     if not CANON.startswith(page["full"]):
         problems.append(f"I2 page {page['full']!r}")
     problems.extend(world.violations)
+    problems.extend(thought_violations(world.deliveries))     # I6-I8 (1.8.4.3)
     took = loop._virtual - started
     try:
         loop.run_until_complete(asyncio.sleep(35.0))      # I5: the judges end by their own deadline
