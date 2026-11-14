@@ -79,7 +79,7 @@ A `429`, `RESOURCE_EXHAUSTED`, a `503` or a dead key moves the call to the **nex
 <td width="50%" valign="top">
 
 ### ⚡ Speed first
-A late reply is **raced** by a backup key, then by your **next model**. Whichever answers first is shown, the rest is cut.
+A late reply is **raced** by a backup key, then by your **next model**. Whichever answers first is shown, the rest is cut. A reply that **stalls half-way** is picked up again.
 
 </td>
 <td width="50%" valign="top">
@@ -107,20 +107,20 @@ Which **model answered** each reply and how long it took. A live panel with ever
 
 ## 🏎️ How fast? Measured live
 
-On the author's own Gemini free-tier keys (4 fallback models × 14 keys), on a bad day for the newest model:
+On the author's own Gemini free-tier keys (four models of one provider × 14 keys), November 2026:
 
-| Situation | Before 1.8.2.8 | **KAME 1.8.2.8** |
-|---|---|---|
-| Main model is **slow** (about 2 minutes for one word) | 46–120 s per reply | **2.6 s median** |
-| Main model is **overloaded** (503) | stuck on it | next model answering in **8.3 s**, then at once |
-| Main model is **out of quota** | next model, then stuck there up to 1 hour | switched in **0.3 s**, back on the model you picked next reply |
-| Everything **healthy** | — | your main model, first word in **2–4 s** |
+| Situation | What happens |
+|---|---|
+| Your **two best models overloaded** (503) | the next model answers: first sign of work **2.7 s** median, none over 20 s (10 live replies) |
+| A model **stops mid-thought** | asked again on another key once it is quiet past its own limit (8–20 s), then on your next model or provider |
+| An answer **goes silent half-way** | continued after 45 s, where it could sit for minutes before |
+| A key **out of quota** | the next key or model at once; the spent key still works on your other models |
 
-<sub>Measured on the Hermes build, which shares these rules; 8 messages in one session. See <a href="VALIDATION.md">validation and limits</a>.</sub>
+<sub>Live numbers from the Hermes port, which shares these rules; the rows without a number are rules, each tested in the plugin's suite. See <a href="VALIDATION.md">validation and limits</a>.</sub>
 
 ### 💸 What can cost extra requests
 
-Speed has a price, and it is yours: some of what makes KAME fast sends a request **beyond the one you asked for**, and your provider may bill it. They are: a **backup key** for a slow first word, **the next model racing** a slow reply, **one more model joining** at the slow bound, and the occasional **ask of a busy best model** (at most 3 a minute, only while replies are flowing). **Saver** sends no backup key, no race and no ask beside the reply (when every model is busy it still asks your best one on the 20-second clock, instead of key after key as before); **Balanced** spends up to 1.1× the requests of a day, **Faster** up to 1.3× (at the default budget). The *Extra requests this hour* line on the API Rotation page shows what was really spent. Background jobs (chat names, memory, compression) never send backups or races, and have a budget of their own; an important one also goes **down your list** to another model when your best model is busy, and again before it gives up (your provider may bill those requests). A job KAME does not recognise keeps the old endless wait. `KAME_AUX_UNBOUNDED=1` in the environment gives the conversation's endless wait back to every background job, as in 1.8.2.8.
+Speed has a price, and it is yours: some of what makes KAME fast sends a request **beyond the one you asked for**, and your provider may bill it. They are: a **backup key** for a slow first word, **the next model racing** a slow reply, **one more model joining** at the slow bound, a reply that thinks and then goes quiet **asked at most twice more**, an answer that goes silent half-way **continued once**, and the occasional **ask of a busy best model** (at most 3 a minute, only while replies are flowing). **Saver** sends no backup key, no race and no ask beside the reply (when every model is busy it still asks your best one on the 20-second clock, instead of key after key as before); **Balanced** spends up to 1.1× the requests of a day, **Faster** up to 1.3× (at the default budget). The *Extra requests this hour* line on the API Rotation page shows what was really spent. Background jobs (chat names, memory, compression) never send backups or races, and have a budget of their own; an important one also goes **down your list** to another model when your best model is busy, and again before it gives up (your provider may bill those requests). A job KAME does not recognise keeps the old endless wait. `KAME_AUX_UNBOUNDED=1` in the environment gives the conversation's endless wait back to every background job, as in 1.8.2.8.
 
 <a id="vs"></a>
 ## 🆚 KAME vs round-robin
@@ -185,7 +185,7 @@ flowchart TD
 <table>
 <tr><th>Step</th><th>What KAME does</th></tr>
 <tr><td>🔑 Pick</td><td>The key with the fewest requests in the last 60 s; a key is marked busy the moment it is handed out, so parallel agents spread across keys.</td></tr>
-<tr><td>🏁 Race</td><td>Silent at about 2× the usual first word: a backup key of the same model. At about 3×: your next model also gets the request. First to answer wins.</td></tr>
+<tr><td>🏁 Race</td><td>Silent at about 2× the usual first word: a backup key of the same model. At about 3×: your next model also gets the request. A reply that thinks and then goes quiet is asked again; one that stops half-way is continued. First to answer wins.</td></tr>
 <tr><td>💤 Rest</td><td>Exactly as long as the provider says, never more than an hour. A spent key still works on your other models.</td></tr>
 <tr><td>🔀 Fallback</td><td>Your fallback models, one per line, in the KAME settings. Only models <b>you</b> listed, never after part of the reply is on screen, for any model a reply starts on (that model, then your main model, then the rest of the list), and every new reply starts on the model you picked.</td></tr>
 </table>
@@ -446,6 +446,14 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 | Check | Result |
 |---|---|
 | **1.9.0.1** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite, 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 160 raced replies, among them worlds with one key, no list, "Never switch", a model of another provider and a model whose every request hangs (`tools/race_chaos.py`): 0 defects |
+| **1.9.0.1** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
+| Real sessions — Agent Zero's own model call, real LiteLLM, real Gemini and NVIDIA keys | **56 / 56 answered** over five sessions (1.8.1.x to 1.8.3.1), 28 of them concurrent; every real `503` absorbed at 1 s |
+
+<details>
+<summary><b>Earlier versions (click to open)</b></summary>
+
+| Check | Result |
+|---|---|
 | **1.9.0.0** — offline suites | 87 / 87 suites green (82 new tests); 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 150 raced replies whose stand-in model thinks and then hangs (`tools/race_chaos.py`): 0 defects. Not run on a real Agent Zero |
 | **1.8.4.2** — offline suites | 84 / 84 suites green; 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same mechanism, measured live in the Hermes port: the first reply after a restart, with the main model failing, gave its first text in 2.9 s instead of about 20 s. Not yet run on a real Agent Zero |
 | **1.8.4.1** — offline suites | 80 / 80 suites green; the settings and timings of both ports compared by machine (`tools/parity_check.py`); 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py`) and 300 raced replies, some of them repeating text (`tools/race_chaos.py`): 0 defects; checked against Agent Zero v2.15 (15 of 15 patch points unchanged, 27 of 27 host facts). Not yet run on a real Agent Zero |
@@ -467,6 +475,8 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 | Adversarial review | a second model tried to break the port; its 8 findings are fixed and each is now a test |
 
 The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op, because it breaks HTTP timeouts on the Python 3.14 used for the test; Agent Zero's own Docker image runs an older Python where the shim works. The tool is `tools/live_a0_session.py`.
+
+</details>
 
 <a id="history"></a>
 ## 🪪 Version history
@@ -552,7 +562,7 @@ Rarely, by design: Agent Zero makes the call and KAME only chooses the key. Ever
 <details>
 <summary><b>I only have one key. Does KAME help?</b></summary>
 
-Yes: the right wait for each error, the one-hour ceiling, the chat notice and the unusable-response floor all apply. It simply has nothing to rotate to.
+Yes: the right wait for each error, the one-hour ceiling, the chat notice and the unusable-response floor all apply. A reply that stops mid-thought is asked again on the same key, a busy refusal moves the reply to your next model at once, and an answer that goes silent half-way is continued.
 </details>
 
 ---
@@ -574,6 +584,6 @@ MIT — see [LICENSE](LICENSE). Bugs and ideas: [issues](https://github.com/Kame
 
 <div align="center">
 
-🐢⚡ **KAME 1.8.1.8** — *because round-robin was never enough*
+🐢⚡ **KAME** — *because round-robin was never enough*
 
 </div>
