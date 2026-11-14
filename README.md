@@ -311,7 +311,7 @@ Or in `/a0/usr/.env`:
 API_KEY_GOOGLE=AIzaSy...aaa,AIzaSy...bbb,AIzaSy...ccc
 ```
 
-One key works too; there is just nothing to rotate to.
+One key works too: a stalled reply is asked again on it and a busy model hands the reply to your next one; more keys add rotation.
 
 Or from any chat: `/kame-keys add AIza...,AIza...` (the provider is read from the
 prefix; name it when it cannot be: `/kame-keys add deepseek sk-...,sk-...`), or
