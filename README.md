@@ -78,11 +78,11 @@ Or unzip the [latest release](https://github.com/Kame696/kame-api-rotation-for-a
 
 ### 2️⃣ Paste your keys
 
-In a provider's **API key** field, comma-separated:
+In the provider's **API key** field, put **all your keys, separated by commas**:
 
 `key1,key2,key3`
 
-Keys from different projects and accounts each bring their own quota.
+No command needed (details below the table).
 
 </td>
 <td width="33%" valign="top">
@@ -96,6 +96,19 @@ Watch it work in **API Rotation** (central menu).
 </td>
 </tr>
 </table>
+
+> **🔑 All your keys in one field, no command**
+>
+> 1. In Agent Zero open **Settings → Model Provider** (or the file `/a0/usr/.env`).
+> 2. In your provider's **API key** field, **delete the key that is there** and paste **all your keys for that provider, separated by commas**.
+> 3. Save. Do the same for every provider you use.
+>
+> ```
+> API_KEY_GOOGLE=AIza...key1,AIza...key2,AIza...key3
+> API_KEY_OPENROUTER=sk-or-...key1,sk-or-...key2
+> ```
+>
+> Keys from different projects and accounts each bring their own quota. Prefer the chat? `/kame-keys add AIza...,AIza...` does the same.
 
 <details>
 <summary><b>Step by step — install by hand, add your keys</b></summary>
