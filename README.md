@@ -43,25 +43,22 @@ A reply that is **late**, **stops mid-thought** or **goes silent half-way** is s
 
 Also: 🔀 **your model leads** — every reply starts on the model you picked; your fallback list takes over only when it is busy, spent or slow · 🧠 **reads every error** — 82 providers learned from their own docs · 👀 **you see everything** — which model answered each reply, and how long it took.
 
-## 🏎️ How fast? Measured live
+<a id="vs"></a>
+## 🆚 KAME vs round-robin
 
-On the author's own Gemini free-tier keys (four models of one provider × 14 keys), November 2026:
+Most key rotators cycle keys in order and retry on a timer. KAME decides from the refusal itself.
 
-| Situation | What happens |
-|---|---|
-| Your **two best models overloaded** (503) | the next model answers: first sign of work **2.7 s** median, none over 20 s (10 live replies) |
-| A model **stops mid-thought** | asked again on another key once it is quiet past its own limit (8–20 s), then on your next model or provider |
-| An answer **goes silent half-way** | continued after 45 s, where it could sit for minutes before |
-| A key **out of quota** | the next key or model at once; the spent key still works on your other models |
-
-<sub>Live numbers from the Hermes port, which shares these rules; the rows without a number are rules, each tested in the plugin's suite. See <a href="VALIDATION.md">validation and limits</a>.</sub>
-
-<details>
-<summary><b>💸 What can cost extra requests</b></summary>
-
-Speed has a price, and it is yours: some of what makes KAME fast sends a request **beyond the one you asked for**, and your provider may bill it. They are: a **backup key** for a slow first word, **the next model racing** a slow reply, **one more model joining** at the slow bound, a reply that thinks and then goes quiet **asked at most twice more**, an answer that goes silent half-way **continued once**, and the occasional **ask of a busy best model** (at most 3 a minute, only while replies are flowing). **Saver** sends no backup key, no race and no ask beside the reply (when every model is busy it still asks your best one on the 20-second clock, instead of key after key as before); **Balanced** spends up to 1.1× the requests of a day, **Faster** up to 1.3× (at the default budget). The *Extra requests this hour* line on the API Rotation page shows what was really spent. Background jobs (chat names, memory, compression) never send backups or races, and have a budget of their own; an important one also goes **down your list** to another model when your best model is busy, and again before it gives up (your provider may bill those requests). A job KAME does not recognise keeps the old endless wait. `KAME_AUX_UNBOUNDED=1` in the environment gives the conversation's endless wait back to every background job, as in 1.8.2.8.
-
-</details>
+| | Round-robin rotator | **KAME** |
+|---|---|---|
+| Which key is next | the next one in the list | **the least-loaded healthy key** (60-second window) |
+| Parallel calls | all start on the same key | **spread across keys** (marked busy at hand-out) |
+| After a 429 | retry on a fixed backoff | **the provider's own `retryDelay` / `Retry-After`, to the second** |
+| Per-minute vs daily quota | same treatment | **told apart** (`quotaId`, reset hints, the pool's own behaviour) |
+| Gemini bare `RESOURCE_EXHAUSTED` | fixed backoff or hammering | **1 → 2 → 4 → 8s … ladder, reset the moment the key answers** |
+| Outage (5xx) | punishes every key | **1s, never escalates** — the key was never at fault |
+| A key spent on one model | benched everywhere | **still used on your other models** |
+| All keys resting | error, run over | **sleeps until the first recovery, and says so in the chat** |
+| Longest a healthy key can be lost | whatever the provider claimed | **1 hour** (`max_hold_seconds`) |
 
 <a id="install-fast"></a>
 ## ⚡ Install in 1 minute
@@ -288,23 +285,27 @@ A gateway is a server you run in front of your clients. KAME is a plugin inside 
 
 Optional reading — everything above is all you need. Click a line to open it.
 
-<a id="vs"></a>
+<a id="fast"></a>
 <details>
-<summary><b>🆚 KAME vs round-robin</b></summary>
+<summary><b>🏎️ How fast? Measured live</b></summary>
 
-Most key rotators cycle keys in order and retry on a timer. KAME decides from the refusal itself.
+On the author's own Gemini free-tier keys (four models of one provider × 14 keys), November 2026:
 
-| | Round-robin rotator | **KAME** |
-|---|---|---|
-| Which key is next | the next one in the list | **the least-loaded healthy key** (60-second window) |
-| Parallel calls | all start on the same key | **spread across keys** (marked busy at hand-out) |
-| After a 429 | retry on a fixed backoff | **the provider's own `retryDelay` / `Retry-After`, to the second** |
-| Per-minute vs daily quota | same treatment | **told apart** (`quotaId`, reset hints, the pool's own behaviour) |
-| Gemini bare `RESOURCE_EXHAUSTED` | fixed backoff or hammering | **1 → 2 → 4 → 8s … ladder, reset the moment the key answers** |
-| Outage (5xx) | punishes every key | **1s, never escalates** — the key was never at fault |
-| A key spent on one model | benched everywhere | **still used on your other models** |
-| All keys resting | error, run over | **sleeps until the first recovery, and says so in the chat** |
-| Longest a healthy key can be lost | whatever the provider claimed | **1 hour** (`max_hold_seconds`) |
+| Situation | What happens |
+|---|---|
+| Your **two best models overloaded** (503) | the next model answers: first sign of work **2.7 s** median, none over 20 s (10 live replies) |
+| A model **stops mid-thought** | asked again on another key once it is quiet past its own limit (8–20 s), then on your next model or provider |
+| An answer **goes silent half-way** | continued after 45 s, where it could sit for minutes before |
+| A key **out of quota** | the next key or model at once; the spent key still works on your other models |
+
+<sub>Live numbers from the Hermes port, which shares these rules; the rows without a number are rules, each tested in the plugin's suite. See <a href="VALIDATION.md">validation and limits</a>.</sub>
+
+<details>
+<summary><b>💸 What can cost extra requests</b></summary>
+
+Speed has a price, and it is yours: some of what makes KAME fast sends a request **beyond the one you asked for**, and your provider may bill it. They are: a **backup key** for a slow first word, **the next model racing** a slow reply, **one more model joining** at the slow bound, a reply that thinks and then goes quiet **asked at most twice more**, an answer that goes silent half-way **continued once**, and the occasional **ask of a busy best model** (at most 3 a minute, only while replies are flowing). **Saver** sends no backup key, no race and no ask beside the reply (when every model is busy it still asks your best one on the 20-second clock, instead of key after key as before); **Balanced** spends up to 1.1× the requests of a day, **Faster** up to 1.3× (at the default budget). The *Extra requests this hour* line on the API Rotation page shows what was really spent. Background jobs (chat names, memory, compression) never send backups or races, and have a budget of their own; an important one also goes **down your list** to another model when your best model is busy, and again before it gives up (your provider may bill those requests). A job KAME does not recognise keeps the old endless wait. `KAME_AUX_UNBOUNDED=1` in the environment gives the conversation's endless wait back to every background job, as in 1.8.2.8.
+
+</details>
 
 </details>
 
