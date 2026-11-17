@@ -422,7 +422,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 | Check | Result |
 |---|---|
 | **1.9.0.2** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (91 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.2 |
-| **1.9.0.2** — native Agent Zero | the plugin loaded and exercised on Agent Zero (CI) |
+| **1.9.0.2** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
 | **1.9.0.1** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite, 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 160 raced replies, among them worlds with one key, no list, "Never switch", a model of another provider and a model whose every request hangs (`tools/race_chaos.py`): 0 defects |
 | **1.9.0.1** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
 | Real sessions — Agent Zero's own model call, real LiteLLM, real Gemini and NVIDIA keys | **56 / 56 answered** over five sessions (1.8.1.x to 1.8.3.1), 28 of them concurrent; every real `503` absorbed at 1 s |
