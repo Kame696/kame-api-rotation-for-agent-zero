@@ -45,6 +45,12 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 DATA = Path(tempfile.mkdtemp(prefix="kame-1811-a0-"))
 os.environ["KAME_DATA_DIR"] = str(DATA)
+# 1.9.0.2: removed when the run ends. Without this every import left one folder behind - 4,023 of them
+# (193 MB) in the owner's %TEMP% on 2026-11-15, created since 2026-09-22 by run_all, CI and the gates.
+import atexit  # noqa: E402
+import shutil  # noqa: E402
+
+atexit.register(shutil.rmtree, str(DATA), True)
 
 import kame_engine as K  # noqa: E402
 import kame_journal as J  # noqa: E402

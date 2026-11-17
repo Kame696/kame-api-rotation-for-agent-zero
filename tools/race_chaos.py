@@ -27,8 +27,9 @@ again. After every reply:
   I6  (1.8.4.3, A7.11) after the first sentence of a race has reached the page, nothing of any other leg
       reaches it: no thought, no word. Read at the race's own callbacks, leg by leg.
   I7  no visible chunk of a loser: every sentence a race delivers comes from one leg.
-  I8  the thoughts a race delivers come from one leg, the provisional one: a rescue leg's thoughts never
-      reach the page. The stand-in model now sometimes thinks and then hangs ("thinks then hangs"), sometimes
+  I8  until the race's first sentence, the thoughts it delivers come from one leg, the provisional one: a rescue
+      leg's thoughts never reach the page (after the first sentence, I6: only the winner's, its own continuation
+      included - 1.9.0.2, seed 180). The stand-in model now sometimes thinks and then hangs ("thinks then hangs"), sometimes
       thinks and goes quiet for a while before it answers, and the quiet limit is learned, 3 s or off.
 
   I9  (1.9.0.1, A11-A12) a reply is never left waiting while a free model or key existed that the rules allow.
@@ -435,7 +436,12 @@ def thought_violations(deliveries):
             other = {leg for _i, leg in texts if leg != winner}
             if other:
                 problems.append(f"I7 race {n}: sentences of legs {sorted(other)} besides the winner {winner}")
-        thinkers = {leg for leg, kind, _d in events if kind == "think" and _d}
+        # I8 is about the time BEFORE the race's first sentence: the provisional leg's thoughts are live and a
+        # rescue's are not. After the first sentence I6 rules (nothing of any OTHER leg), so the winner's own
+        # later thoughts are its reply's - seed 180 (2026-11-15): a rescue won with "the quick", its answer was
+        # cut and its continuation thought again; counting those flagged a reply the user saw correctly.
+        before = events[:texts[0][0]] if texts else events
+        thinkers = {leg for leg, kind, _d in before if kind == "think" and _d}
         if len(thinkers) > 1:
             problems.append(f"I8 race {n}: thoughts of legs {sorted(thinkers)} reached the page, one leg may")
     return problems

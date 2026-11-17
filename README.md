@@ -6,7 +6,7 @@
 
 ### All your API keys and models as one pool. A `429`, a spent quota or a slow model never stops your agent again.
 
-[![Version](https://img.shields.io/badge/version-1.9.0.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0.2-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -124,7 +124,7 @@ Watch it work in **API Rotation** (central menu).
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.1 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.2 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -421,6 +421,8 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
+| **1.9.0.2** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (91 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.2 |
+| **1.9.0.2** — native Agent Zero | the plugin loaded and exercised on Agent Zero (CI) |
 | **1.9.0.1** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite, 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 160 raced replies, among them worlds with one key, no list, "Never switch", a model of another provider and a model whose every request hangs (`tools/race_chaos.py`): 0 defects |
 | **1.9.0.1** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
 | Real sessions — Agent Zero's own model call, real LiteLLM, real Gemini and NVIDIA keys | **56 / 56 answered** over five sessions (1.8.1.x to 1.8.3.1), 28 of them concurrent; every real `503` absorbed at 1 s |
@@ -458,7 +460,15 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 
 <a id="new"></a>
 <details>
-<summary><b>📣 What's new in 1.9.0.1</b></summary>
+<summary><b>📣 What's new in 1.9.0.2</b></summary>
+
+> **1.9.0.2 — a reply starts on a model that is not failing; the wait is said.** Kept in step with Hermes 1.9.0.2.
+
+- **A reply starts on the first model of your list that is not failing.** A model due a second look is asked
+  beside it from the first instant: if it answers first, the reply is its own; heard later, it is trusted again.
+- **The wait is said in the provider's words.** When every key rests on a spent day, the waiting line gives the
+  provider's own return time; when every key refused naming no time for a minute, it says so.
+- **One closing row per call without an answer** in `calls.jsonl` (`cancelled`, `handed_over` or `raised`).
 
 > **1.9.0.1 — a reply is never left waiting when something else could answer.**
 
@@ -563,6 +573,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.2** | A reply starts on a model that is not failing; the wait is said | A model due a second look is asked beside the reply instead of starting it; the waiting line gives the provider's own return time, or says the provider gave none; one closing row per call without an answer |
 | **v1.9.0.1** | A reply is never left waiting when something else could answer | A stalled reply moves on to the next free model of your list; one key or no list still gets its extra request; the only key busy is the model busy; an answer that began and went silent is cut and continued (`answer_quiet_s`, 45 s) |
 | **v1.9.0.0** | Thoughts stay live, a stalled reply is asked again, a busy model is raced at once | A thinking reply's thoughts keep showing live; one that goes quiet past a limit learned for each model is asked again on another key, then on the next model of your list; after a 503 the retry is raced by the next model from its first instant. Developed as 1.8.4.3 (none was published); offline suites only, not yet run on a real Agent Zero |
 | **v1.8.4.2** | A model that keeps failing stops making you wait | A main model remembered as failing no longer leads the reply: the next model of your list answers at once while yours is asked beside it, and yours leads again the moment it answers; a model refused busy is not handed the same reply twice |

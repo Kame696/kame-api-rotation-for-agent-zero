@@ -1,5 +1,30 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.9.0.2 — A reply starts on a model that is not failing; the wait is said (2026-11-16)
+
+Kept in step with the Hermes 1.9.0.2 fixes. Of the six, three apply to Agent Zero:
+
+- **A reply no longer starts on a model that is only due a second look.** When your best model kept failing
+  and the next one had failed too, that next model started the reply as soon as its second look was due (10
+  minutes to 2 hours after its last failure), and a healthy model further down your list only joined at the
+  race's slow bound - about 14 seconds to a first word the healthy model gives in two (seen on Hermes, the same
+  rule lived here). Now the reply starts on the first model of your list that is not failing, and the model due
+  its second look is asked beside it from the first instant, next to your best model's own check: if it answers
+  first, the reply is its own; heard later, it is trusted again; silent or failing, that counts and its next look
+  waits longer. Nobody waits for it.
+- **The wait is said in the provider's words.** When every key is resting on a spent day and the provider
+  named when it comes back (Google names the next midnight, US Pacific), the waiting line says that time
+  beside KAME's next try. When every key has refused for a minute without naming any time, the line says so
+  ("the provider gave no time") instead of only "trying another key". Nothing waits or stops differently.
+- **One closing row per call without an answer.** `calls.jsonl` held one row per attempt, so a call that
+  was stopped, moved to the next model of your list or failed ended on its last refusal and read like one
+  still running. It now closes with one row (`cancelled`, `handed_over` or `raised`) that names no key
+  and no failure, so it never counts against a key or a model.
+
+Three do not apply here, checked in the code: a stop in Agent Zero is a task cancellation that already
+ends the rotation at once (the Hermes stop needed a `cancel()` its host looks for); Agent Zero's pool reset
+already names what failed; there is no voice or transcription path.
+
 ## 1.9.0.1 — A reply is never left waiting when something else could answer (2026-11-14)
 
 **In short:** 1.9.0.0 had been tried on one provider with a pool of many keys. For other users a reply could

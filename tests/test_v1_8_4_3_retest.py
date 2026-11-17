@@ -112,11 +112,13 @@ def test_the_20_30_record_makes_the_fast_model_a_candidate_again():
     record(I1, "0000000000", 5 * 86400.0 - 3600.0)                    # 3.8: ten in a row, long ago
     record(I2, "1111111111", 10.0)                                    # 3.7 healthy
     assert mh.HEALTH.risky(I3) is True and mh.HEALTH.retest_due(I3) is True
-    # S1d of 1.8.4.2 left 3.6 behind for ever; its retest is due, so it is in the list's own order again
-    assert order([I3, I2]) == [I3, I2]
-    assert order([I1, I3, I2]) == [I1, I3, I2]                        # 3.8's retest is due too: all candidates
-    record(I1, "0000000000", 60.0)                                    # 3.8 failed a minute ago: still left behind
-    assert order([I1, I3, I2]) == [I3, I2, I1]
+    # S1d of 1.8.4.2 left 3.6 behind for ever; its retest is due, so it is a candidate again - v1.9.0.2 (A11, Hermes
+    # H11, owner 2026-11-15): after the healthy models (a reply never starts on a model remembered as failing while
+    # one that is not can start it) and before the ones not due; it is asked beside the start probe instead
+    assert order([I3, I2]) == [I2, I3]
+    assert order([I1, I3, I2]) == [I2, I1, I3]                        # 3.8's retest is due too: both after 3.7
+    record(I1, "0000000000", 60.0)                                    # 3.8 failed a minute ago: last
+    assert order([I1, I3, I2]) == [I2, I3, I1]
 
 
 def test_a_fresh_failure_still_leaves_the_model_behind():
@@ -144,7 +146,9 @@ def test_never_drops_one_and_every_entry_risky_is_todays_order():
 def test_the_cap_is_two_hours_whatever_the_count():
     record(I3, "0000000000", 7300.0)                                  # ten in a row, 2 h and 100 s ago
     record(I2, "1111111111", 10.0)
-    assert order([I3, I2]) == [I3, I2]                                # due: back in the list's order
+    assert order([I3, I2]) == [I2, I3]                                # due: a candidate, after the healthy one
+    record(I1, "0000", 60.0)
+    assert order([I1, I3, I2]) == [I2, I3, I1]                        # and before one that is not due
 
 
 def test_the_home_model_with_an_old_failure_is_still_asked_beside_s1_kept():

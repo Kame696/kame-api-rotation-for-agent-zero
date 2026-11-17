@@ -612,7 +612,7 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
                 rest_s: Optional[float] = None, rest_source: str = "",
                 call_id: str = "", channel: str = "main", task: str = "chat",
                 longest_quiet_s: Optional[float] = None, rescued: bool = False,
-                rescues_asked: int = 0) -> None:
+                rescues_asked: int = 0, record_type: str = "") -> None:
     """One attempt, as durations. Never a key, a prompt or an answer.
 
     1.8.2.9: ``channel`` is ``main`` (the conversation) or ``secondary`` (a background job of Agent
@@ -626,7 +626,7 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
             "host": "agent-zero",
             "call": str(call_id or ""),
             "identity": str(identity or ""),
-            "key": fingerprint(key),
+            "key": fingerprint(key) if key else "",
             "attempt": int(attempt or 0),
             "channel": "secondary" if channel == "secondary" else "main",
             "task": str(task or ("chat" if channel != "secondary" else "utility"))[:40],
@@ -651,6 +651,9 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
             row["rescued"] = bool(rescued)
         if isinstance(rescues_asked, int) and not isinstance(rescues_asked, bool) and rescues_asked > 0:
             row["rescues_asked"] = int(rescues_asked)
+        if record_type:
+            # 1.9.0.2 (H5 parity): ``close`` - the one row of a call that ended without an answer.
+            row["record_type"] = str(record_type)[:24]
         _append(CALLS_FILE, CALLS_CEILING, row)
     except Exception:
         pass

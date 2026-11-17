@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.9.0.1"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14
+KAME_VERSION = "1.9.0.2"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14; 1.9.0.2: H5 parity (closing row)
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -2916,6 +2916,7 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                      sized_by: str = "", bare: bool = False, scope: str = "",
                      window: str = ""):
     """Update health state for a key after a completed (or failed) attempt.
+    (v1.9.0.2: an answer forgets the return time the provider named for the key, ``_KAME_STATED_BACK``.)
 
     Returns the ACTUAL delay applied (after any adaptive-backoff escalation)
     so the caller can log the real cooldown.
@@ -2945,6 +2946,8 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
         a sustained outage. `consecutive_server` is still counted because
         `_thaw_server_cooled_keys` reads it.
     """
+    if success:
+        _KAME_STATED_BACK.pop((identity, key), None)
     global _KAME_KEY_HEALTH, _KAME_CALL_COUNT
     now = time.time()
     applied = delay
@@ -3960,6 +3963,7 @@ def _kame_rest_for_failure(identity, key, exc, elapsed=None):
     elif judgment is not None and judgment.family == "throttle" and judgment.window in (
             "per_minute", "tokens_per_minute", "per_hour", "per_day"):
         window = judgment.window
+    _kame_note_stated_back(identity, key, kind, delay, sized_by)   # v1.9.0.2 (Hermes H4): wording only
     applied = _mark_key_health(identity, key, False, delay, kind, sized_by=sized_by, bare=bare,
                                scope=scope, window=window)
     label = ""
@@ -5219,6 +5223,10 @@ def _kame_live_line(activity) -> str:
                 ready is not None and keys is not None and int(ready) < int(keys))
         except (TypeError, ValueError):
             resting = False
+        if resting and activity.get("no_time_s") is not None:
+            # v1.9.0.2 (Hermes H4): every key refused with no time, for a while - said, nothing invented
+            return (f"↻ {model}: every key refused for {_kame_live_duration(activity['no_time_s'])} - "
+                    f"the provider gave no time · {count}")
         return f"↻ {model}: trying another key · {count}" if resting else f"⏳ Asking {model} · {count}"
     if kind == "racing":
         return f"⚡ {model} is slow to start - a backup key is asking too"
@@ -5226,9 +5234,10 @@ def _kame_live_line(activity) -> str:
         return f"↪ {model} can't answer now - {activity.get('other') or ''} is answering instead"
     if kind == "waiting":
         eta = activity.get("eta_s")
+        back = activity.get("back") or ""      # v1.9.0.2 (Hermes H4): the provider's own time, when later
         if eta is None:
-            return f"⏳ Every key of {model} is resting - waiting for one to come back"
-        return f"⏳ Every key of {model} is resting · next key in {_kame_live_duration(eta)}"
+            return f"⏳ Every key of {model} is resting - waiting for one to come back{back}"
+        return f"⏳ Every key of {model} is resting · next key in {_kame_live_duration(eta)}{back}"
     if kind == "stitching":
         done, limit = _kame_first(activity, "n", "resume"), _kame_first(activity, "max", "budget")
         tail = f" ({done} of {limit})" if done is not None and limit is not None else ""
@@ -5430,7 +5439,11 @@ def _kame_say_attempt(ctx, st, attempt_no) -> None:
     else:
         # 1.8.3.1 (review R12): "recovered" is said once the answer is in (``_kame_say_recovered``), as Hermes
         # does; the attempt that follows a wait is an ordinary one.
-        _kame_say(ctx, "calling", st, attempt=attempt_no)
+        _no_time = _kame_no_time_given(ctx)        # v1.9.0.2 (Hermes H4)
+        if _no_time is not None:
+            _kame_say(ctx, "calling", st, attempt=attempt_no, no_time_s=_no_time)
+        else:
+            _kame_say(ctx, "calling", st, attempt=attempt_no)
 
 
 def _kame_say_recovered(ctx, st, call_started_perf) -> None:
@@ -5461,7 +5474,11 @@ def _kame_wait_notice_tick(st, identity, all_keys, call_type, model_short) -> No
         eta = _next_recovery_seconds(identity, all_keys)
         _kame_flight_wait(ctx, st.cold_since, eta)
         st.waited = True
-        _kame_say(ctx, "waiting", st, identity=identity, eta_s=eta)
+        _back = _kame_provider_back_note(identity, all_keys, eta)   # v1.9.0.2 (Hermes H4)
+        if _back:
+            _kame_say(ctx, "waiting", st, identity=identity, eta_s=eta, back=_back)
+        else:
+            _kame_say(ctx, "waiting", st, identity=identity, eta_s=eta)
     except Exception:
         pass
 
@@ -5565,11 +5582,46 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
     st.cooldown_overhead_s += (time.perf_counter() - _sleep_started)
 
 
+def _kame_close_row(ctx, error) -> None:
+    """One closing row in calls.jsonl for a call that ended without an answer. Never raises.
+
+    1.9.0.2 (H5, the Hermes port's audit F6): only per-attempt rows existed, so a call that was stopped,
+    handed to the next model or failed ended on its last ``refused`` row and read like one still running.
+    ``outcome`` is ``cancelled`` (a stop: asyncio cancellation), ``handed_over`` (the next model of the
+    list takes the reply) or ``raised``; ``key`` and ``kind`` are empty and ``record_type`` is ``close``,
+    so the readers that count a key's or a model's failures (``kame_model_health`` reads only ``ok`` or
+    kind ``server``/``timeout``) never count it. At most one per call; none after an answer.
+    """
+    if _KJ is None or not isinstance(ctx, dict):
+        return
+    try:
+        call_id = ctx.get("kame_call_id")
+        if not call_id or ctx.get("kame_closed"):
+            return
+        ctx["kame_closed"] = True
+        if isinstance(error, asyncio.CancelledError):
+            outcome = "cancelled"
+        elif isinstance(error, _KameSwitchModel):
+            outcome = "handed_over"
+        else:
+            outcome = "raised"
+        main = _kame_main(ctx)
+        extra = {} if main else {"channel": "secondary", "task": ctx.get("aux_task") or "utility"}
+        now = time.time()
+        _KJ.record_call(identity=str(ctx.get("identity") or ""), key="", attempt=0, outcome=outcome,
+                        kind="", status=None, started_at=now, ended_at=now, call_id=call_id,
+                        record_type="close", **extra)
+    except Exception:
+        pass
+
+
 def _kame_timing(identity, key, attempt, outcome, kind, status, started_wall, ctx,
                  call_started_perf, st, rest, rest_source, call_id) -> None:
     """One row of calls.jsonl for the attempt that just ended. Never raises."""
     if _KJ is None:
         return
+    if outcome == "ok" and isinstance(ctx, dict):
+        ctx["kame_closed"] = True      # 1.9.0.2 (H5 parity): answered - no closing row after it
     try:
         progress = ctx.get("progress") or {}
         main = _kame_main(ctx)
@@ -5740,19 +5792,57 @@ def _kame_entry_risky(identity, retest=False) -> bool:
 
 def _kame_prefer_not_risky(entries):
     """1.8.4.2 (S1d): the entries a model that is not remembered as failing first, each group in the
-    user's own order. Never excludes one: when every entry is risky (or none) the order is today's."""
+    user's own order. Never excludes one: when every entry is risky (or none) the order is today's.
+
+    v1.9.0.2 (A11, Hermes H11, owner 2026-11-15): three groups - the models not remembered as failing, then the
+    ones due a second look (1.8.4.3, A10), then the rest. A reply never starts on a model remembered as failing
+    while one that is not can start it (live: 14.3 s to a first word that the healthy model gives in two); the
+    model due a second look is asked beside the start probe instead (``_kame_retest_beside``)."""
     try:
         if (len(entries) < 2 or _KMH is None or _KMH.disabled()
                 or _KAME_NO_MODEL_FALLBACK or _KAME_MODEL_SWITCH == "never"):
             return entries
-        # 1.8.4.3 (A10): every caller (start target, stand-in, circle order, moved title) chooses among models that
-        # are not the one in use; one whose retest is due is a candidate again, in the list's own order
-        flags = [_kame_entry_risky(e["identity"], retest=True) for e in entries]
-        if not any(flags) or all(flags):
+        plain = [_kame_entry_risky(e["identity"]) for e in entries]
+        held = [_kame_entry_risky(e["identity"], retest=True) for e in entries]
+        if not any(plain):
             return entries
-        return [e for e, f in zip(entries, flags) if not f] + [e for e, f in zip(entries, flags) if f]
+        healthy = [e for e, f in zip(entries, plain) if not f]
+        due = [e for e, f, h in zip(entries, plain, held) if f and not h]
+        rest = [e for e, f, h in zip(entries, plain, held) if f and h]
+        return healthy + due + rest
     except Exception:
         return entries
+
+
+def _kame_retest_beside(ctx, identity, start, now=None):
+    """v1.9.0.2 (A11, Hermes H11): the model of the list ranked ABOVE ``start`` (the model the reply starts on, in
+    the user's own order) that failed and whose second look is due, to be asked beside the start probe from its
+    first instant - or None. Not the model the reply was asked for (it has its own probe), not one busy, skipped
+    or holding only a reserve key; at most once per 20 s per model across every conversation (claimed here).
+    Its leg is kept and judged like the start probe: an answer clears its record, silence or a failure counts."""
+    try:
+        if _KMH is None or _KMH.disabled() or _KAME_NO_MODEL_FALLBACK or _KAME_MODEL_SWITCH == "never":
+            return None
+        now = time.time() if now is None else now
+        now_m = time.monotonic()
+        for entry in _kame_ladder_raw(ctx, identity):
+            ident = entry["identity"]
+            if _kame_names_match(ident, start["identity"]):
+                return None                     # only a model ranked above the start is looked at
+            if not _kame_entry_risky(ident) or _kame_entry_risky(ident, retest=True):
+                continue                        # healthy (it would have started) or not due yet
+            if now_m < _KAME_FALLBACK_SKIP.get(ident, 0.0) or not _kame_entry_free(ident):
+                continue
+            if not _kame_race_ready(ident):
+                continue
+            with _KAME_LOCK:
+                if not _kame_stamp_is_due(_kame_probed_stamp(ident), now):
+                    continue
+                _KAME_PROBED_AT[ident] = now
+            return entry
+        return None
+    except Exception:
+        return None
 
 
 def _kame_probed_stamp(identity):
@@ -5773,6 +5863,74 @@ def _kame_probed_stamp(identity):
 
 _KAME_PROBE_EVERY_S = 20.0
 _KAME_PROBED_AT = {}                 # identity -> wall time of the last ask while it was known busy
+#: v1.9.0.2 (Hermes H4): (identity, key) -> the wall time the PROVIDER named for that key's return, uncapped
+#: (``max_hold_seconds`` caps the rest, never what is said). Wording only: nothing selects or waits on it.
+_KAME_STATED_BACK = {}
+#: v1.9.0.2 (Hermes H4): how long a call rotates through keys that all refused naming no time before the line
+#: says so. Wording only.
+_KAME_NO_TIME_AFTER_S = 60.0
+
+
+def _kame_note_stated_back(identity, key, kind, delay, sized_by) -> None:
+    """Keep (or forget) the return time the provider itself named for this key. Never raises."""
+    try:
+        if sized_by == "provider" and kind not in ("other", "auth", "revoked", "denied") and float(delay or 0) > 0:
+            _KAME_STATED_BACK[(identity, key)] = time.time() + float(delay)
+        else:
+            _KAME_STATED_BACK.pop((identity, key), None)
+    except Exception:
+        pass
+
+
+def _kame_provider_back_note(identity, keys, eta) -> str:
+    """`` - Google says the quota is back around 05:00`` when EVERY key carries a return the provider named,
+    still ahead, and the soonest is later than KAME's next try; otherwise "" (some key may be back sooner)."""
+    try:
+        if not keys or not _KAME_STATED_BACK:
+            return ""
+        now = time.time()
+        backs = []
+        for key in keys:
+            back = _KAME_STATED_BACK.get((identity, key), 0.0)
+            if back <= now:
+                return ""
+            backs.append(back)
+        back = min(backs)
+        if eta is not None and back - now <= float(eta) + 60.0:
+            return ""
+        provider = (str(identity).split(":", 1)[0] or "the provider").capitalize()
+        return f" - {provider} says the quota is back around {time.strftime('%H:%M', time.localtime(back))}"
+    except Exception:
+        return ""
+
+
+def _kame_note_unsized(ctx, identity, key, kind, sized_by) -> None:
+    """Which keys of this model refused THIS call naming no time (Hermes H4). Never raises."""
+    try:
+        if not isinstance(ctx, dict):
+            return
+        unsized = ctx.setdefault("unsized", {})
+        if kind == "per_minute" and sized_by != "provider":
+            unsized.setdefault(identity, set()).add(key)
+        else:
+            unsized.get(identity, set()).discard(key)
+    except Exception:
+        pass
+
+
+def _kame_no_time_given(ctx):
+    """Seconds this call has rotated through keys that ALL refused naming no time, past
+    ``_KAME_NO_TIME_AFTER_S``; else None. The line then says so instead of only "trying another key"."""
+    try:
+        identity, keys = ctx.get("identity"), ctx.get("all_keys") or []
+        started = ctx.get("kame_started_perf")
+        unsized = (ctx.get("unsized") or {}).get(identity) or set()
+        if not keys or started is None or not set(keys) <= unsized:
+            return None
+        elapsed = time.perf_counter() - started
+        return elapsed if elapsed >= _KAME_NO_TIME_AFTER_S else None
+    except Exception:
+        return None
 _KAME_STARTED_AT = time.time()       # E8: the tally starts here when that is less than a day ago
 
 
@@ -6181,16 +6339,30 @@ class _KameRace:
 
     def keeps(self, other, winner):
         """1.8.4.2 (S1e): is ``other`` the start probe (the busy or failing best model, leg 0) that lost to a
-        list model's leg? It is heard to its end instead of being cut, so a model that recovered is learned."""
-        return bool(other == 0 and winner in self.cross_legs and not self.burst
-                    and self.ctx.get("probe_primary"))
+        list model's leg? It is heard to its end instead of being cut, so a model that recovered is learned.
+        v1.9.0.2 (A11): so is the leg of a model asked beside it for its second look, whoever won."""
+        if self.burst or other == winner or not self.ctx.get("probe_primary"):
+            return False
+        if other == 0:
+            return winner in self.cross_legs
+        return self.is_retest(other)
+
+    def is_retest(self, leg):
+        """v1.9.0.2 (A11): is ``leg`` the leg of the model asked beside the start probe for its second look?"""
+        retest = self.ctx.get("probe_retest")
+        entry = self.cross_legs.get(leg)
+        return bool(retest and entry and _kame_names_match(entry.get("identity", ""), retest))
 
     def keep_probe_if_lost(self):
-        """The winner is decided: mark the start probe as kept when it lost and is still running."""
-        if self.winner is not None and self.keeps(0, self.winner):
-            task = self.tasks.get(0)
-            if task is not None and not task.done():
-                self.kept.add(0)
+        """The winner is decided: mark the start probe (and a second look beside it) as kept when it lost and is
+        still running."""
+        if self.winner is None:
+            return
+        for leg in [0] + list(self.cross_legs):
+            if self.keeps(leg, self.winner):
+                task = self.tasks.get(leg)
+                if task is not None and not task.done():
+                    self.kept.add(leg)
 
     def _claim(self, leg):
         if self.winner is None:
@@ -6362,6 +6534,7 @@ def _kame_judge_leg(identity, key, exc, elapsed, ctx, attempt_no, call_id, start
     try:
         applied, kind, sc, rung, sized_by = _kame_decide_failure(identity, key, exc, elapsed=elapsed)
         _tally_failure(identity, kind, sc, sized_by)
+        _kame_note_unsized(ctx, identity, key, kind, sized_by)   # v1.9.0.2 (Hermes H4)
         # Second review N1/N4: the carousel's "every key refused" rules must see
         # the keys refused inside a race too, and an exception judged here is
         # never judged a second time if it is the one the carousel receives.
@@ -7056,7 +7229,8 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
         for leg in sorted(race.kept - race.judging):
             race.judging.add(leg)
             _kame_start_probe_judge(race, leg, ctx, identity, attempt_no, call_id, race_wall,
-                                    call_started_at, st)
+                                    call_started_at, st,
+                                    cross=(race.cross_legs.get(leg) or {}).get("identity") if leg else None)
 
     legs = [key] + list(burst_keys or [])
     for i, k in enumerate(legs):
@@ -7344,7 +7518,11 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
             if cross and time.monotonic() >= race.started[0] + cross[0][1] and \
                     not any(p.get("first_sign_at") for p in race.progress.values()):
                 entry, _at = cross.pop(0)
-                if probe_cross:
+                _is_retest = bool(probe_cross and ctx.get("probe_retest")
+                                  and _kame_names_match(entry["identity"], ctx["probe_retest"]))
+                if _is_retest:
+                    probe = False                                   # v1.9.0.2 (A11): claimed by its own stamp
+                elif probe_cross:
                     probe = bool(ctx.get("probe_cross_claimed"))   # claimed when the probe was allowed
                 else:
                     if not _kame_race_ready(entry["identity"]):
@@ -7359,7 +7537,13 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     _fl["racing"] = [e["label"] for e in race.cross_legs.values()]
                     if probe_cross:
                         _fl["probe"] = _kame_model_label(identity)
-                if ctx.get("probe_primary") and ctx.get("probe_risky"):
+                        if _is_retest:
+                            _fl["probe"] += ", " + entry["label"]
+                if _is_retest:
+                    _kame_event("model_switch", entry["identity"],
+                                reason=f"{entry['label']} failed before and is due another look - asked beside "
+                                       f"the reply; the first to answer is shown")
+                elif ctx.get("probe_primary") and ctx.get("probe_risky"):
                     # 1.8.4.2 (S1c): it was not busy, it keeps failing - said once, as the start of the reply
                     _pf, _pn = ctx["probe_risky"]
                     _kame_event("model_switch", identity,
@@ -7693,19 +7877,22 @@ def _kame_note_leg_busy(ctx, race, leg) -> None:
         pass
 
 
-def _kame_start_probe_judge(race, leg, ctx, identity, attempt_no, call_id, race_wall, call_started_at, st):
+def _kame_start_probe_judge(race, leg, ctx, identity, attempt_no, call_id, race_wall, call_started_at, st,
+                            cross=None):
     """Start the task that hears a kept start probe to its end. It is a task of its own: nothing the reply
-    awaits depends on it, and a stopped reply does not end it."""
+    awaits depends on it, and a stopped reply does not end it. ``cross`` (v1.9.0.2, A11): the model of a kept
+    leg asked beside it for its second look - judged as itself."""
     try:
         task = asyncio.ensure_future(_kame_judge_probe(race, leg, ctx, identity, attempt_no, call_id,
-                                                       race_wall, call_started_at, st))
+                                                       race_wall, call_started_at, st, cross=cross))
         _KAME_PROBE_JUDGES.add(task)
         task.add_done_callback(_KAME_PROBE_JUDGES.discard)
     except Exception:
         pass
 
 
-async def _kame_judge_probe(race, leg, ctx, identity, attempt_no, call_id, race_wall, call_started_at, st):
+async def _kame_judge_probe(race, leg, ctx, identity, attempt_no, call_id, race_wall, call_started_at, st,
+                            cross=None):
     """1.8.4.2 (S1e): hear the best model's request, asked beside the reply, until its first WORKING token
     (text or reasoning), its normal end, its error, or ``_KAME_PROBE_JUDGE_S``; then cut it. A model can open a
     stream and hang, so a role chunk or an empty delta is no word (the shim only records a non-empty one).
@@ -7752,6 +7939,20 @@ async def _kame_judge_probe(race, leg, ctx, identity, attempt_no, call_id, race_
             await asyncio.gather(task, return_exceptions=True)
         except BaseException:
             pass
+    if cross:
+        # v1.9.0.2 (A11): a second look beside the reply. Its failures inside its own call were judged there on its
+        # own keys; here only the record and the window of that model learn the outcome (Hermes: the judged probe).
+        try:
+            if verdict == "ok":
+                _kame_clear_busy(cross)
+                _kame_health_note(cross, True, call_id)
+                _kame_event("recovery", cross,
+                            reason=f"{_kame_model_label(cross)} answered again beside the last reply")
+            elif verdict in ("failed", "silent"):
+                _kame_note_busy(cross, call_id=call_id)
+        except Exception:
+            pass
+        return
     try:
         if verdict == "ok":
             _kame_clear_busy(identity)
@@ -7783,10 +7984,17 @@ def _kame_cross_won(ctx, identity, race):
     if not ctx.get("probe_primary") and not quiet_was_home:
         # 1.8.2.9 (E2): losing the START probe is not proof the model is still busy.
         _kame_note_busy(identity, call_id=ctx.get("kame_call_id"))
+    def _at_start(other):
+        return any(_kame_names_match(other.get("identity", ""), e["identity"])
+                   for e, _at in (ctx.get("probe_cross") or []))
+
     for leg, other in race.cross_legs.items():   # raced in before the winner and still silent
         # 1.8.4.3 (6.35): a rescue leg that lost was asked late and says nothing about its model; a leg that
         # worked was not silent
         if (leg != race.winner and leg not in race.rescue_legs and leg not in race.first_work
+                and leg not in race.kept     # v1.9.0.2 (A11): a second look is its judge's to note
+                # v1.9.0.2 (A11): the second look won; the model the reply started on was asked at the same instant
+                and not (race.is_retest(race.winner) and _at_start(other))
                 and not race.progress.get(leg, {}).get("first_sign_at")):
             _kame_note_busy(other["identity"], call_id=ctx.get("kame_call_id"))
     why = ("stopped mid-thought" if rescued else
@@ -8220,6 +8428,11 @@ def _kame_ladder_after(ctx, identity=None) -> list:
     use and duplicates (``_kame_names_match``) removed. ``[]`` with no list. A background job has the
     list alone: it has no main model to go back to. Every place that used "the list" - the hand-over, the
     race of the next model, the widen, the start probe, the circle back - walks this."""
+    return _kame_prefer_not_risky(_kame_ladder_raw(ctx, identity))   # 1.8.4.2 (S1d): not failing first
+
+
+def _kame_ladder_raw(ctx, identity=None) -> list:
+    """``_kame_ladder_after`` in the user's own order, before the models remembered as failing are moved back."""
     if not _KAME_FALLBACK_MODELS:
         return []
     origin = identity or ctx.get("identity") or ""
@@ -8240,7 +8453,7 @@ def _kame_ladder_after(ctx, identity=None) -> list:
         if any(_kame_names_match(entry["identity"], b) for b in (ctx.get("leg_busy") or ())):
             continue
         out.append(entry)
-    return _kame_prefer_not_risky(out)      # 1.8.4.2 (S1d): a model not remembered as failing first
+    return out
 
 
 def _kame_ladder(ctx, identity=None) -> list:
@@ -8465,6 +8678,11 @@ def _kame_start_probe_allowed(ctx, identity) -> bool:
         ctx["probe_primary"] = True
         ctx["probe_cross"] = [(entry, 0.0)]
         ctx["probe_cross_claimed"] = bool(entry_busy)
+        # v1.9.0.2 (A11, Hermes H11): a model above the start that is due its second look goes beside it too
+        _retest = _kame_retest_beside(ctx, identity, entry, now)
+        if _retest is not None:
+            ctx["probe_cross"].append((_retest, 0.0))
+            ctx["probe_retest"] = _retest["identity"]
         return True
     except Exception:
         return False
@@ -8852,6 +9070,7 @@ async def _kame_carousel(self, ctx):
         )
 
     _call_started_at = time.perf_counter()
+    ctx.setdefault("kame_started_perf", _call_started_at)   # v1.9.0.2 (Hermes H4): the "gave no time" clock
     st = _KameSleepState()          # sleep_count + cooldown_overhead_s + log throttles
     st.ctx = ctx                    # 1.8.2.9: the status line belongs to this call
     _empty_counts = {}              # v1.0.6: per-key empty-answer count this call
@@ -8956,7 +9175,7 @@ async def _kame_carousel(self, ctx):
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
         attempt_no += 1
         if attempt_no > 1:
-            for _flag in ("probe_primary", "probe_cross", "probe_noted", "probe_risky"):
+            for _flag in ("probe_primary", "probe_cross", "probe_noted", "probe_risky", "probe_retest"):
                 ctx.pop(_flag, None)             # the start probe is the first attempt only
         if _aux is not None and _aux.spent():
             return await _kame_aux_stop(self, ctx, _aux, identity)
@@ -9346,6 +9565,7 @@ async def _kame_carousel(self, ctx):
                     elapsed=_leg_elapsed if _leg_elapsed is not None else time.perf_counter() - _attempt_t0
                 )
                 _tally_failure(identity, kind, sc, _sized_by)
+            _kame_note_unsized(ctx, identity, key, kind, _sized_by)   # v1.9.0.2 (Hermes H4)
             # Second review N1: keys refused inside a race count for the "every
             # key refused" rules exactly as keys refused one by one.
             _absorb_race(skip=key)
@@ -9701,6 +9921,7 @@ def _kame_make_entry_wrapper(entry_name, original, binding=None):
         try:
             return await _kame_carousel(self, ctx)
         except BaseException as _exc:
+            _kame_close_row(ctx, _exc)          # 1.9.0.2 (H5 parity): one closing row in calls.jsonl
             _kame_note_failed(ctx, _exc)        # 1.8.3.1 (D3): "no answer: ..." in the last replies
             raise
         finally:
