@@ -141,7 +141,7 @@ def test_a_busy_model_says_when_it_is_asked_again():
     K._KAME_PROBED_AT[ident] = time.time() - 5
     view = K.status_view()
     out = run_js("const m = V.ringModels(data).main[0]; return V.modelState(m, data, data.generated_at*1000);", view)
-    assert out["tone"] == "warn" and out["word"].startswith("busy — asked again in ")
+    assert out["tone"] == "warn" and out["word"].startswith("overloaded (the provider said so) — asked again in ")
 
 
 def test_a_ring_never_carries_a_key():
@@ -260,7 +260,7 @@ def test_a_key_to_replace_is_the_one_thing_said_wrong():
 def test_a_page_that_is_not_rotating_says_so_without_calling_it_a_fault():
     seed_owner_case()
     said = sentences(K.status_view(), {"active": False})
-    assert said["line2"].startswith("KAME is loaded but not rotating") and said["tone"] == "warn"
+    assert said["line2"].startswith("API Rotation is loaded but not rotating") and said["tone"] == "warn"
 
 
 def test_with_no_list_the_third_sentence_is_what_the_view_says():
@@ -302,15 +302,15 @@ def test_no_moves_is_an_empty_list_for_the_page_to_explain():
 # -- U2: speed cost and background use ---------------------------------------------------------------------
 
 def test_the_speed_cost_line_says_what_was_spent_against_what_may_be():
-    speed = {"cap_pct": 10, "hour": {"replies": 12, "extra_pct": 4}, "since_start": {"replies": 30, "extra_pct": 6}}
+    speed = {"cap_pct": 10, "hour": {"replies": 12, "limited_pct": 4}, "since_start": {"replies": 30, "limited_pct": 6}}
     out = run_js("return V.speedCostLine(data);", speed)
-    assert out["text"] == ("Extra requests this hour: +4% (12 replies). Your setting allows about +10%. "
-                           "Since Agent Zero started: +6%.")
+    assert out["text"] == ("Backup requests this hour: +4% (12 replies). Speed allows about +10%. "
+                           "Since Agent Zero started: +6% backup requests.")
     assert out["over"] is False
-    quiet = run_js("return V.speedCostLine(data);", {"cap_pct": 10, "hour": {"replies": 0, "extra_pct": None}})
-    assert quiet["text"] == "No replies this hour yet. Your setting allows about +10% extra requests."
+    quiet = run_js("return V.speedCostLine(data);", {"cap_pct": 10, "hour": {"replies": 0, "limited_pct": None}})
+    assert quiet["text"] == "No replies this hour yet. Speed allows about +10% backup requests."
     assert run_js("return V.speedCostLine(data);", {"cap_pct": 0, "hour": {}}) is None
-    over = run_js("return V.speedCostLine(data);", {"cap_pct": 10, "hour": {"replies": 5, "extra_pct": 20}})
+    over = run_js("return V.speedCostLine(data);", {"cap_pct": 10, "hour": {"replies": 5, "limited_pct": 20}})
     assert over["over"] is True
 
 

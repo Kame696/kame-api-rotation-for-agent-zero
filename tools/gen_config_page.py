@@ -27,7 +27,7 @@ LEGACY_INIT = {
 POWER = {"high": "●●● High", "medium": "●●○ Medium", "low": "●○○ Low",
          "escape": "Off switch"}
 FALLBACK_SENTENCE = (
-    "When your chat model cannot answer and nothing has been shown yet, KAME answers with the first of these "
+    "When your chat model cannot answer and nothing has been shown yet, API Rotation answers with the first of these "
     "that can. One <code>provider/model</code> per line (Agent Zero's provider ids), optional "
     "<code>@ api_base</code>. Empty: nothing ever switches. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.")
 
@@ -136,7 +136,7 @@ head = """<!--
     <div>
       <div class="section-title">API Rotation</div>
       <div class="section-description">
-        KAME works with none of these touched. Put several keys of one provider in
+        API Rotation works with none of these touched. Put several keys of one provider in
         that provider's API key field, separated by commas (or
         <code>API_KEY_GOOGLE=key1,key2</code> in <code>usr/.env</code>, or
         <code>/kame-keys add google key1,key2</code> in the chat). Keys from

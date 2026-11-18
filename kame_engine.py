@@ -209,7 +209,7 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.9.0.2"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14; 1.9.0.2: H5 parity (closing row)
+KAME_VERSION = "1.9.0.3"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14; 1.9.0.2: H5 parity (closing row); 1.9.0.3: what the screen says (C1-C5, C8, C9)
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
@@ -1362,7 +1362,7 @@ def note_setting_changes() -> list:
 
 
 def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
-                detail="", sized_by=""):
+                detail="", sized_by="", error_type=""):
     """One row on the events timeline. Never raises; never a raw key."""
     try:
         counted = _KAME_COUNT_OF_KIND.get(kind)
@@ -1382,7 +1382,7 @@ def _kame_event(kind, identity="", key="", reason="", code=None, seconds=None,
         try:
             _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
                            reason=reason, code=code, seconds=seconds, detail=detail,
-                           sized_by=sized_by, job=job, task=_KAME_TASK.get())
+                           sized_by=sized_by, job=job, task=_KAME_TASK.get(), error_type=error_type)
         except TypeError:  # an older kame_journal.py beside this engine
             _KJ.EVENTS.add(kind, identity=identity, key=_key_short_id(key) if key else "",
                            reason=reason, code=code, seconds=seconds, detail=detail,
@@ -2469,10 +2469,10 @@ def _kame_fallback_view(now) -> dict:
         })
     mode = _KAME_MODEL_SWITCH
     if not _KAME_FALLBACK_MODELS:
-        state, why = "no_chain", ("Switching: off - no fallback models are set in Agent Zero, so KAME waits for your keys. "
+        state, why = "no_chain", ("Switching: off - no fallback models are set in Agent Zero, so API Rotation waits for your keys. "
                                   "Add some in the Fallback models tab and switching is automatic.")
     elif _KAME_NO_MODEL_FALLBACK:
-        state, why = "off_by_flag", "Switching: off - \"Ignore my fallback list\" is on, so KAME waits for your keys."
+        state, why = "off_by_flag", "Switching: off - \"Ignore my fallback list\" is on, so API Rotation waits for your keys."
     elif mode == "never":
         state, why = "off_by_zero", "Fallback: off - 'Fallback' is set to Never."
     elif mode == "timed" and _KAME_FAILOVER_AFTER_S <= 0:
@@ -2483,7 +2483,7 @@ def _kame_fallback_view(now) -> dict:
                             "as soon as it can answer.")
     else:
         state, why = "on", ("Switching: automatic - when your provider is busy, Agent Zero answers with the next "
-                            "model below at once; when your keys are resting, after a few seconds (KAME learns "
+                            "model below at once; when your keys are resting, after a few seconds (API Rotation learns "
                             "how long your model usually takes). Your model comes back as soon as it can answer, "
                             "and the first model in the list is always tried first.")
     return {"state": state, "why": why, "warning": "", "entries": entries}
@@ -5228,6 +5228,14 @@ def _kame_live_line(activity) -> str:
             return (f"↻ {model}: every key refused for {_kame_live_duration(activity['no_time_s'])} - "
                     f"the provider gave no time · {count}")
         return f"↻ {model}: trying another key · {count}" if resting else f"⏳ Asking {model} · {count}"
+    if kind == "silent":
+        # 1.9.0.3 (C2): the reply has had no first word on any leg; the seconds count from the reply's first attempt
+        try:
+            seconds = max(0, int(float(activity.get("seconds") or 0)))
+        except (TypeError, ValueError):
+            seconds = 0
+        extras = "".join(f"; {extra}" for extra in (activity.get("extras") or []))
+        return f"⏳ Waiting on {model} · {count}, no first word yet ({seconds}s){extras}"
     if kind == "racing":
         return f"⚡ {model} is slow to start - a backup key is asking too"
     if kind == "standin":
@@ -5397,7 +5405,7 @@ def _kame_say(ctx, kind, st=None, **fields) -> None:
         ctx_d = ctx if isinstance(ctx, dict) else {}
         identity = fields.pop("identity", None) or ctx_d.get("identity") or ""
         activity = {"kind": kind, "model": fields.pop("model", None) or _kame_live_name(identity)}
-        if kind in ("calling", "racing", "standin") and "ready" not in fields:
+        if kind in ("calling", "racing", "standin", "silent") and "ready" not in fields:
             keys = ctx_d.get("all_keys") or []
             if keys and identity:
                 activity["ready"], activity["keys"] = _kame_pool_counts(identity, keys)
@@ -5419,6 +5427,45 @@ def _kame_say(ctx, kind, st=None, **fields) -> None:
                 fl.pop("live", None)
         # the icon tells "asking" from "trying another key": two states, two clocks
         _kame_status_put(ctx, line, st, (kind, activity["model"], activity.get("other"), line[:1]))
+    except Exception:
+        pass
+
+
+#: 1.9.0.3 (C2): while a chat reply has no first word on any leg, its line is redrawn this often.
+_KAME_SILENT_LINE_EVERY_S = 5.0
+
+
+def _kame_silent_now(ctx, race, stream) -> bool:
+    """1.9.0.3 (C2): is this a chat reply of the conversation that has had no first sign on any leg yet?"""
+    try:
+        return bool(stream and _kame_main(ctx) and ctx.get("aux_task") is None and race.winner is None
+                    and race.provisional is None
+                    and not any(p.get("first_sign_at") for p in race.progress.values()))
+    except Exception:
+        return False
+
+
+def _kame_silent_extras(race) -> list:
+    """What else is asking for this reply and still running: a backup key, other models of the list."""
+    extras = []
+    try:
+        live = [leg for leg in sorted(race.tasks) if not race.tasks[leg].done()]
+        if not race.burst and any(leg > 0 and leg not in race.cross_legs for leg in live):
+            extras.append("a backup key is asking too")
+        for other in dict.fromkeys((race.cross_legs[leg] or {}).get("identity") for leg in live if leg in race.cross_legs):
+            if other:
+                extras.append(f"{_kame_live_name(other)} is asking too")
+    except Exception:
+        pass
+    return extras
+
+
+def _kame_say_silent(ctx, st, race, call_started_at) -> None:
+    """1.9.0.3 (C2): one silent-wait line for the conversation's own reply. Never raises."""
+    try:
+        began = call_started_at if call_started_at else race.started.get(0, time.perf_counter())
+        _kame_say(ctx, "silent", st, seconds=max(0.0, time.perf_counter() - began),
+                  extras=_kame_silent_extras(race))
     except Exception:
         pass
 
@@ -7260,6 +7307,7 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
     slow_extended = False
     widened = 0       # 1.8.2.9 (E3): models added at the slow bound (at most _KAME_WIDEN_MAX)
     said_waiting = False
+    silent_next = time.monotonic() + _KAME_SILENT_LINE_EVERY_S      # 1.9.0.3 (C2)
     try:
         while True:
             # 1.8.4.3 (review 4): a kept start probe is judged once, by ``judge_kept``; it answers nothing here
@@ -7438,6 +7486,11 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                 q_left = due - time.monotonic()
                 if q_left > 0:       # already past: the hand-over was tried (or has no exit) - no busy loop
                     wait_for = q_left if wait_for is None else min(wait_for, q_left)
+            silent_on = _kame_silent_now(ctx, race, stream)
+            if silent_on:
+                # 1.9.0.3 (C2): wake for the silent-wait line
+                s_left = max(0.0, silent_next - time.monotonic())
+                wait_for = s_left if wait_for is None else min(wait_for, s_left)
             claim_waiter = asyncio.ensure_future(race.claimed.wait())
             waiters = [race.tasks[l] for l in running] + [claim_waiter]
             stir_waiter = None
@@ -7453,6 +7506,10 @@ async def _kame_raced_attempt(owner, ctx, key, *, burst_keys=None, attempt_no=0,
                     stir_waiter.cancel()
             if done or race.winner is not None:
                 continue
+            if silent_on and time.monotonic() >= silent_next and _kame_silent_now(ctx, race, stream):
+                silent_next = time.monotonic() + _KAME_SILENT_LINE_EVERY_S
+                _kame_say_silent(ctx, st, race, call_started_at)
+                continue                    # the timers below are re-read with the clock as it is now
             # v1.8.4.3 (A4): the provisional leg's reply has gone quiet - ask it again (once on another key of
             # its model, once on the next model of the list). Nothing else may fire while a leg is thinking.
             if prov_on and q_bound != float("inf"):
@@ -8528,7 +8585,7 @@ async def _kame_switch_model(owner, ctx, reason, cause=None, aux=None):
             model = _kame_fallback_model(owner, entry)
         except Exception as exc:
             _kame_event("surfaced", ident, reason="fallback model could not be built: skipped",
-                        detail=f"{type(exc).__name__}: {exc}")
+                        detail=f"{type(exc).__name__}: {exc}", error_type=type(exc).__name__)
             _KAME_FALLBACK_SKIP[ident] = now_m + 300.0
             other = True
             continue
@@ -8601,7 +8658,7 @@ async def _kame_switch_model(owner, ctx, reason, cause=None, aux=None):
                 _KAME_FALLBACK_SKIP[ident] = time.monotonic() + _KAME_FALLBACK_RETRY_S
             other = True
             _kame_event("surfaced", ident, reason=f"{entry['label']} failed: next model",
-                        code=_evidence_status(exc), detail=str(exc))
+                        code=_evidence_status(exc), detail=str(exc), error_type=type(exc).__name__)
             continue
         finally:
             _KAME_FALLBACK_HOP.reset(token)
@@ -8727,7 +8784,9 @@ async def _kame_circle_step(owner, ctx, identity, all_keys, last_exc=None, last_
             _kame_status_line(ctx, None)
             _kame_event("surfaced", identity,
                         reason=f"stopped waiting after {_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} "
-                               "(max_total_wait_seconds)")
+                               "(max_total_wait_seconds)",
+                        detail=str(last_exc) if last_exc is not None else "",
+                        error_type=type(last_exc).__name__ if last_exc is not None else "")
             if last_exc is not None:
                 raise _kame_with_retry_hint(last_exc, last_kind)
             raise RuntimeError(
@@ -9031,7 +9090,8 @@ def speed_report() -> dict:
     out["cap_pct"] = 0
     out["paused_until"] = {}
     out["hour"] = {"replies": 0, "backup": 0, "race": 0, "burst": 0, "circle": 0,
-                   "rescue": 0, "rescue_won": 0, "extra_pct": None}
+                   "rescue": 0, "rescue_won": 0, "extra_pct": None,
+                   "limited": 0, "limited_pct": None}
     out["since_start"] = dict(out["hour"])
     if _KH is not None:
         try:
@@ -9255,7 +9315,9 @@ async def _kame_carousel(self, ctx):
                 _kame_wait_notice_finish(st, "stopped")
                 _kame_event("surfaced", identity,
                             reason=f"stopped waiting after {_fmt_duration(_KAME_MAX_TOTAL_WAIT_S)} "
-                                   "(max_total_wait_seconds)")
+                                   "(max_total_wait_seconds)",
+                            detail=str(_last_exc) if _last_exc is not None else "",
+                            error_type=type(_last_exc).__name__ if _last_exc is not None else "")
                 if _last_exc is not None:
                     raise _kame_with_retry_hint(_last_exc, _last_kind)
                 raise RuntimeError(
@@ -9501,8 +9563,9 @@ async def _kame_carousel(self, ctx):
             if _is_terminal_error(e):
                 _kame_wait_notice_finish(st, "stopped")
                 _sc_t = _evidence_status(e)
-                _kame_event("surfaced", identity, key, reason="the provider rejected the request itself; another key would get the same answer",
-                            code=_sc_t, detail=str(e))
+                # 1.9.0.3 (C1): the reason is "request" (the page says it in words), the row carries the text and the class
+                _kame_event("surfaced", identity, key, reason="request",
+                            code=_sc_t, detail=str(e), error_type=type(e).__name__)
                 _kame_timing(identity, key, attempt_no, "terminal", "", _sc_t, _attempt_wall,
                              ctx, _call_started_at, st, None, "", _call_id)
                 if _KJ is not None:
@@ -9692,7 +9755,7 @@ async def _kame_carousel(self, ctx):
                 _kame_wait_notice_finish(st, "stopped")
                 _kame_event("surfaced", identity, key,
                             reason=f"{_why}; handed to Agent Zero",
-                            code=sc, detail=str(e))
+                            code=sc, detail=str(e), error_type=type(e).__name__)
                 raise _kame_with_retry_hint(e, "denied" if _all_denied else kind)
             if _door:
                 # One closed door for every key: the whole pool waits for it

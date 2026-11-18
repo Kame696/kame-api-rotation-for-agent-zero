@@ -257,7 +257,8 @@ class Events:
     def add(self, kind: str, *, identity: str = "", key: str = "",
             reason: str = "", code: Optional[int] = None,
             seconds: Optional[float] = None, at: Optional[float] = None,
-            detail: str = "", sized_by: str = "", job: str = "", task: str = "") -> Dict[str, Any]:
+            detail: str = "", sized_by: str = "", job: str = "", task: str = "",
+            error_type: str = "") -> Dict[str, Any]:
         """Record one event. ``key`` must already be a fingerprint; it is
         truncated anyway, so a raw key passed by mistake is useless, not leaked.
         """
@@ -279,6 +280,10 @@ class Events:
                 # 1.8.3.0: which background job (title_generation, compression ...) made the call
                 "task": str(task or "")[:40],
             }
+            # 1.9.0.3 (C1): the class name of the error a ``surfaced`` row carries ("NotFoundError"), so a row the
+            # provider sent no text with can still be read. Only on the rows that have one.
+            if error_type:
+                row["error_type"] = str(error_type)[:60]
         except Exception:
             return {}
         with self._lock:

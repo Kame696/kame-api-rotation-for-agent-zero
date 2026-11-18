@@ -699,19 +699,18 @@ def test_a_rescue_that_wins_by_the_next_model_counts_one_rescue_not_a_race(scene
 @pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
 def test_a5_the_cost_line_says_how_many_extra_requests_re_asked_a_stalled_reply():
     from test_v1_8_2_9_view_logic import run_js
-    speed = {"cap_pct": 10, "hour": {"replies": 12, "extra_pct": 4, "rescue": 3, "rescue_won": 1},
-             "since_start": {"replies": 30, "extra_pct": 6}}
+    speed = {"cap_pct": 10, "hour": {"replies": 12, "limited_pct": 4, "rescue": 3, "rescue_won": 1},
+             "since_start": {"replies": 30, "limited_pct": 6}}
     out = run_js("return V.speedCostLine(data);", speed)
-    assert out["text"] == ("Extra requests this hour: +4% (12 replies). Your setting allows about +10%. "
-                           "3 of them re-asked a reply that stopped mid-thought; 1 answered first. "
-                           "Since Agent Zero started: +6%.")
+    assert out["text"] == ("Backup requests this hour: +4% (12 replies). Speed allows about +10%. "
+                           "3 re-asked replies that stopped mid-thought. 1 of the re-asks answered first. "
+                           "Since Agent Zero started: +6% backup requests.")
     speed["hour"].update(rescue=0, rescue_won=0)
     quiet = run_js("return V.speedCostLine(data);", speed)
     assert "mid-thought" not in quiet["text"]                           # nothing to say when none was asked
     speed["hour"].pop("rescue_won")
     speed["hour"]["rescue"] = 2
-    assert "2 of them re-asked a reply that stopped mid-thought; 0 answered first." in \
-        run_js("return V.speedCostLine(data);", speed)["text"]
+    assert "2 re-asked replies that stopped mid-thought." in run_js("return V.speedCostLine(data);", speed)["text"]
 
 
 # --- review round: bugs found by an adversarial read of the build ----------------------------------------------

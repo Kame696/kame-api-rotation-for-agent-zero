@@ -27,6 +27,7 @@ import {
   keyRows,
   legendItems,
   modelState,
+  modelStateTitle,
   lifetimeLine,
   movesEmptyLine,
   nowSentences,
@@ -69,17 +70,17 @@ const KIND_NEXT = {
 // one sentence per kind, for the legend under the list
 const KIND_MEANING = {
   rotation: "A key was refused (a rate limit, a busy server, a timeout) and rests for as long as the evidence says.",
-  switch: "The previous key did not answer, so KAME asked another one.",
+  switch: "The previous key did not answer, so API Rotation asked another one.",
   backup: "A reply was slower than usual, so a backup key raced it; the first to start answering won.",
   quarantine: "A key rests for a long time (a spent daily quota, no credit).",
   invalid_key: "The provider says this key is not valid. Waiting will not repair it: replace it.",
   denied_model: "This key may not use this model (plan, region, an API not switched on). It still works for others.",
   storm: "Many keys failed at once: almost always the provider, not your keys.",
   stream_drop: "The provider stopped in the middle of an answer.",
-  wait: "Every key was resting, so KAME waited instead of spending requests it knew would be refused.",
-  recovery: "A key answered after KAME had already rotated: the rotation worked.",
+  wait: "Every key was resting, so API Rotation waited instead of spending requests it knew would be refused.",
+  recovery: "A key answered after API Rotation had already rotated: the rotation worked.",
   surfaced: "Something no other key or wait can fix; Agent Zero gets the error, with a line telling the agent whether retrying helps.",
-  setting: "You changed a KAME setting.",
+  setting: "You changed an API Rotation setting.",
   model_switch: "Your model could not answer now (its provider busy, far slower than usual, every key resting, or no answer in time), so this reply fell back to the next model of your list. The next reply starts on your best model again.",
 };
 
@@ -155,7 +156,7 @@ const IMPACT_TAG = {
   escape: "Off switch",
 };
 const CONSEQUENTIAL_TAIL =
-  " This is the switch people reach for when they suspect KAME of breaking something — it is reversible, and nothing is uninstalled.";
+  " This is the switch people reach for when they suspect API Rotation of breaking something — it is reversible, and nothing is uninstalled.";
 
 /** 1.8.3.0 (A7, A8): how Hermes' Events page says each kind, how loudly, and what it means. */
 const EVENT_LABELS = {
@@ -181,22 +182,22 @@ const EVENT_LABELS = {
 
 const EVENT_MEANING = {
   answered: "The key this call went out on answered, first time. The time is the whole call; the reason says how long the first word took.",
-  gave_up: "Every key stayed resting past your “Stop waiting” time, so KAME stopped waiting and handed Agent Zero the original refusal.",
-  cache_off: "This model’s provider refused the prompt cache Agent Zero asked for (free Gemini keys have no cache storage). KAME sent the same request again without it, and will not ask this model for the cache for 30 days. Nothing is wrong with your keys.",
+  gave_up: "Every key stayed resting past your “Stop waiting” time, so API Rotation stopped waiting and handed Agent Zero the original refusal.",
+  cache_off: "This model’s provider refused the prompt cache Agent Zero asked for (free Gemini keys have no cache storage). API Rotation sent the same request again without it, and will not ask this model for the cache for 30 days. Nothing is wrong with your keys.",
   sent: "A request went out on this key. Every request leaves one of these, so a slow answer is visible while it is still coming.",
   denied_model: "The provider refused this key for THIS model only — a plan that does not include it, or an API not switched on. The key is fine everywhere else, and replacing it would change nothing.",
   invalid_key: "The provider said this is not a valid credential. Replace it — waiting will not repair one.",
   quarantine: "This key was rested for a minute or more before it will be offered again.",
-  recovery: "A key answered after KAME had already rotated at least once. The rotation worked.",
+  recovery: "A key answered after API Rotation had already rotated at least once. The rotation worked.",
   rotation: "This key was rested briefly and the next call went somewhere else.",
-  setting: "You changed one of KAME’s settings. Recorded here so a later question — “did that setting help?” — can be answered against what the pool did before and after it.",
+  setting: "You changed one of API Rotation’s settings. Recorded here so a later question — “did that setting help?” — can be answered against what the pool did before and after it.",
   stitch: "An answer that was cut short was continued on another key and joined back up.",
   storm: "A lot of keys refused at once, which is usually the provider rather than your keys.",
   stream_drop: "The provider stopped in the middle of an answer.",
   handover: "Your model could not answer now — its provider said it is busy (overloaded, or timing out on several keys), it was far slower than usual, or every key was resting — so this reply fell back to the next model of your fallback list. The next reply starts on your best model again.",
-  surfaced: "KAME could not fix this one, so Agent Zero got the error and decides what to do next.",
-  switch: "The previous key did not answer, so KAME asked this one instead — or a slow reply got a backup key racing it.",
-  wait: "Every key was resting, so KAME waited instead of spending a request it knew would be refused.",
+  surfaced: "API Rotation could not fix this one, so Agent Zero got the error and decides what to do next.",
+  switch: "The previous key did not answer, so API Rotation asked this one instead — or a slow reply got a backup key racing it.",
+  wait: "Every key was resting, so API Rotation waited instead of spending a request it knew would be refused.",
 };
 
 /** Hermes' words for the classifier's reason. */
@@ -208,10 +209,12 @@ const EVENT_REASON_WORDS = {
   denied: "this key may not use this model",
   host_breaker: "Agent Zero stopped the call itself",
   insufficient_quota: "the account is out of credit",
-  other: "an error nothing recognised",
+  // 1.9.0.3 (C1): a refused request has its own words; an unknown error is no longer a dead end (its row opens)
+  other: "an error API Rotation does not recognise - click to read it",
   per_minute: "a per-minute rate limit",
   rate_limit: "a rate limit",
   refused: "the provider refused the call",
+  request: "the provider refused the request itself, not a key - often a model name or address it does not know",
   server: "the provider had a server error",
   timeout: "the provider did not answer in time",
 };
@@ -405,7 +408,7 @@ const model = {
       this.error = "";
       this.syncRows();
     } catch (e) {
-      this.error = `KAME's status did not load (${e?.message || e}).`;
+      this.error = `API Rotation's status did not load (${e?.message || e}).`;
     } finally {
       this.loading = false;
     }
@@ -463,6 +466,7 @@ const model = {
         svg: ringSvg(m, v, this.now),
         aria: ringAria(m, v, this.now),
         word: answering && state.tone === "good" ? "answering now" : state.word,
+        stateTitle: modelStateTitle(m, this.now),
         tone: state.tone,
         side: sideJobsLine(share, m.identity),
         open: this.openRing === m.identity,
@@ -473,7 +477,7 @@ const model = {
   },
   get ringsNote() {
     return this.ringGroups.chain
-      ? "In the order of your fallback list: KAME starts every reply on 1, and goes down the list when a model is busy, slow or out of quota."
+      ? "In the order of your fallback list: API Rotation starts every reply on 1, and goes down the list when a model is busy, slow or out of quota."
       : "One ring per provider and model. A key spent on one model keeps its allowance on another.";
   },
   get legend() {
@@ -614,7 +618,7 @@ const model = {
   get process() {
     const d = this.data || {};
     const fp = d.build?.fingerprint ? ` · build ${d.build.fingerprint}` : "";
-    return `KAME ${d.version || ""}${fp} · ${d.active ? "rotating" : "not rotating (Agent Zero runs natively)"}`;
+    return `API Rotation ${d.version || ""}${fp} · ${d.active ? "rotating" : "not rotating (Agent Zero runs natively)"}`;
   },
   poolLine(pool) {
     const eta = seconds(pool.eta);
@@ -750,7 +754,18 @@ const model = {
     return this.canInspect(e) ? `${meaning}\n\nClick to see what the provider actually said.` : meaning;
   },
   canInspect(e) {
-    return !!e?.detail && this.eventLabel(e).tone !== "good";
+    // 1.9.0.3 (C1): a bad or warning row always opens - with no text from the provider it says so
+    const tone = this.eventLabel(e).tone;
+    if (tone === "good") return false;
+    if (tone === "bad" || tone === "warn") return true;
+    return !!e?.detail;
+  },
+  inspectorText(e) {
+    if (e?.detail) return e.detail;
+    const lines = ["The provider sent no text with this error."];
+    if (e?.error_type) lines.push(`Error type: ${e.error_type}`);
+    if (e?.code) lines.push(`HTTP status: ${e.code}`);
+    return lines.join("\n");
   },
   inspect(e) {
     if (this.canInspect(e)) this.inspecting = e;
@@ -774,10 +789,10 @@ const model = {
     return {
       all: { count: rows.length, label: covers ? `in the last ${covers.replace(" ago", "")}` : "recorded",
              title: "Everything in the buffer, newest first." },
-      did: { count: good, label: "KAME rotating",
+      did: { count: good, label: "API Rotation rotating",
              title: "Rotations, recoveries, continued answers and waits — the plugin doing its job." },
       wrong: { count: rows.length - good, label: "providers refusing",
-               title: "What the providers said. A refusal here is not a fault in KAME; it is what KAME is for." },
+               title: "What the providers said. A refusal here is not a fault in API Rotation; it is what API Rotation is for." },
       background: { count: this.events(true).length, label: "background jobs →",
                     title: "Titles, summaries, compression and the other jobs Agent Zero runs on its own. Opens the Background jobs tab, where you can pick one job." },
     };
@@ -803,17 +818,17 @@ const model = {
     const calls = Number(counters.calls ?? 0);
     const lastCall = Number(counters.last_call_at ?? 0);
     const readAge = this.fetchedAt ? (this.now - this.fetchedAt) / 1000 : null;
-    if (!this.data?.active) return "KAME is not installed in this Agent Zero process, so nothing will be recorded here.";
+    if (!this.data?.active) return "API Rotation is not installed in this Agent Zero process, so nothing will be recorded here.";
     if (readAge !== null && readAge > STALE_AFTER_S) {
       return `This reading is ${eventAgo(readAge)} — the Agent Zero process that writes it may have stopped. ` +
         "Everything below is what it last knew, not what is happening now.";
     }
-    if (!calls) return "KAME is running and has not been asked to route a call yet in this process.";
+    if (!calls) return "API Rotation is running and has not been asked to route a call yet in this process.";
     if (lastCall) {
-      return `KAME is running. ${plural(calls, "call", "calls")} routed, the last one ` +
+      return `API Rotation is running. ${plural(calls, "call", "calls")} routed, the last one ` +
         `${eventAgo(this.serverNowS - lastCall)}. An empty list above means nothing failed.`;
     }
-    return `KAME is running. ${plural(calls, "call", "calls")} routed. An empty list above means nothing failed.`;
+    return `API Rotation is running. ${plural(calls, "call", "calls")} routed. An empty list above means nothing failed.`;
   },
   get heartbeatStale() {
     return !!this.fetchedAt && (this.now - this.fetchedAt) / 1000 > STALE_AFTER_S && !!this.data?.active;
@@ -828,7 +843,7 @@ const model = {
         return `${who} · ${modelOnly(f.identity)} — no answer for ${duration(f.seconds)}` +
           (f.refusals ? `, ${plural(f.refusals, "refusal", "refusals")} so far` : "") +
           (f.last ? `; last: ${this.reasonWords(f.last)}` : "") +
-          ". KAME keeps trying, as configured.";
+          ". API Rotation keeps trying, as configured.";
       });
   },
   /** Every kind Agent Zero records, in Hermes' order, with its sentence. */
@@ -928,7 +943,7 @@ const model = {
     return this.settingsMeta.filter((m) => m.advanced && m.group !== "fallback" && !this.isChanged(m)).length;
   },
   get toolbarTitle() {
-    return this.changedCount ? `KAME settings · ${this.changedCount} changed` : "KAME settings · all at their defaults";
+    return this.changedCount ? `API Rotation settings · ${this.changedCount} changed` : "API Rotation settings · all at their defaults";
   },
   get noSettings() {
     return !!this.data && !this.settingsMeta.length;
@@ -1109,7 +1124,7 @@ const model = {
       out.push({
         id: "incomplete",
         tone: "bad",
-        text: "This install is incomplete — KAME is not rotating. " +
+        text: "This install is incomplete — API Rotation is not rotating. " +
           `Missing: ${(build.missing || []).join(", ") || "unknown"}. ` +
           "Re-deploy the whole plugin directory. A copy that does not recurse drops core/ " +
           "and leaves a plugin that registers, reports itself active, and does nothing.",
@@ -1119,7 +1134,7 @@ const model = {
       out.push({
         id: "not-rotating",
         tone: "plain",
-        text: `KAME is loaded but every call keeps the key Agent Zero resolved: ${d.reason || "unknown"}`,
+        text: `API Rotation is loaded but every call keeps the key Agent Zero resolved: ${d.reason || "unknown"}`,
       });
     }
     if (this.headerStatus.stale) {
@@ -1140,7 +1155,7 @@ const model = {
         tone: "bad",
         text: `${retired} ${them(retired, "key has", "keys have")} left rotation — the provider refused ` +
           `${them(retired, "it", "them")} as ${them(retired, "a credential", "credentials")}, ` +
-          `so KAME no longer offers ${them(retired, "it", "them")} and nothing is being spent on ` +
+          `so API Rotation no longer offers ${them(retired, "it", "them")} and nothing is being spent on ` +
           `${them(retired, "it", "them")}. Nothing was deleted: paste the replacement over ` +
           `${them(retired, "it", "them")} in Agent Zero’s Settings > API keys and ${them(retired, "it comes", "they come")} ` +
           "back by itself. Your other keys are carrying every turn meanwhile.",
@@ -1167,7 +1182,7 @@ const model = {
     const entries = listed.map((model, index) => {
       const pool = model.pool && model.pool.keys > 0 ? model.pool : null;
       let state;
-      if (!pool) state = "KAME has not served this model yet";
+      if (!pool) state = "API Rotation has not served this model yet";
       else if (pool.healthy === pool.keys) state = `${pool.keys} keys ready`;
       else if (pool.healthy > 0) state = `${pool.healthy} of ${pool.keys} keys ready`;
       else {
@@ -1191,7 +1206,7 @@ const model = {
       field("Calls", c.calls ?? 0),
       field("Rotations", c.rotations ?? 0),
       field("Recovered", c.recovered ?? 0, "answered after a rotation"),
-      field("Surfaced", c.surfaced ?? 0, "errors KAME let through"),
+      field("Surfaced", c.surfaced ?? 0, "errors API Rotation let through"),
     ];
     if (c.handed_over) {
       out.push(field("Fallbacks", c.handed_over, "replies your fallback list answered: the model was busy, resting or too slow"));

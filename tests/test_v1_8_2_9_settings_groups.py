@@ -22,16 +22,16 @@ HERMES_SHELVES = [
     ("extra", "If your model cannot answer",
      "When your provider is busy, every key of your model is resting, or a reply takes too long."),
     ("speed", "Speed",
-     "How KAME keeps answers fast. Already tuned; the first two are the ones worth knowing."),
+     "How API Rotation keeps answers fast. Already tuned; the first two are the ones worth knowing."),
     ("keyring", "Your API keys",
      "One key per account (for Gemini, one per Google project): every key brings its own quota, "
-     "and KAME rotates between them."),
+     "and API Rotation rotates between them."),
     ("tuning", "Rest times (advanced)",
      "How long a refused key sits out. The provider's own numbers always win; these are the fallbacks and ceilings."),
 ]
-OFF = ("off", "Troubleshooting: turn parts of KAME off",
-       "Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding out whether "
-       "KAME is behind a problem. Leave them alone unless something is wrong.")
+OFF = ("off", "Troubleshooting: turn parts of API Rotation off",
+       "Each switch turns one part of API Rotation off and gives that job back to Agent Zero. For finding out whether "
+       "API Rotation is behind a problem. Leave them alone unless something is wrong.")
 
 
 @pytest.fixture(autouse=True)

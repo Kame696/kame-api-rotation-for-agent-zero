@@ -26,7 +26,7 @@ SETTINGS: Dict[str, tuple] = {
         "text", "", None, None, None, "KAME_FALLBACK_MODELS",
         "Fallback models",
         (
-            "When your chat model cannot answer, KAME answers with the first of these that can, one "
+            "When your chat model cannot answer, API Rotation answers with the first of these that can, one "
             "provider/model per line. Empty: never switch.")),
     "model_switch": (
         "choice", "auto", None, None, ("auto", "timed", "never"), "KAME_MODEL_SWITCH",
@@ -39,7 +39,7 @@ SETTINGS: Dict[str, tuple] = {
             "every key is resting, or nothing has come back in time. Automatic: in time is about three "
             "times the model's usual first word, 6 to 20 s, learned on this computer. Set time: the "
             "seconds below. Never: always wait for this model's keys. The next reply starts on your best "
-            "model again; one KAME knows is still busy or resting is passed down without spending a "
+            "model again; one API Rotation knows is still busy or resting is passed down without spending a "
             "request. Nothing switches after part of an answer is on screen.")),
     "failover_after_seconds": (
         "number", 60, 0, 3600, None, "KAME_FAILOVER_AFTER",
@@ -71,22 +71,23 @@ SETTINGS: Dict[str, tuple] = {
         "choice", "adaptive", None, None, ("off", "adaptive", "max"), "KAME_HEDGE_MODE",
         "Speed",
         (
-            "How soon KAME races a second key when a reply is late. The line under the buttons says what "
+            "How soon API Rotation races a second key when a reply is late. The line under the buttons says what "
             "the chosen mode costs in extra requests.")),
     "first_token_wait": (
         "choice", "auto", None, None, ("auto", "timed", "off"), "KAME_FIRST_TOKEN_WAIT",
         "Wait for the first token",
         (
-            "How long a key may stay silent before KAME drops it and asks the next one. Automatic learns "
-            "each model's usual first-word time and drops a key only when it is far past it (20 s at "
-            "least, 60 s for thinking models); never for a model on this computer. Backup keys still race"
+            "How long a key may stay silent before API Rotation drops it and asks the next one. Automatic learns "
+            "each model's usual first-word time and drops a key only when it is far past it (30 s at "
+            "least, 120 s for thinking models, one more second for every 2,000 tokens of the prompt, never more "
+            "than 120 s); never for a model on this computer. Backup keys still race"
             " a slow reply much sooner. Set time: the seconds below. Off: 120 s.")),
     "stream_silence_timeout_seconds": (
         "number", 0, 0, 3600, None, "KAME_STREAM_SILENCE_TIMEOUT",
         "First-token wait (seconds)",
         (
             "Only with 'Wait for the first token' set to 'Set time': how many seconds a key may stay "
-            "silent before KAME asks the next one; 60 suits most providers. 0 (default) leaves the wait at 120 s.")),
+            "silent before API Rotation asks the next one; 60 suits most providers. 0 (default) leaves the wait at 120 s.")),
     "hedge_max_legs": (
         "number", 3, 1, 3, None, "KAME_HEDGE_MAX_LEGS",
         "Most parallel requests per call",
@@ -99,7 +100,7 @@ SETTINGS: Dict[str, tuple] = {
         "Keys asked at once when quota runs out",
         (
             "When two keys in a row are refused because their quota is spent, asking the rest one at a "
-            "time costs almost a second each. KAME then asks 4 keys at once, then 8, then 16, and the "
+            "time costs almost a second each. API Rotation then asks 4 keys at once, then 8, then 16, and the "
             "first that answers wins; in a chat the others are cut (a call that does not stream asks at "
             "most 4 at once, and those finish on their own). Keys the provider itself said are still "
             "spent are asked all at once, and only they. A key that still had quota and lost the race may"
@@ -128,7 +129,7 @@ SETTINGS: Dict[str, tuple] = {
         "number", 6, 0.5, 120, None, "KAME_HEDGE_COLD_S",
         "First backup while still learning",
         (
-            "Before KAME has learned how fast this model usually answers, a call slower than this still "
+            "Before API Rotation has learned how fast this model usually answers, a call slower than this still "
             "gets a backup. Keep it well above the slowest honest first token so a merely normal call is "
             "never doubled.")),
     "hedge_cold_reasoning_s": (
@@ -144,9 +145,9 @@ SETTINGS: Dict[str, tuple] = {
         "number", "", 0, 120, None, "KAME_THOUGHT_QUIET_S",
         "Quiet limit while thinking",
         (
-            "How long a reply may stay quiet after it started thinking, with nothing shown yet, before KAME "
+            "How long a reply may stay quiet after it started thinking, with nothing shown yet, before API Rotation "
             "asks it again on another key (and later on the next model of your list). Its thoughts keep "
-            "showing live meanwhile. Left alone, KAME learns it for each model: 8 to 20 seconds, longer for "
+            "showing live meanwhile. Left alone, API Rotation learns it for each model: 8 to 20 seconds, longer for "
             "a model that is quiet by nature, never above 90. A number replaces that; 0 turns the watch "
             "off.")),
     # 1.9.0.1 (A14): same name, default and words as Hermes' answer_quiet_s.
@@ -155,7 +156,7 @@ SETTINGS: Dict[str, tuple] = {
         "Quiet limit while answering",
         (
             "How long a reply that has already started to show its answer may stay completely silent (the "
-            "provider sends nothing at all) before KAME cuts it and asks again to continue it, on another key or on "
+            "provider sends nothing at all) before API Rotation cuts it and asks again to continue it, on another key or on "
             "the same key when it is the only one. What you already read stays; nothing is repeated. 45 seconds "
             "by default; 0 turns the watch off. A model running on your own machine is never cut.")),
     "hedge_max_prompt_tokens": (
@@ -182,7 +183,7 @@ SETTINGS: Dict[str, tuple] = {
         "Per-model requests-per-minute limits",
         (
             "Tell the pacer what a provider really allows, e.g. 'google:gemini/gemini-2.5-flash=10, "
-            "groq:*=30'. It is the most KAME will assume; a real per-minute refusal can still lower it, "
+            "groq:*=30'. It is the most API Rotation will assume; a real per-minute refusal can still lower it, "
             "and nothing learned can raise it above this. Leave empty to let it learn from real answers "
             "and refusals.")),
     "key_region_overrides": (
@@ -251,7 +252,7 @@ SETTINGS: Dict[str, tuple] = {
     "kame_log_level": (
         "choice", "normal", None, None, ("silent", "normal", "verbose", "verbose+errors"), "",
         "Log verbosity",
-        "How much KAME writes to the Agent Zero console."),
+        "How much API Rotation writes to the Agent Zero console."),
     "key_log_style": (
         "choice", "fingerprint", None, None, ("fingerprint", "prefix8"), "",
         "How keys appear in logs",
@@ -264,11 +265,11 @@ SETTINGS: Dict[str, tuple] = {
         "number", 5, 0, 100, None, "",
         "Floor for Agent Zero's unusable-response limit",
         (
-            "Agent Zero stops a turn after this many unparseable answers in a row; KAME raises its limit "
+            "Agent Zero stops a turn after this many unparseable answers in a row; API Rotation raises its limit "
             "to at least this. 0 leaves it alone.")),
     "rotation_disabled": (
         "flag", False, None, None, None, "KAME_ROTATION_DISABLED",
-        "Turn KAME off",
+        "Turn API Rotation off",
         (
             "Every call keeps the key Agent Zero resolved and failures follow Agent Zero's own retry "
             "rules. The plugin stays installed and does nothing.")),
@@ -301,12 +302,12 @@ SETTINGS: Dict[str, tuple] = {
         "Stop continuing cut answers",
         (
             "An answer cut off mid-stream is handed back to Agent Zero, which starts it again, instead of"
-            " KAME continuing it on another key.")),
+            " API Rotation continuing it on another key.")),
     "refusal_recorder_disabled": (
         "flag", False, None, None, None, "KAME_RECORDER_DISABLED",
         "Stop recording refusals",
         (
-            "KAME writes each refusal a provider sends to refusals.jsonl beside its own state — status, "
+            "API Rotation writes each refusal a provider sends to refusals.jsonl beside its own state — status, "
             "message and body, with API keys removed first — and decides nothing from it. It is there "
             "because the field that tells a per-minute quota from a per-day one could not be read before "
             "1.7.0.0, so it appears in no older log and no rule about it can be checked against real "
@@ -316,7 +317,7 @@ SETTINGS: Dict[str, tuple] = {
         "flag", False, None, None, None, "KAME_CALL_TIMINGS_DISABLED",
         "Stop timing calls",
         (
-            "KAME writes one line per attempt to calls.jsonl beside its own state: how long until "
+            "API Rotation writes one line per attempt to calls.jsonl beside its own state: how long until "
             "anything came back, how long until the answer started, how long the attempt took in total, "
             "and how much of the turn had already been spent waiting for a key. It exists so “is it slow,"
             " and whose fault is it” can be answered with numbers rather than from memory — a turn that "
@@ -334,7 +335,7 @@ SETTINGS: Dict[str, tuple] = {
         "flag", False, None, None, None, "KAME_HEDGING_DISABLED",
         "Stop adaptive hedging",
         (
-            "When hedging is active and a reply is slower than usual, KAME asks a second key (and, if "
+            "When hedging is active and a reply is slower than usual, API Rotation asks a second key (and, if "
             "that is slow too, a third) and uses whichever answers first. In the chat the race is decided"
             " by the first word: the moment one key starts answering, the others are cut. Each backup is "
             "one extra request on a key of another project, held to a budget (about 10% of calls) and "
@@ -398,7 +399,7 @@ WHEN: Dict[str, str] = {
     "failover_after_seconds": "Only with 'Set time'. Lower to fall back sooner, raise to stay on your best model longer.",
     "reply_notice": "Only another model, if a notice after every reply is too much.",
     "max_total_wait_seconds": "Change only if you would rather get an error than wait for your keys to come back.",
-    "never_fall_back_to_another_model": "Only if you keep a fallback list but want KAME to wait for your keys anyway.",
+    "never_fall_back_to_another_model": "Only if you keep a fallback list but want API Rotation to wait for your keys anyway.",
     "hedge_mode": (
         "Leave on Balanced. Saver if every extra request costs you money; Faster if speed matters "
         "more than a few extra requests."),
@@ -411,7 +412,7 @@ WHEN: Dict[str, str] = {
     "hedge_budget_pct": "Lower it to spend fewer extra requests on backups; raise it for faster worst cases.",
     "hedge_burst": "Rarely. How many backups may go out back to back.",
     "hedge_quantile": "Rarely. Lower = backups sooner.",
-    "hedge_cold_s": "Rarely. Used only until KAME has learned a model's normal speed.",
+    "hedge_cold_s": "Rarely. Used only until API Rotation has learned a model's normal speed.",
     "hedge_cold_reasoning_s": "Rarely. Same as above, for thinking models.",
     "thought_quiet_s": "Rarely. Only to turn the watch off (0) or to set one number for every model.",
     "answer_quiet_s": "Rarely. Only to turn the watch off (0) or to wait longer for a very slow model.",
@@ -419,9 +420,9 @@ WHEN: Dict[str, str] = {
     "share_pool_health": "Keep on, so a restart does not spend calls on keys already known to be out.",
     "key_reserve": "Only if some of your keys are paid and the others are free.",
     "prompt_caching": "Leave on Automatic. Off only if you never want the provider's cache used.",
-    "pacing_rpm_overrides": "Only if you know a model's per-minute limit and KAME keeps hitting it.",
+    "pacing_rpm_overrides": "Only if you know a model's per-minute limit and API Rotation keeps hitting it.",
     "key_region_overrides": "Only if one key must be treated as a different region (Vertex, Bedrock).",
-    "daily_quota_cooldown_seconds": "Only if your provider's daily quota resets at a known time KAME cannot read.",
+    "daily_quota_cooldown_seconds": "Only if your provider's daily quota resets at a known time API Rotation cannot read.",
     "max_hold_seconds": "The longest any key is ever benched. Lower it to retry spent keys sooner.",
     "unsized_throttle_backoff": "Keep on. It retries a bare 'rate limit' after 1, 2, 4… seconds instead of a fixed wait.",
     "unsized_throttle_rest_seconds": "Rarely. The wait for a rate limit that states no time, when the ladder is off.",
@@ -431,22 +432,22 @@ WHEN: Dict[str, str] = {
     "key_log_style": "Rarely. Leave it on fingerprint unless you must match a key against your own records.",
     "kame_log_full_errors": "Only when you are looking for a problem.",
     "kame_unusable_response_limit": "Rarely. Raise it if a model that sometimes answers badly keeps ending your tasks.",
-    "rotation_disabled": "Only to check whether KAME is behind a problem. Everything goes back to plain Agent Zero.",
-    "spread_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "carousel_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "storm_collapse_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "live_status_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "stream_stitch_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "refusal_recorder_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "call_timings_disabled": "Only to check whether this part of KAME is behind a problem.",
-    "hedging_disabled": "Only to check whether this part of KAME is behind a problem.",
+    "rotation_disabled": "Only to check whether API Rotation is behind a problem. Everything goes back to plain Agent Zero.",
+    "spread_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "carousel_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "storm_collapse_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "live_status_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "stream_stitch_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "refusal_recorder_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "call_timings_disabled": "Only to check whether this part of API Rotation is behind a problem.",
+    "hedging_disabled": "Only to check whether this part of API Rotation is behind a problem.",
 }
 
 #: 1.8.4.0 (U5). The ONE line a quick control shows under its title; everything else moves behind
 #: its "Why?" toggle. Only the three quick controls have one. The words are identical in the Hermes
 #: port (settings words are shared, decisions/0015).
 LINE: Dict[str, str] = {
-    "hedge_mode": "How hard KAME works to answer sooner.",
+    "hedge_mode": "How hard API Rotation works to answer sooner.",
     "model_switch": "When your model cannot answer, the next one on your list does.",
     "reply_notice": "A short notice after each reply.",
 }
@@ -457,10 +458,10 @@ DETAIL: Dict[str, str] = {
     "failover_after_seconds": (
         "Works only when you have set fallback models in the Fallback models tab; with no list "
         "nothing ever switches. When every key of the model you picked is resting and the soonest one"
-        " is more than this many seconds away, KAME stops waiting and the next model in your list "
+        " is more than this many seconds away, API Rotation stops waiting and the next model in your list "
         "answers. Agent Zero's own model setting is not touched: the next reply starts on the model "
         "you picked again. Short rests (a minute of rate limit) are waited out on the model you "
-        "picked. 0 means never switch. KAME itself never chooses a model."),
+        "picked. 0 means never switch. API Rotation itself never chooses a model."),
     "max_total_wait_seconds": (
         "Unset, a chat waits for as long as every key is resting: each key's own rest is already "
         "capped by the ceiling above, and the call retries the moment one returns, so a spent quota "
@@ -468,17 +469,17 @@ DETAIL: Dict[str, str] = {
         " number bounds the wait and hands Agent Zero the provider's original refusal, which ends its"
         " task."),
     "never_fall_back_to_another_model": (
-        "KAME itself never chooses a model. Off (the default): if you have set fallback models in the"
+        "API Rotation itself never chooses a model. Off (the default): if you have set fallback models in the"
         " Fallback models tab, they are used automatically when every key of your model is resting "
         "for long, and the next reply starts on your model again. With no list nothing ever switches."
-        " On: your list is ignored and KAME waits for your keys however long that takes."),
+        " On: your list is ignored and API Rotation waits for your keys however long that takes."),
     "hedge_mode": (
         "When a reply is slower than usual, send a backup request on another key and use whichever "
         "answers first. Balanced learns each model's usual wait and only races the slow calls; Faster"
         " does the same a notch sooner and more often, within a larger budget, and steps back to "
         "Balanced for 10 minutes when a key hits a rate limit."),
     "stream_silence_timeout_seconds": (
-        "For a provider that accepts a request and then sends nothing. KAME waits this long for the "
+        "For a provider that accepts a request and then sends nothing. API Rotation waits this long for the "
         "first character — and for every character after it — before dropping that key and asking the"
         " next one. Zero, the default, leaves the wait at 120 s. Leave it at zero unless you have"
         " a provider that accepts a request and then hangs: a reasoning model can spend well over "
@@ -571,13 +572,13 @@ GROUPS = (
      ("model_switch", "failover_after_seconds", "reply_notice", "max_total_wait_seconds",
       "never_fall_back_to_another_model")),
     ("speed", "Speed",
-     "How KAME keeps answers fast. Already tuned; the first two are the ones worth knowing.",
+     "How API Rotation keeps answers fast. Already tuned; the first two are the ones worth knowing.",
      ("hedge_mode", "first_token_wait", "stream_silence_timeout_seconds", "hedge_max_legs",
       "probe_burst_max_legs", "hedge_budget_pct", "hedge_burst", "hedge_quantile", "hedge_cold_s",
       "hedge_cold_reasoning_s", "thought_quiet_s", "answer_quiet_s", "hedge_max_prompt_tokens")),
     ("keyring", "Your API keys",
      "One key per account (for Gemini, one per Google project): every key brings its own quota, "
-     "and KAME rotates between them.",
+     "and API Rotation rotates between them.",
      ("share_pool_health", "pacing_rpm_overrides", "key_region_overrides")),
     ("tuning", "Rest times (advanced)",
      "How long a refused key sits out. The provider's own numbers always win; these are the "
@@ -585,12 +586,12 @@ GROUPS = (
      ("daily_quota_cooldown_seconds", "max_hold_seconds", "unsized_throttle_backoff",
       "unsized_throttle_rest_seconds", "unsized_backoff_max_seconds", "stream_resume_limit")),
     ("agentzero", "Agent Zero log and chat",
-     "How KAME talks in Agent Zero's chat line and log. These exist only in the Agent Zero version.",
+     "How API Rotation talks in Agent Zero's chat line and log. These exist only in the Agent Zero version.",
      ("kame_log_level", "key_log_style", "kame_log_full_errors", "kame_unusable_response_limit",
       "prompt_caching")),
-    ("off", "Troubleshooting: turn parts of KAME off",
-     "Each switch turns one part of KAME off and gives that job back to Agent Zero. For finding "
-     "out whether KAME is behind a problem. Leave them alone unless something is wrong.",
+    ("off", "Troubleshooting: turn parts of API Rotation off",
+     "Each switch turns one part of API Rotation off and gives that job back to Agent Zero. For finding "
+     "out whether API Rotation is behind a problem. Leave them alone unless something is wrong.",
      ("rotation_disabled", "spread_disabled", "carousel_disabled", "storm_collapse_disabled",
       "live_status_disabled", "stream_stitch_disabled", "refusal_recorder_disabled",
       "call_timings_disabled", "hedging_disabled")),
@@ -781,7 +782,7 @@ def parse(name: str, raw: Any) -> Tuple[bool, Any, str]:
     name, raw = canonical(name, raw)
     row = SETTINGS.get(name)
     if row is None:
-        return False, None, f"`{name}` is not a KAME setting. `/kame get` lists them."
+        return False, None, f"`{name}` is not an API Rotation setting. `/kame get` lists them."
     kind, _default, low, high, choices = row[0], row[1], row[2], row[3], row[4]
     text = str(raw).strip() if raw is not None else ""
     lowered = text.lower()

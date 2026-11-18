@@ -99,6 +99,10 @@ def stop_message(task: str, model: str, tries: int, seconds: float) -> str:
             return "?"
         return kept
 
+    if int(tries) <= 0:
+        # 1.9.0.3 (C8): nothing was sent, so "timed out after 0 tries in 0s" described nothing that happened
+        return (f"kame: background job {clean(task)} on {clean(model)} was stopped before it was sent"
+                " - its keys are kept for your chat")
     return (f"kame: background job {clean(task)} on {clean(model)} timed out after {int(tries)} "
             f"tries in {max(0, int(seconds))}s - its keys are kept for your chat")
 
@@ -122,7 +126,7 @@ def suggest(models: Any, primary: Any, chain: Any, written: Any, since: float) -
     ``provider:name``); ``written(identity)`` gives a model's name as it is shown. The model named is
     ALWAYS a member of that list - one on the best model's provider when there is one (a cosmetic
     job goes to the last such entry, an important one to the first), otherwise the list's own
-    last or first entry - and the sentence says KAME changes nothing. ``None`` when there is
+    last or first entry - and the sentence says API Rotation changes nothing. ``None`` when there is
     nothing worth saying (under 15% of requests or under 20 background requests).
     """
     try:
@@ -153,6 +157,6 @@ def suggest(models: Any, primary: Any, chain: Any, written: Any, since: float) -
                 f"({task}: {tasks[task]}). To keep your best model for your chats you could move {task} "
                 f"to {target_provider} / {target_name} (number {number} of your list): in Agent Zero's "
                 f"model settings, set the Utility model to {target_provider} / {target_name}. "
-                "KAME never changes this for you.")
+                "API Rotation never changes this for you.")
     except Exception:
         return None

@@ -67,7 +67,7 @@ def test_the_menu_entry_and_the_page_are_called_api_rotation():
     assert "<span>API Rotation</span>" in ENTRY and 'title="API Rotation"' in ENTRY
     assert "<title>API Rotation</title>" in MAIN
     assert re.search(r'<div class="kame-title">API Rotation</div>', PANEL)
-    assert re.search(r'<div class="kame-sub">KAME <span x-text="\$store.kamePanel.version">', PANEL)
+    assert re.search(r'<div class="kame-sub">API Rotation <span x-text="\$store.kamePanel.version">', PANEL)
     # the plugin id, the folder and the dialog path do not change
     assert "/plugins/api_rotation_by_kame/webui/main.html" in ENTRY
     assert "<span>KAME</span>" not in ENTRY
@@ -91,7 +91,7 @@ def test_the_tabs_are_hermes_tabs_plus_the_fallback_tab_after_settings():
 
 def test_the_overview_reads_top_to_bottom_in_hermes_order():
     overview = PANEL.split("<!-- ===== Overview ===== -->", 1)[1].split("<!-- ===== Settings ===== -->", 1)[0]
-    order = ["Getting started", 'class="kame-now"', "Your models", "What KAME did", "Quick controls", 'class="kame-details"']
+    order = ["Getting started", 'class="kame-now"', "Your models", "What API Rotation did", "Quick controls", 'class="kame-details"']
     at = [overview.index(word) for word in order]
     assert at == sorted(at), dict(zip(order, at))
     # the three sentences are the first things of the page that are not first-run help
@@ -114,15 +114,15 @@ def test_hermes_words_are_on_the_page():
     ]
     for word in words:
         assert word in PANEL, word
-    assert "In the order of your fallback list: KAME starts every reply on 1" in STORE
+    assert "In the order of your fallback list: API Rotation starts every reply on 1" in STORE
     assert "One ring per provider and model. A key spent on one model keeps its allowance on another." in STORE
-    assert "KAME settings · all at their defaults" in STORE
+    assert "API Rotation settings · all at their defaults" in STORE
 
 
 def test_the_old_cards_are_folded_under_details_and_the_thin_bar_is_gone():
     assert "detailsOpen: false" in STORE
     details = PANEL.split('<section class="kame-details">', 1)[1].split("</section>", 1)[0]
-    for card in ("Right now", "Background jobs and your quota", "Your API keys", "Agent Zero, as KAME found it",
+    for card in ("Right now", "Background jobs and your quota", "Your API keys", "Agent Zero, as API Rotation found it",
                  "This Agent Zero process", "Each model's keys", "processFields"):
         assert card in details, card
     # the counters of this process: Hermes' list, drawn from the store

@@ -1,5 +1,32 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.9.0.3 — The screen says what happened; a silent reply keeps saying so (2026-11-18)
+
+Kept in step with the Hermes 1.9.0.3 changes that apply to Agent Zero. Nothing is released under this number yet.
+
+- **A failure row can always be opened.** Every error that is handed back now carries the provider's own text
+  (with anything key-shaped removed) and the kind of error. A request the provider refused itself says so ("the
+  provider refused the request itself, not a key - often a model name or address it does not know"), and a failure
+  row opens even when the provider sent no text: it then says so and shows the error type and status.
+- **A silent reply keeps saying so.** While a chat reply has had no first word, the line of "Calling LLM..." is
+  redrawn every 5 seconds: "Waiting on <model> · N of M keys ready, no first word yet (Ns)", with "a backup key is
+  asking too" or "<model> is asking too" when they are.
+- **The Speed line says what it measures.** Only backup requests use the Speed budget, so only they are compared
+  with what Speed allows. Keys asked together while the keys were running dry, and other models of your list asked
+  beside a late reply, are named apart as not limited by Speed; a re-ask of a reply that stopped mid-thought has its
+  own sentence.
+- **The screens say "API Rotation".** Every sentence you read in the panel, the chip and the settings page names the
+  product "API Rotation". Log lines, commands and setting names are unchanged.
+- **"Slow" and "busy" say what they mean.** "slow to start (no first word in time)" and "overloaded (the provider
+  said so)", each with a hover that explains it.
+- **A background job stopped before it was sent no longer claims a timeout.**
+- **The help of the automatic first-word wait states the real numbers** (30 s at least, 120 s for thinking models,
+  one more second per 2,000 prompt tokens, never above 120 s).
+
+Do not apply here, checked in the code: the voice and listening changes (there is no voice path), and keeping a
+background job on your model under "Never" (a background job here has no host fallback; its only hop is the
+fallback list, which "Never" already refuses).
+
 ## 1.9.0.2 — A reply starts on a model that is not failing; the wait is said (2026-11-16)
 
 Kept in step with the Hermes 1.9.0.2 fixes. Of the six, three apply to Agent Zero:

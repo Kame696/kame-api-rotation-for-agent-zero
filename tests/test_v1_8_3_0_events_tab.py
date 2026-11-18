@@ -138,7 +138,7 @@ def test_the_tallies_are_also_the_filter_and_background_calls_are_kept_apart():
         with_events(EVENTS, generated_at=1000.0 + 240))
     assert out["first"] == {"all": 4, "did": 2, "wrong": 2, "bg": 1}
     assert out["did"] == [1, 3] and out["wrong"] == [2, 4] and out["all"] == [1, 2, 3, 4]
-    assert out["labels"][1:3] == ["KAME rotating", "providers refusing"]
+    assert out["labels"][1:3] == ["API Rotation rotating", "providers refusing"]
     assert out["labels"][3] == "background jobs →"
     assert out["labels"][0].startswith("in the last ")
 
@@ -158,7 +158,7 @@ def test_only_a_failure_can_be_opened_and_the_inspector_closes():
         "store.inspect(rows[1]); const open = store.inspecting && store.inspecting.seq;"
         "const head = store.inspectorHead; store.closeInspect();"
         "return { can, open, head, closed: store.inspecting };", with_events(EVENTS))
-    assert out["can"] == [False, True, False, False]       # only a failure that kept what the provider said
+    assert out["can"] == [False, True, True, True]         # 1.9.0.3 (C1): every bad or warning row opens, a good one never
     assert out["open"] == 2 and out["closed"] is None
     assert out["head"]["label"] == "Key rests"
 
@@ -187,12 +187,12 @@ def test_the_heartbeat_tells_a_quiet_stretch_from_a_stopped_plugin():
         return run_store("await store.refresh(); return store.heartbeat;", body)
 
     assert line({"calls": 0, "last_call_at": 0}, generated_at=1000.0) == \
-        "KAME is running and has not been asked to route a call yet in this process."
+        "API Rotation is running and has not been asked to route a call yet in this process."
     one = line({"calls": 1, "last_call_at": 990.0}, generated_at=1000.0)
-    assert one.startswith("KAME is running. 1 call routed, the last one ") and one.endswith(
+    assert one.startswith("API Rotation is running. 1 call routed, the last one ") and one.endswith(
         "An empty list above means nothing failed.")
     many = line({"calls": 5, "last_call_at": 0}, generated_at=1000.0)
-    assert many == "KAME is running. 5 calls routed. An empty list above means nothing failed."
+    assert many == "API Rotation is running. 5 calls routed. An empty list above means nothing failed."
 
 
 def test_a_reading_that_stopped_updating_is_called_old_and_not_current():
@@ -211,8 +211,8 @@ def test_a_call_waiting_a_minute_or_more_gets_a_still_waiting_line_on_its_own_ta
     out = run_store("await store.refresh(); return { main: store.stillWaiting('main'), side: store.stillWaiting('secondary') };",
                     with_events([], in_flight=flights))
     assert out["main"] == [
-        "chat · gemini-3.5-flash — no answer for 57m 00s, 294 refusals so far; last: the provider had a server error. KAME keeps trying, as configured."]
-    assert out["side"] == ["Naming this chat · flash-lite — no answer for 1m 15s. KAME keeps trying, as configured."]
+        "chat · gemini-3.5-flash — no answer for 57m 00s, 294 refusals so far; last: the provider had a server error. API Rotation keeps trying, as configured."]
+    assert out["side"] == ["Naming this chat · flash-lite — no answer for 1m 15s. API Rotation keeps trying, as configured."]
 
 
 # -- the legend ---------------------------------------------------------------------------------

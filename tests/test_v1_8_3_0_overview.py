@@ -66,7 +66,7 @@ def notes(**extra):
 def test_an_incomplete_install_is_the_loudest_note():
     out = notes(build={"fingerprint": "x", "complete": False, "missing": ["core/a.py", "core/b.py"]})
     assert out[0][0] == "incomplete" and out[0][1] == "bad"
-    assert out[0][2] == ("This install is incomplete — KAME is not rotating. Missing: core/a.py, core/b.py. "
+    assert out[0][2] == ("This install is incomplete — API Rotation is not rotating. Missing: core/a.py, core/b.py. "
                          "Re-deploy the whole plugin directory. A copy that does not recurse drops core/ "
                          "and leaves a plugin that registers, reports itself active, and does nothing.")
 
@@ -76,7 +76,7 @@ def test_a_plugin_that_is_loaded_but_not_rotating_says_why_it_is_inert():
     ids = [n[0] for n in out]
     assert "not-rotating" in ids
     text = dict((n[0], n[2]) for n in out)["not-rotating"]
-    assert text.startswith("KAME is loaded but every call keeps the key Agent Zero resolved")
+    assert text.startswith("API Rotation is loaded but every call keeps the key Agent Zero resolved")
 
 
 def test_an_old_reading_is_called_old_with_the_hermes_sentence():
@@ -94,7 +94,7 @@ def test_keys_that_left_rotation_and_keys_just_refused_are_told_apart_in_the_her
     out = run_store("await store.refresh(); return store.notes.map(n => [n.id, n.tone, n.text]);", data)
     by = {n[0]: n for n in out}
     assert by["retired"][1] == "bad" and by["retired"][2].startswith(
-        "1 key has left rotation — the provider refused it as a credential, so KAME no longer offers it and nothing is being spent on it.")
+        "1 key has left rotation — the provider refused it as a credential, so API Rotation no longer offers it and nothing is being spent on it.")
     assert "paste the replacement over it in Agent Zero’s Settings > API keys and it comes back by itself." in by["retired"][2]
     assert by["invalid"][2] == ("1 key was just refused and is still being tried. One refusal is not proof — an expired token "
                                 "a second from refreshing sends the same thing — so it takes 3 in a row, with nothing working in between.")
@@ -105,7 +105,7 @@ def test_keys_that_left_rotation_and_keys_just_refused_are_told_apart_in_the_her
 def test_the_third_sentence_about_switching_is_the_hermes_sentence_with_the_host_named(clean):
     K.set_fallback_models("")
     assert K.status_view()["fallback"]["why"] == (
-        "Switching: off - no fallback models are set in Agent Zero, so KAME waits for your keys. "
+        "Switching: off - no fallback models are set in Agent Zero, so API Rotation waits for your keys. "
         "Add some in the Fallback models tab and switching is automatic.")
     K.set_fallback_models("google/gemini-3.7-flash")
     K.set_model_switch("never")
@@ -135,7 +135,7 @@ def test_the_process_card_lists_the_hermes_counters_that_agent_zero_has():
                       "Answers cut", "Continued"]
     by = {row[0]: row for row in out}
     assert by["Recovered"][2] == "answered after a rotation"
-    assert by["Surfaced"][2] == "errors KAME let through"
+    assert by["Surfaced"][2] == "errors API Rotation let through"
     assert by["Waited"][1] == "1m 35s" and by["Waited"][2] == "across 2 pause(s)"
     assert by["Fallbacks"][2] == "replies your fallback list answered: the model was busy, resting or too slow"
 
@@ -167,7 +167,7 @@ def test_the_made_by_card_and_the_compact_credit_carry_the_hermes_words_and_the_
 
 
 def test_the_first_run_card_is_the_hermes_card_for_agent_zero():
-    for words in ("Getting started", "KAME is running, and no pooled key has been used yet.",
+    for words in ("Getting started", "API Rotation is running, and no pooled key has been used yet.",
                   "Send a message. The chip above the message box starts showing your keys from the first call."):
         assert words in PANEL, words
 
@@ -194,6 +194,6 @@ def test_the_fallback_list_is_shown_inside_its_shelf_with_how_each_model_is_doin
     assert out["why"].startswith("Switching: automatic - when your provider is busy, Agent Zero answers")
     assert [e["n"] for e in out["entries"]] == [1, 2]
     assert out["entries"][0]["yours"] is True and out["entries"][1]["yours"] is False
-    assert out["entries"][1]["state"] == "KAME has not served this model yet"
+    assert out["entries"][1]["state"] == "API Rotation has not served this model yet"
     assert out["how"] == "Change this list in the Fallback models tab. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once."
     assert PANEL.count("fallbackList.why") == 2             # the Settings tab and the Fallback tab

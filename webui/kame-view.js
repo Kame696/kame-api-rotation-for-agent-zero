@@ -97,7 +97,7 @@ export const REASON_WORDS = {
   "credential refused": "the provider refused this key",
   "not a valid key": "the provider says this is not a valid key",
   "not allowed on this model": "this key may not use this model",
-  "unrecognised error": "an error nothing recognised",
+  "unrecognised error": "an error API Rotation does not recognise - click to read it",
 };
 
 // -- time ---------------------------------------------------------------------------------------
@@ -221,6 +221,17 @@ export function ringModels(view) {
   };
 }
 
+/** 1.9.0.3 (C5). The hover of a model that is skipped for a while; `undefined` for every other state. */
+export function modelStateTitle(model, nowMs) {
+  const entry = model.entry;
+  const busy = untilEpoch(entry?.busy_until, nowMs);
+  if (!model.pool || !busy) return undefined;
+  return entry?.busy_kind === "slow"
+    ? "This model did not say its first word within the wait limit, so the next replies start on another model " +
+        `of your list for a while. It is asked again after ${fmtLeft(busy, nowMs)}.`
+    : "The provider answered 'overloaded' or timed out on several keys. Each key rests 1 s; the model is skipped for a while.";
+}
+
 /** What a model is doing, in a few words: `{ word, tone }`. */
 export function modelState(model, view, nowMs) {
   const { entry, pool } = model;
@@ -230,8 +241,13 @@ export function modelState(model, view, nowMs) {
   if (busy) {
     const again = untilEpoch(entry?.probe_at, nowMs);
     return entry?.busy_kind === "slow"
-      ? { tone: "warn", word: `slow today — skipped for ${fmtLeft(busy, nowMs)}` }
-      : { tone: "warn", word: again ? `busy — asked again in ${fmtLeft(again, nowMs)}` : "busy — asked again soon" };
+      ? { tone: "warn", word: `slow to start (no first word in time) — skipped for ${fmtLeft(busy, nowMs)}` }
+      : {
+          tone: "warn",
+          word: again
+            ? `overloaded (the provider said so) — asked again in ${fmtLeft(again, nowMs)}`
+            : "overloaded (the provider said so) — asked again soon",
+        };
   }
   const counts = keyCounts(pool);
   const ready = counts.r + counts.f;
@@ -551,7 +567,7 @@ export function nowSentences(view, nowMs, ageS = 0) {
     const earlier = joined.slice(0, -1);
     line1 =
       (earlier.length
-        ? `${activity.model} and ${earlier.join(" and ")} are slow today — ${last} joined`
+        ? `${activity.model} and ${earlier.join(" and ")} are slow to start — ${last} joined`
         : `${activity.model} is late — ${last} races it`) + (started !== null ? ` — ${started.toFixed(1)} s` : "");
   } else if (activity?.kind === "calling" && typeof activity.probe === "string" && activity.probe) {
     icon = "◐";
@@ -584,25 +600,25 @@ export function nowSentences(view, nowMs, ageS = 0) {
   );
   const busyModel = models.find((model) => {
     const word = modelState(model, view, nowMs).word;
-    return word.startsWith("busy") || word.startsWith("slow");
+    return word.startsWith("overloaded") || word.startsWith("slow");
   });
   const paused = Object.entries(view?.speed?.paused_until || {}).find(([, until]) => until > nowSec);
   let line2 = "Nothing wrong.";
   let tone = "good";
   if (view?.build?.complete === false) {
-    line2 = "This install is incomplete — KAME is not rotating.";
+    line2 = "This install is incomplete — API Rotation is not rotating.";
     tone = "bad";
   } else if (ageS > STALE_READING_S) {
     line2 = `This reading is ${durationWords(ageS)} old — Agent Zero may be restarting.`;
     tone = "warn";
   } else if (view?.active === false) {
-    line2 = "KAME is loaded but not rotating — see the note below.";
+    line2 = "API Rotation is loaded but not rotating — see the note below.";
     tone = "warn";
   } else if (models.length && !usable && !untouched) {
     const everyoneBusy = models.every((model) => model.pool && untilEpoch(model.entry?.busy_until, nowMs));
     line2 = everyoneBusy
-      ? "Every model is busy — KAME keeps asking, your best first, until one answers."
-      : "No model can answer right now — KAME waits for the first key to come back.";
+      ? "Every model is busy — API Rotation keeps asking, your best first, until one answers."
+      : "No model can answer right now — API Rotation waits for the first key to come back.";
     tone = "bad";
   } else if (sums.replace > 0) {
     line2 = `${count(sums.replace, "key", "keys")} to replace — the provider refused ${sums.replace === 1 ? "it" : "them"} as credentials.`;
@@ -690,20 +706,30 @@ export function groupMoves(view, limit = 6) {
 export function speedCostLine(speed) {
   if (!speed || !speed.cap_pct || !speed.hour) return null;
   const hour = speed.hour;
-  const over = hour.extra_pct !== null && hour.extra_pct !== undefined && speed.cap_pct > 0 && hour.extra_pct > speed.cap_pct * 1.5;
+  const cap = speed.cap_pct;
+  // 1.9.0.3 (C3): only backup requests draw from the Speed budget, so only they are compared with what Speed allows
+  const limitedPct = hour.limited_pct ?? null;
+  const over = limitedPct !== null && cap > 0 && limitedPct > cap * 1.5;
   const sinceStart = speed.since_start;
-  const text =
-    (hour.replies
-      ? `Extra requests this hour: +${hour.extra_pct ?? 0}% (${hour.replies} replies). Your setting allows about +${speed.cap_pct}%.`
-      : `No replies this hour yet. Your setting allows about +${speed.cap_pct}% extra requests.`) +
-    // 1.8.4.3: a request asked for a reply that stopped mid-thought is told, and how many paid off
-    (hour.rescue > 0
-      ? ` ${hour.rescue} of them re-asked a reply that stopped mid-thought; ${hour.rescue_won ?? 0} answered first.`
-      : "") +
-    (sinceStart?.replies && sinceStart.extra_pct !== null && sinceStart.extra_pct !== undefined
-      ? ` Since Agent Zero started: +${sinceStart.extra_pct}%.`
-      : "");
-  return { text, over };
+  const burst = Number(hour.burst ?? 0);
+  const race = Number(hour.race ?? 0);
+  const rescue = Number(hour.rescue ?? 0);
+  const unlimited = [];
+  if (burst > 0) unlimited.push(`${burst} asked together while keys were running dry`);
+  if (race > 0) unlimited.push(`${race} asked of ${race === 1 ? "another model" : "other models"} of your list`);
+  const parts = [
+    hour.replies
+      ? `Backup requests this hour: +${limitedPct ?? 0}% (${hour.replies} replies). Speed allows about +${cap}%.`
+      : `No replies this hour yet. Speed allows about +${cap}% backup requests.`,
+    unlimited.length ? `Not limited by Speed: ${unlimited.join(", ")}.` : "",
+    // 1.8.4.3: a re-ask of a reply that stopped mid-thought is told, and how many paid off
+    rescue > 0 ? `${rescue} re-asked ${rescue === 1 ? "a reply that stopped" : "replies that stopped"} mid-thought.` : "",
+    rescue > 0 && Number(hour.rescue_won ?? 0) > 0 ? `${hour.rescue_won} of the re-asks answered first.` : "",
+    sinceStart?.replies && sinceStart.limited_pct !== null && sinceStart.limited_pct !== undefined
+      ? `Since Agent Zero started: +${sinceStart.limited_pct}% backup requests.`
+      : "",
+  ];
+  return { text: parts.filter(Boolean).join(" "), over };
 }
 
 /** Requests per model, conversation versus background jobs (titles, summaries...), from `quota_use`. */
@@ -791,7 +817,7 @@ export function chipRingSvg(view) {
 export function chipSummary(data, nowMs) {
   const view = data && typeof data === "object" && data.view ? { ...data.view, active: data.active, build: data.build } : null;
   if (!view || !data.available) {
-    return { tone: "idle", label: "–", tip: "KAME has nothing to show yet.", ring: chipRingSvg(null), aria: "KAME API Rotation: no reading yet",
+    return { tone: "idle", label: "–", tip: "API Rotation has nothing to show yet.", ring: chipRingSvg(null), aria: "KAME API Rotation: no reading yet",
              said: null, headline: "Waiting for the first call", counts: "", providers: [], moves: [], version: "" };
   }
   const said = nowSentences(view, nowMs);
@@ -811,7 +837,7 @@ export function chipSummary(data, nowMs) {
     headline = data.layer === 3 ? "Not attached — Agent Zero is running natively" : "Waiting for the first call";
   } else if (!keys) {
     tone = "idle";
-    headline = "No key seen yet — KAME learns them on the first call";
+    headline = "No key seen yet — API Rotation learns them on the first call";
   } else if (ready === 0) {
     tone = "bad";
   }
@@ -938,6 +964,8 @@ export const CHIP_MODELS_MAX = 6;
 export const CHIP_REPLIES_MAX = 5;
 
 const PRODUCT = "KAME API Rotation";
+/** 1.9.0.3 (C4): what the sentences on screen call the product; PRODUCT stays the full title. */
+const NAME = "API Rotation";
 
 /** One model's status, on the right of its row: `{ text, tone }`. */
 export function chipRowStatus(model, view, nowMs) {
@@ -947,8 +975,13 @@ export function chipRowStatus(model, view, nowMs) {
   if (busy) {
     const again = untilEpoch(entry?.probe_at, nowMs);
     return entry?.busy_kind === "slow"
-      ? { text: `slow today · skipped for ${durationWords(busy)}`, tone: "warn" }
-      : { text: again ? `busy · asked again in ${durationWords(again)}` : "busy · asked again soon", tone: "warn" };
+      ? { text: `slow to start (no first word in time) · skipped for ${durationWords(busy)}`, tone: "warn" }
+      : {
+          text: again
+            ? `overloaded (the provider said so) · asked again in ${durationWords(again)}`
+            : "overloaded (the provider said so) · asked again soon",
+          tone: "warn",
+        };
   }
   const counts = keyCounts(pool);
   const ready = counts.r + counts.f;
@@ -1018,9 +1051,9 @@ export function chipPopover(data, nowMs) {
   const inUse = activity?.identity ? poolOf(view, activity.identity)?.identity : null;
   let sentence;
   if (!read) {
-    sentence = `${PRODUCT} has not been read yet.`;
+    sentence = `${NAME} has not been read yet.`;
   } else if (!active) {
-    sentence = `${PRODUCT} is loaded but not rotating: ${data.reason ?? (data.layer === 3 ? "Agent Zero is running natively" : "unknown")}`;
+    sentence = `${NAME} is loaded but not rotating: ${data.reason ?? (data.layer === 3 ? "Agent Zero is running natively" : "unknown")}`;
   } else if (said.tone !== "good") {
     sentence = said.line2;
   } else if (activity) {
@@ -1071,6 +1104,6 @@ export function chipPopover(data, nowMs) {
     stale,
     title: "API Rotation",
     tone: popoverTone(view, active, stale),
-    version: has && data.version ? `KAME ${data.version}` : "KAME",
+    version: has && data.version ? `API Rotation ${data.version}` : "API Rotation",
   };
 }

@@ -13,7 +13,7 @@
       <div class="kame-head">
         <div>
           <div class="kame-title">API Rotation</div>
-          <div class="kame-sub">KAME <span x-text="$store.kamePanel.version"></span>
+          <div class="kame-sub">API Rotation <span x-text="$store.kamePanel.version"></span>
             <span class="kame-mono" x-show="$store.kamePanel.buildFingerprint" x-text="$store.kamePanel.buildFingerprint"
                   title="Fingerprint of the source actually installed. Compare it with the build you deployed."></span></div>
         </div>
@@ -57,9 +57,9 @@
 
         <div class="kame-card" x-show="$store.kamePanel.first">
           <div class="kame-card-title">Getting started</div>
-          <p>KAME is running, and no pooled key has been used yet. Nothing is wrong &mdash; this page fills in the first time a call goes out.</p>
+          <p>API Rotation is running, and no pooled key has been used yet. Nothing is wrong &mdash; this page fills in the first time a call goes out.</p>
           <ol class="kame-small">
-            <li>Open Settings &gt; API keys in Agent Zero and paste several keys into one provider key field, separated by commas. KAME reads them as the several keys they are.</li>
+            <li>Open Settings &gt; API keys in Agent Zero and paste several keys into one provider key field, separated by commas. API Rotation reads them as the several keys they are.</li>
             <li><code>/kame-keys</code> does the same thing in bulk, from the chat.</li>
             <li>Send a message. The chip above the message box starts showing your keys from the first call.</li>
           </ol>
@@ -88,7 +88,7 @@
                         @click="$store.kamePanel.toggleRing(c.identity)">
                   <span class="kame-ring-art" x-html="c.svg"></span>
                   <span class="kame-ring-name" :title="c.identity" x-text="c.title"></span>
-                  <span class="kame-ring-word" :class="'kame-tone-' + c.tone" x-text="c.word"></span>
+                  <span class="kame-ring-word" :class="'kame-tone-' + c.tone" :title="c.stateTitle" x-text="c.word"></span>
                   <span class="kame-ring-side kame-dim" x-show="c.side" x-text="c.side"></span>
                 </button>
               </div>
@@ -102,7 +102,7 @@
                         @click="$store.kamePanel.toggleRing(c.identity)">
                   <span class="kame-ring-art" x-html="c.svg"></span>
                   <span class="kame-ring-name" :title="c.identity" x-text="c.title"></span>
-                  <span class="kame-ring-word" :class="'kame-tone-' + c.tone" x-text="c.word"></span>
+                  <span class="kame-ring-word" :class="'kame-tone-' + c.tone" :title="c.stateTitle" x-text="c.word"></span>
                   <span class="kame-ring-side kame-dim" x-show="c.side" x-text="c.side"></span>
                 </button>
               </template>
@@ -156,9 +156,9 @@
           </template>
         </div>
 
-        <!-- What KAME did -->
+        <!-- What API Rotation did -->
         <div class="kame-card">
-          <div class="kame-card-title">What KAME did</div>
+          <div class="kame-card-title">What API Rotation did</div>
           <p class="kame-dim" x-show="!$store.kamePanel.moves.length" x-text="$store.kamePanel.movesEmpty"></p>
           <ul class="kame-moves" x-show="$store.kamePanel.moves.length">
             <template x-for="(mv, i) in $store.kamePanel.moves" :key="i">
@@ -277,7 +277,7 @@
 
             <div class="kame-card">
               <div class="kame-card-title">Your API keys</div>
-              <p class="kame-dim kame-small" x-show="!$store.kamePanel.keyGroups.length">No call has gone through KAME yet.</p>
+              <p class="kame-dim kame-small" x-show="!$store.kamePanel.keyGroups.length">No call has gone through API Rotation yet.</p>
               <template x-for="prov in $store.kamePanel.keyGroups" :key="prov.provider">
                 <div class="kame-keygroup">
                   <div class="kame-mono" x-text="prov.provider"></div>
@@ -291,15 +291,15 @@
                 </div>
               </template>
               <p class="kame-dim kame-small">
-                KAME rotates the keys Agent Zero already has. Put several keys of one provider in that provider's API key field,
+                API Rotation rotates the keys Agent Zero already has. Put several keys of one provider in that provider's API key field,
                 separated by commas (Settings &gt; API keys), or in <code>usr/.env</code> as <code>API_KEY_GOOGLE=key1,key2,key3</code>.
                 From the chat: <code>/kame-keys add google key1,key2</code> or <code>/kame-keys import</code> with a pasted .env.
-                Keys from different accounts each bring their own quota. KAME never shows a key: this page names each one by a short fingerprint.
+                Keys from different accounts each bring their own quota. API Rotation never shows a key: this page names each one by a short fingerprint.
               </p>
             </div>
 
             <div class="kame-card" x-show="$store.kamePanel.seams.rows.length">
-              <div class="kame-card-title">Agent Zero, as KAME found it</div>
+              <div class="kame-card-title">Agent Zero, as API Rotation found it</div>
               <template x-for="r in $store.kamePanel.seams.rows" :key="r.name">
                 <div><span x-text="r.ok ? '✓' : '⚠'"></span> <code x-text="r.name"></code>
                   <span class="kame-dim" x-show="!r.ok" x-text="'missing: ' + (r.missing || []).join(', ')"></span></div>
@@ -337,7 +337,7 @@
           <div class="kame-dim kame-small">Everything works without changing anything here. Changes apply on the next message and survive restarts.</div>
           <div class="kame-actions">
             <button class="btn" title="Reads Agent Zero's settings again and rebuilds this page on the spot. Use it after changing a setting somewhere else, or after adding a key somewhere else, instead of restarting." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.refresh()">Refresh</button>
-            <button class="btn" title="Every KAME setting goes back to its built-in default." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'reset_all'">Reset to defaults</button>
+            <button class="btn" title="Every API Rotation setting goes back to its built-in default." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'reset_all'">Reset to defaults</button>
             <button class="btn" title="Only clears rotation and quarantine; it does not delete any key." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'clear_pool_all'">Clear pool</button>
             <button class="btn" title="Empties the event list on the Events page. Nothing else changes." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.act('clear_events')">Clear events</button>
             <button class="btn" x-show="$store.kamePanel.advancedCount || $store.kamePanel.showAdvanced"
@@ -347,7 +347,7 @@
           </div>
           <div class="kame-confirm" x-show="$store.kamePanel.confirming === 'reset_all'">
             <b class="kame-small">Reset every setting?</b>
-            <span class="kame-small">Every KAME setting goes back to its built-in default. Your fallback list and your keys are not touched.</span>
+            <span class="kame-small">Every API Rotation setting goes back to its built-in default. Your fallback list and your keys are not touched.</span>
             <button class="btn btn-ok" @click="$store.kamePanel.act('reset_settings')">Reset everything</button>
             <button class="btn" @click="$store.kamePanel.confirming = ''">Cancel</button>
           </div>
@@ -361,7 +361,7 @@
 
         <div class="kame-card" x-show="$store.kamePanel.noSettings">
           <div class="kame-card-title">Settings</div>
-          <p class="kame-dim">This KAME reports no settings.</p>
+          <p class="kame-dim">This API Rotation reports no settings.</p>
         </div>
 
         <template x-for="card in $store.kamePanel.settingCards" :key="card.id">
@@ -401,7 +401,7 @@
                   <li>Or type <code>/kame-keys add google KEY1,KEY2,KEY3</code> in the chat (any provider name instead of google).</li>
                   <li>Type <code>/kame-keys</code> to see every key and how it is doing.</li>
                 </ol>
-                <p class="kame-dim kame-small">Agent Zero keeps the keys; KAME never shows one. The Overview tab shows how each one is doing.</p>
+                <p class="kame-dim kame-small">Agent Zero keeps the keys; API Rotation never shows one. The Overview tab shows how each one is doing.</p>
               </div>
             </template>
 
@@ -521,7 +521,7 @@
                   <li>Or type <code>/kame-keys add google KEY1,KEY2,KEY3</code> in the chat (any provider name instead of google).</li>
                   <li>Type <code>/kame-keys</code> to see every key and how it is doing.</li>
                 </ol>
-                <p class="kame-dim kame-small">Agent Zero keeps the keys; KAME never shows one. The Overview tab shows how each one is doing.</p>
+                <p class="kame-dim kame-small">Agent Zero keeps the keys; API Rotation never shows one. The Overview tab shows how each one is doing.</p>
               </div>
             </template>
 
@@ -604,7 +604,7 @@
             Empty list: nothing ever switches.
           </div>
 
-          <p class="kame-dim" x-show="!$store.kamePanel.rows.length">No fallback models yet. Click &ldquo;+ Add fallback model&rdquo; to choose the model KAME should try when yours cannot answer.</p>
+          <p class="kame-dim" x-show="!$store.kamePanel.rows.length">No fallback models yet. Click &ldquo;+ Add fallback model&rdquo; to choose the model API Rotation should try when yours cannot answer.</p>
 
           <ol class="kame-fb">
             <template x-for="(row, i) in $store.kamePanel.rows" :key="row.id">
@@ -690,7 +690,7 @@
           <div class="kame-tallies">
             <template x-for="t in [['all', 'plain'], ['did', 'good'], ['wrong', $store.kamePanel.tallies.wrong.count ? 'bad' : 'plain']]" :key="t[0]">
               <button type="button" class="kame-tally" :class="$store.kamePanel.eventView === t[0] ? 'kame-tally-on' : ''"
-                      :aria-label="t[0] === 'wrong' ? 'What went wrong' : t[0] === 'did' ? 'What KAME did' : 'Everything'"
+                      :aria-label="t[0] === 'wrong' ? 'What went wrong' : t[0] === 'did' ? 'What API Rotation did' : 'Everything'"
                       :title="$store.kamePanel.tallies[t[0]].title" @click="$store.kamePanel.setEventView(t[0])">
                 <span class="kame-tally-n" :class="'kame-tone-ev-' + t[1]" x-text="$store.kamePanel.tallies[t[0]].count"></span>
                 <span class="kame-tally-l kame-dim" x-text="$store.kamePanel.tallies[t[0]].label"></span>
@@ -821,7 +821,7 @@
             <button class="btn" @click="$store.kamePanel.closeInspect()">Close</button>
           </div>
           <p class="kame-dim kame-small">What the provider actually sent, with anything key-shaped removed before it was stored.</p>
-          <pre class="kame-payload" x-text="$store.kamePanel.inspecting && $store.kamePanel.inspecting.detail"></pre>
+          <pre class="kame-payload" x-text="$store.kamePanel.inspecting && $store.kamePanel.inspectorText($store.kamePanel.inspecting)"></pre>
         </div>
       </div>
 

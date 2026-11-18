@@ -6,7 +6,7 @@
 
 ### All your API keys and models as one pool. A `429`, a spent quota or a slow model never stops your agent again.
 
-[![Version](https://img.shields.io/badge/version-1.9.0.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0.3-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -124,7 +124,7 @@ Watch it work in **API Rotation** (central menu).
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.2 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.3 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -421,6 +421,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
+| **1.9.0.3** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (95 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.3 |
 | **1.9.0.2** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (91 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.2 |
 | **1.9.0.2** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
 | **1.9.0.1** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite, 4,800 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 160 raced replies, among them worlds with one key, no list, "Never switch", a model of another provider and a model whose every request hangs (`tools/race_chaos.py`): 0 defects |
@@ -460,7 +461,18 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 
 <a id="new"></a>
 <details>
-<summary><b>📣 What's new in 1.9.0.2</b></summary>
+<summary><b>📣 What's new in 1.9.0.3</b></summary>
+
+> **1.9.0.3 — the screen says what happened.** Kept in step with Hermes 1.9.0.3.
+
+- **Every failure row in the panel opens** and shows the provider's own text and the error type. A request the
+  provider refused (a model at its end of life, a wrong name) says it is the request, not a key.
+- **While the model is silent, the status line keeps saying so** every 5 s, with the backup key or the other model
+  racing it.
+- **The Speed line counts only the backup requests your Speed setting allows**, so it no longer reads as "your
+  setting is ignored" when the extra requests came from the provider refusing.
+- **"API Rotation" on screen** instead of "KAME"; "slow to start" and "overloaded" say what they mean;
+  "stopped before it was sent" instead of "timed out after 0 tries"; the first-word wait help gives the real numbers.
 
 > **1.9.0.2 — a reply starts on a model that is not failing; the wait is said.** Kept in step with Hermes 1.9.0.2.
 
@@ -573,6 +585,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.3** | The screen says what happened | Every failure row opens with the provider's own text, and a refused request says it is the request, not a key; the status line speaks every 5 s while the model is silent; the Speed line counts only backup requests; "API Rotation" on screen; clearer slow, overloaded and stopped words |
 | **v1.9.0.2** | A reply starts on a model that is not failing; the wait is said | A model due a second look is asked beside the reply instead of starting it; the waiting line gives the provider's own return time, or says the provider gave none; one closing row per call without an answer |
 | **v1.9.0.1** | A reply is never left waiting when something else could answer | A stalled reply moves on to the next free model of your list; one key or no list still gets its extra request; the only key busy is the model busy; an answer that began and went silent is cut and continued (`answer_quiet_s`, 45 s) |
 | **v1.9.0.0** | Thoughts stay live, a stalled reply is asked again, a busy model is raced at once | A thinking reply's thoughts keep showing live; one that goes quiet past a limit learned for each model is asked again on another key, then on the next model of your list; after a 503 the retry is raced by the next model from its first instant. Developed as 1.8.4.3 (none was published); offline suites only, not yet run on a real Agent Zero |

@@ -87,7 +87,7 @@ def test_the_settings_shelves_are_hermes_shelves_in_hermes_order_plus_the_agent_
     assert ids == ["extra", "speed", "keyring", "tuning", "agentzero", "off"]
     assert titles[:4] == HERMES_TITLES
     assert titles[4] == "Agent Zero log and chat"
-    assert titles[5] == "Troubleshooting: turn parts of KAME off"
+    assert titles[5] == "Troubleshooting: turn parts of API Rotation off"
 
 
 def test_the_fallback_list_is_not_a_settings_row_it_has_its_own_tab():
@@ -122,9 +122,9 @@ def test_a_number_that_belongs_to_one_answer_shows_only_under_that_answer():
 
 def test_the_toolbar_says_how_many_settings_changed():
     none = run_store("await store.refresh(); return store.toolbarTitle;", loaded())
-    assert none == "KAME settings · all at their defaults"
+    assert none == "API Rotation settings · all at their defaults"
     some = run_store("await store.refresh(); return store.toolbarTitle;", loaded(hedge_max_legs=2, model_switch="timed"))
-    assert some == "KAME settings · 2 changed"
+    assert some == "API Rotation settings · 2 changed"
 
 
 def test_the_speed_buttons_say_what_each_costs_and_the_sentence_follows_the_choice():
@@ -199,7 +199,7 @@ def test_the_status_is_asked_for_with_the_panel_flag():
 def test_a_dead_status_shows_an_error_and_keeps_the_page_standing():
     out = run_store("store.refresh = store.refresh; globalThis.__responses = { [STATUS]: () => { throw new Error('down'); } };"
                     "await store.refresh(); return [store.error, store.said.line1];".replace("STATUS", json.dumps(STATUS_PATH)), {})
-    assert out[0].startswith("KAME's status did not load (down)")
+    assert out[0].startswith("API Rotation's status did not load (down)")
     assert out[1].startswith("Ready — nothing has been asked yet")
 
 

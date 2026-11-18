@@ -143,7 +143,7 @@ def test_the_page_says_the_live_line_with_the_other_ports_field_names():
 
 def test_a_ready_pool_reads_as_one_sentence_a_count_and_three_rows():
     v = popover(report())
-    assert v["title"] == "API Rotation" and v["version"] == "KAME 1.8.3.1" and v["button"] == "Open API Rotation"
+    assert v["title"] == "API Rotation" and v["version"] == "API Rotation 1.8.3.1" and v["button"] == "Open API Rotation"
     assert v["sentence"] == "Ready - next reply: main-model"
     # 1.8.4.0 (U1): one count everywhere - the keys of the model that answers the next reply (3), not
     # the sum over every model (7)
@@ -207,12 +207,12 @@ def test_a_busy_model_says_when_it_is_asked_again_and_the_sentence_is_the_worst_
         {"identity": "gemini:main-model", "role": "primary", "busy_kind": "busy", "busy_until": NOW + 90, "probe_at": NOW + 30},
         {"identity": "gemini:second", "role": "fallback"}, {"identity": "gemini:third", "role": "fallback"}]})
     v = popover(busy)
-    assert v["models"][0]["status"] == "busy · asked again in 30s" and v["models"][0]["tone"] == "warn"
-    assert v["sentence"].startswith("main-model is busy")
+    assert v["models"][0]["status"] == "overloaded (the provider said so) · asked again in 30s" and v["models"][0]["tone"] == "warn"
+    assert v["sentence"].startswith("main-model is overloaded (the provider said so)")
     slow = report(fallback={"state": "on", "entries": [
         {"identity": "gemini:main-model", "role": "primary", "busy_kind": "slow", "busy_until": NOW + 600},
         {"identity": "gemini:second", "role": "fallback"}]})
-    assert popover(slow)["models"][0]["status"] == "slow today · skipped for 10m 00s"
+    assert popover(slow)["models"][0]["status"] == "slow to start (no first word in time) · skipped for 10m 00s"
 
 
 def test_resting_out_for_today_and_not_used_yet():
@@ -246,8 +246,8 @@ def test_an_old_reading_is_said_to_be_old_never_presented_as_live():
 
 def test_nothing_read_yet_and_not_rotating_have_their_own_sentences():
     out = run_js("return [V.chipPopover(null, 0), V.chipPopover({available: true, active: false, reason: 'no hook', view: {}}, 0)];", {})
-    assert out[0]["sentence"] == "KAME API Rotation has not been read yet." and out[0]["version"] == "KAME"
-    assert out[1]["sentence"] == "KAME API Rotation is loaded but not rotating: no hook" and out[1]["models"] == []
+    assert out[0]["sentence"] == "API Rotation has not been read yet." and out[0]["version"] == "API Rotation"
+    assert out[1]["sentence"] == "API Rotation is loaded but not rotating: no hook" and out[1]["models"] == []
 
 
 def test_without_a_list_the_first_model_is_not_called_main():

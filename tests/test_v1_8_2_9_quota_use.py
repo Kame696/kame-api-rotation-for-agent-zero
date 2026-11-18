@@ -169,7 +169,7 @@ def test_the_sentence_names_the_job_the_model_of_the_owners_list_and_changes_not
     text = view()["suggestion"]
     assert text and "title_generation" in text and "gemini-3.7-flash" in text
     assert "40%" in text
-    assert "Utility model" in text and "KAME never changes this for you." in text
+    assert "Utility model" in text and "API Rotation never changes this for you." in text
     assert "auxiliary" not in text and "config.yaml" not in text      # that is Hermes' menu, not Agent Zero's
 
 

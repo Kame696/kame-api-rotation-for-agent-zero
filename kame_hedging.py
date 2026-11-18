@@ -735,9 +735,18 @@ class SpeedLedger:
         # v1.8.4.3 (A1): a rescue leg is an extra request; "rescue_won" counts how many of them answered
         # first - a count, not a request
         extra = backup + race + burst + rescue
+        # 1.9.0.3 (C3): only the legs that draw a token from the Speed budget are limited by Speed. Checked kind by kind:
+        #   backup - limited: `HEDGE_TRACKER.may_start_backup`, then `note_hedge` (the budget).
+        #   burst  - NOT limited: keys asked together while the pool runs dry never ask the budget.
+        #   race   - NOT limited: other models of the list asked beside a late reply only ask `_kame_race_ready`.
+        #   rescue - mixed: a rescue on another KEY of the model asks `may_start_backup`, one on another MODEL does not.
+        #            One column, so it is not in `limited`, and the page lists it under its own neutral sentence.
+        limited = backup
         return {"replies": replies, "backup": backup, "race": race, "burst": burst, "circle": circle,
                 "rescue": rescue, "rescue_won": rescue_won,
-                "extra_pct": round(100.0 * extra / replies, 1) if replies else None}
+                "extra_pct": round(100.0 * extra / replies, 1) if replies else None,
+                "limited": limited,
+                "limited_pct": round(100.0 * limited / replies, 1) if replies else None}
 
     def view(self, now: Optional[float] = None) -> Dict[str, Any]:
         """``{"hour": pack, "since_start": pack}``; ``extra_pct`` is ``None`` without replies."""

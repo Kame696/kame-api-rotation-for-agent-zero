@@ -126,7 +126,7 @@ const model = {
     } catch (error) {
       // A failed poll must not blank a panel that was showing something true a
       // second ago. The previous view stands until a good answer replaces it.
-      if (seq === this.loadSeq) console.debug("KAME status unavailable:", error);
+      if (seq === this.loadSeq) console.debug("API Rotation status unavailable:", error);
     }
     return this.view;
   },

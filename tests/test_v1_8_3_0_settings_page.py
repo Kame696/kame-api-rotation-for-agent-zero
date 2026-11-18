@@ -129,7 +129,7 @@ def test_turning_a_consequential_switch_on_asks_first_and_turning_it_off_does_no
     assert out["asked"]["ask"] == "rotation_disabled" and out["asked"]["saved"] == 0
     assert out["asked"]["title"] == f"{S.SETTINGS['rotation_disabled'][6]}?"
     assert out["asked"]["text"].endswith(
-        "This is the switch people reach for when they suspect KAME of breaking something — it is reversible, and nothing is uninstalled.")
+        "This is the switch people reach for when they suspect API Rotation of breaking something — it is reversible, and nothing is uninstalled.")
     assert out["after"] == 1 and out["cleared"] == ""
 
 
@@ -164,7 +164,7 @@ def test_a_setting_on_no_shelf_lands_on_an_other_card_at_the_end():
 def test_a_report_with_no_settings_says_so():
     out = run_store("await store.refresh(); store.data.settings_meta = []; return [store.noSettings, store.settingCards.length];", loaded())
     assert out == [True, 0]
-    assert "This KAME reports no settings." in PANEL
+    assert "This API Rotation reports no settings." in PANEL
 
 
 def test_the_choice_note_and_the_footnote_are_two_lines():

@@ -97,7 +97,7 @@ def test_the_list_is_numbered_once():
 
 # -- U5 ------------------------------------------------------------------------------------------
 def test_the_three_quick_controls_have_their_one_line():
-    assert S.LINE == {"hedge_mode": "How hard KAME works to answer sooner.",
+    assert S.LINE == {"hedge_mode": "How hard API Rotation works to answer sooner.",
                       "model_switch": "When your model cannot answer, the next one on your list does.",
                       "reply_notice": "A short notice after each reply."}
     out = run_store("await store.refresh(); return store.quickCards[0].rows.map(m => [m.name, m.line]);", loaded())
@@ -128,7 +128,7 @@ def test_the_lifetime_line_and_the_star():
     many = pure("return v.lifetimeLine({replies: 1240, saved: 10, since: 1760000000}, 'en-US');")
     assert many["star"] is True and many["starText"] == "A star helps others find it."
     assert pure("return v.lifetimeLine({replies: 1, saved: 0}, 'en-US').text;") == "1 reply, 0 saved from a provider error."
-    block = PANEL.split("What KAME did", 1)[1].split("Quick controls", 1)[0]
+    block = PANEL.split("What API Rotation did", 1)[1].split("Quick controls", 1)[0]
     assert REPO in block and "lifetime.star" in block
 
 
