@@ -93,3 +93,29 @@ def test_with_the_status_line_switched_off_nothing_is_drawn(vt):
     ctx, _ = make_ctx(streaming({KEYS[0]: 12.0}), keys=KEYS[:1])
     vt.run(agent.call_chat_model(K._kame_carousel(None, ctx)), limit=60)
     assert agent.headings() == []
+
+
+# --- 1.9.0.3 CI (Windows, Python 3.11 and 3.12): a timer that runs one clock tick early -------------------------
+# Before Python 3.13, Windows' event loop clock ticks every 15.6 ms and asyncio runs a timer up to one tick early.
+# The silent line's 5 s wake landed 0.25 ms before the slow bound of a raced reply; the loop woke early, found the
+# bound not yet due and asked for the same 0.25 ms wait again, for ever (the CI job hit its 20 min limit).
+
+from test_v1_8_2_7_speed_fallback import fake_models  # noqa: F401,E402
+import test_v1_8_4_0_race_reserve as RR  # noqa: E402
+
+WINDOWS_TICK = 0.015625
+
+
+def test_a_wait_shorter_than_a_clock_tick_is_stretched_to_one_tick():
+    import asyncio
+
+    async def probe():
+        asyncio.get_running_loop()._clock_resolution = WINDOWS_TICK
+        return K._kame_clock_tick()
+    assert asyncio.run(probe()) == WINDOWS_TICK
+    assert K._kame_clock_tick() == 0.0          # no running loop: nothing is added
+
+
+def test_a_raced_reply_ends_on_a_coarse_clock_as_it_does_on_a_fine_one(fake_models, vt, monkeypatch):
+    vt.loop._clock_resolution = WINDOWS_TICK
+    RR.test_a_widen_past_the_slow_bound_joins_on_the_reserve_key_and_no_leg_is_cut(fake_models, vt, monkeypatch)

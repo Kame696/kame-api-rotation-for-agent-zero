@@ -136,10 +136,10 @@ def test_a_busy_best_model_is_asked_on_a_clock_not_once_per_key_round_trip(world
     for model in (PRIMARY, E1, E2):
         proof = world.asked(model, before=1.0)
         later = world.asked(model, after=1.0)
-        assert 1 <= len(proof) <= 2, (model, proof)
+        assert 1 <= len(proof) <= 3, (model, proof)  # 1.9.0.4 (R4): a refused raced leg is asked once more
         assert 1 <= len(later) <= 3, (model, later)
         assert all(b - a >= 19.0 for a, b in zip(later, later[1:])), (model, later)
-        assert len(proof) + len(later) <= 5
+        assert len(proof) + len(later) <= 6
 
 
 def test_a_list_model_that_recovered_answers_at_the_next_ask_not_thirty_seconds_later(world):

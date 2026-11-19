@@ -37,6 +37,11 @@ MIN_FAILS = 2
 #: (k = trailing failures), at most RETEST_MAX_S.
 RETEST_FIRST_S = 600.0
 RETEST_MAX_S = 7200.0
+#: 1.9.0.4 (R1): first-word times kept on disk beside the outcomes, so a restart (or a fallback model that
+#: rarely answers) does not forget how fast a model is. Newest last, at most this many per (model, class);
+#: fewer than ``FIRST_WORDS_MIN`` say nothing.
+FIRST_WORDS_MAX = 20
+FIRST_WORDS_MIN = 5
 FILE_NAME = "model-health.json"
 SCHEMA = 1
 ENV_OFF = "KAME_NO_REMEMBERED_TROUBLE"
@@ -70,6 +75,26 @@ def _clean(events: Iterable[Any], cleared_at: float = 0.0) -> List[Event]:
     return sorted(by_at.items())
 
 
+def _clean_words(rows: Iterable[Any], cleared_at: float = 0.0) -> List[Tuple[float, float]]:
+    """1.9.0.4 (R1): ``[(at, seconds)]`` sorted by ``at``, deduped on ``round(at, 3)``, malformed rows dropped."""
+    by_at: Dict[float, float] = {}
+    for row in rows:
+        try:
+            at = round(float(row[0]), 3)
+            seconds = float(row[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if at <= cleared_at or not (seconds > 0.0) or seconds == float("inf") or seconds != seconds:
+            continue
+        by_at.setdefault(at, seconds)
+    return sorted(by_at.items())
+
+
+def _words_identity(key: str) -> str:
+    """``"<identity>|<0/1>"`` -> ``<identity>`` (the tombstones are kept per identity)."""
+    return key.rsplit("|", 1)[0]
+
+
 class ModelHealth:
     """Per-model recent outcomes, kept in ``model-health.json`` (see the module docstring)."""
 
@@ -80,6 +105,7 @@ class ModelHealth:
         self._calls_override = calls_path
         self._events: Dict[str, List[Event]] = {}
         self._cleared: Dict[str, float] = {}
+        self._words: Dict[str, List[Tuple[float, float]]] = {}      # 1.9.0.4 (R1)
         self._last_call: Dict[str, str] = {}
         self._loaded = False
         self._loaded_path: Optional[Path] = None
@@ -99,6 +125,7 @@ class ModelHealth:
             self._calls_override = calls_path
             self._events.clear()
             self._cleared.clear()
+            self._words.clear()
             self._last_call.clear()
             self._loaded = False
             self._loaded_path = None
@@ -154,12 +181,13 @@ class ModelHealth:
             return None
 
     @staticmethod
-    def _read_document(path: Path) -> Tuple[Dict[str, List[Event]], Dict[str, float]]:
+    def _read_document(path: Path) -> Tuple[Dict[str, List[Event]], Dict[str, float],
+                                            Dict[str, List[Tuple[float, float]]]]:
         try:
             with open(path, encoding="utf-8") as handle:
                 document = json.load(handle)
             if not isinstance(document, dict) or document.get("schema") != SCHEMA:
-                return {}, {}
+                return {}, {}, {}
             models = document.get("models")
             cleared_doc = document.get("cleared")
             cleared: Dict[str, float] = {}
@@ -174,14 +202,23 @@ class ModelHealth:
                 for ident, rows in models.items():
                     if isinstance(rows, list):
                         out[str(ident)] = _clean(rows, cleared.get(str(ident), 0.0))
-            return out, cleared
+            words: Dict[str, List[Tuple[float, float]]] = {}
+            words_doc = document.get("first_words")
+            if isinstance(words_doc, dict):      # 1.9.0.4 (R1)
+                for wkey, rows in words_doc.items():
+                    if isinstance(rows, list):
+                        cleaned = _clean_words(rows, cleared.get(_words_identity(str(wkey)), 0.0))
+                        if cleaned:
+                            words[str(wkey)] = cleaned[-FIRST_WORDS_MAX:]
+            return out, cleared, words
         except FileNotFoundError:
-            return {}, {}
+            return {}, {}, {}
         except Exception:
             logger.debug("kame: model-health.json is not readable; treated as empty", exc_info=True)
-            return {}, {}
+            return {}, {}, {}
 
-    def _merge_into_memory(self, models: Dict[str, List[Event]], cleared: Dict[str, float]) -> None:
+    def _merge_into_memory(self, models: Dict[str, List[Event]], cleared: Dict[str, float],
+                           words: Optional[Dict[str, List[Tuple[float, float]]]] = None) -> None:
         for ident, at in cleared.items():
             if at > self._cleared.get(ident, 0.0):
                 self._cleared[ident] = at
@@ -193,6 +230,15 @@ class ModelHealth:
                 self._events[ident] = merged
             else:
                 self._events.pop(ident, None)
+        # 1.9.0.4 (R1): first-word samples merge the same way (union, dedupe on the instant, the tombstone)
+        words = words or {}
+        for wkey in set(self._words) | set(words):
+            merged_w = _clean_words(list(self._words.get(wkey, [])) + list(words.get(wkey, [])),
+                                    self._cleared.get(_words_identity(wkey), 0.0))[-FIRST_WORDS_MAX:]
+            if merged_w:
+                self._words[wkey] = merged_w
+            else:
+                self._words.pop(wkey, None)
 
     def _document(self) -> Dict[str, Any]:
         """What the file holds, built from memory. Lock held."""
@@ -201,6 +247,11 @@ class ModelHealth:
                   for ident, events in self._events.items()}
         models = {ident: rows for ident, rows in models.items() if rows}
         document: Dict[str, Any] = {"schema": SCHEMA, "models": models}
+        kept = {k: [[at, sec] for at, sec in rows if now - at <= MAX_AGE_S or at > now][-FIRST_WORDS_MAX:]
+                for k, rows in self._words.items()}
+        kept = {k: rows for k, rows in kept.items() if rows}
+        if kept:
+            document["first_words"] = kept
         if self._cleared:
             document["cleared"] = {ident: at for ident, at in self._cleared.items() if now - at <= MAX_AGE_S}
         return document
@@ -237,11 +288,11 @@ class ModelHealth:
             with self._lock:
                 if path != self._loaded_path:
                     return False        # the data directory moved (configure, a test)
-            on_disk, cleared = self._read_document(path)
+            on_disk, cleared, on_disk_words = self._read_document(path)
             with self._lock:
                 if path != self._loaded_path:
                     return False
-                self._merge_into_memory(on_disk, cleared)
+                self._merge_into_memory(on_disk, cleared, on_disk_words)
                 document = self._document()
                 self._dirty = False     # a note from now on is dirty again and schedules its own write
             ok = self._put(path, document)
@@ -303,6 +354,56 @@ class ModelHealth:
             self._events[ident] = _clean(events)[-MAX_EVENTS:]
         logger.info("kame: remembered trouble seeded for %d models from %d rows", len(self._events), rows_read)
 
+    def _seed_words(self) -> bool:
+        """1.9.0.4 (R1, review): first-word times of answered streamed attempts in the journal's ``calls.jsonl``
+        (the last ``FIRST_WORDS_MAX`` per model within ``MAX_AGE_S``; a rescued row is the quiet leg's and a
+        background job's row says nothing about the chat, both left out). The class (thinking or not) is read from
+        the model's name, as the race reads it. Called with the lock held."""
+        files = self._calls_files()
+        if not files:
+            return False
+        try:
+            try:
+                from usr.plugins.api_rotation_by_kame import kame_hedging as hedging
+            except Exception:
+                import kame_hedging as hedging  # running from the plugin directory, e.g. in tests
+            reasoning_model = hedging.reasoning_model
+        except Exception:
+            return False
+        now = time.time()
+        seeded: Dict[str, List[Tuple[float, float]]] = {}
+        for each in files:
+            try:
+                with open(each, encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if (not isinstance(row, dict) or row.get("outcome") != "ok" or row.get("rescued")
+                                or row.get("channel") == "secondary"):
+                            continue
+                        identity, at = row.get("identity"), row.get("at")
+                        first = row.get("ms_to_first_sign") or row.get("ms_to_first_text")
+                        if (not identity or not isinstance(at, (int, float)) or now - at > MAX_AGE_S
+                                or not isinstance(first, (int, float)) or isinstance(first, bool) or first <= 0):
+                            continue
+                        if at <= self._cleared.get(str(identity), 0.0):
+                            continue
+                        parts = str(identity).split(":")
+                        model = parts[1] if len(parts) >= 2 else str(identity)
+                        wkey = f"{identity}|{1 if reasoning_model(model) else 0}"
+                        seeded.setdefault(wkey, []).append((round(float(at), 3), float(first) / 1000.0))
+            except OSError:
+                logger.debug("kame: could not read call timings to seed first words", exc_info=True)
+        for wkey, rows in seeded.items():
+            cleaned = _clean_words(rows)[-FIRST_WORDS_MAX:]
+            if cleaned:
+                self._words[wkey] = cleaned
+        if self._words:
+            logger.info("kame: first-word times seeded for %d models from calls.jsonl", len(self._words))
+        return bool(self._words)
+
     def ensure_loaded(self) -> None:
         """Lazy first load; re-read when another process changed the file."""
         try:
@@ -315,6 +416,7 @@ class ModelHealth:
                     self._cancel_timer()
                     self._events.clear()
                     self._cleared.clear()
+                    self._words.clear()
                     self._last_call.clear()
                     self._loaded = False
                     self._sig = None
@@ -333,12 +435,17 @@ class ModelHealth:
                             self._dirty = True
                             self._maybe_save()
                     else:
-                        models, cleared = self._read_document(path)
-                        self._merge_into_memory(models, cleared)
+                        models, cleared, words = self._read_document(path)
+                        self._merge_into_memory(models, cleared, words)
                         self._sig = sig
+                    if not self._words and self._seed_words():
+                        # 1.9.0.4 (R1, review): a file written before 1.9.0.4 has no first words yet - they are
+                        # learned once from calls.jsonl, so the first race already knows which model is fast.
+                        self._dirty = True
+                        self._maybe_save()
                 elif sig is not None and sig != self._sig:
-                    models, cleared = self._read_document(path)
-                    self._merge_into_memory(models, cleared)
+                    models, cleared, words = self._read_document(path)
+                    self._merge_into_memory(models, cleared, words)
                     self._sig = sig
         except Exception:
             logger.debug("kame: could not load remembered trouble", exc_info=True)
@@ -527,6 +634,52 @@ class ModelHealth:
             pass
         return best
 
+    # -- 1.9.0.4 (R1): how fast a model's first word comes, remembered ----------------
+
+    def note_first_word(self, identity: str, reasoning: bool, seconds: float,
+                        now: Optional[float] = None) -> None:
+        """Add one first-word time (a winner's, uncensored) of ``identity`` for its class (reasoning or not)."""
+        try:
+            if disabled() or not identity:
+                return
+            value = float(seconds)
+            if not (value > 0.0) or value == float("inf"):
+                return
+            at = round(time.time() if now is None else float(now), 3)
+            wkey = f"{identity}|{1 if reasoning else 0}"
+            with self._lock:
+                self.ensure_loaded()
+                if now is None:
+                    cleared_at = self._cleared.get(identity, 0.0)
+                    if at <= cleared_at:
+                        at = round(cleared_at + 0.001, 3)
+                rows = list(self._words.get(wkey, []))
+                rows.append((at, value))
+                self._words[wkey] = _clean_words(rows, self._cleared.get(identity, 0.0))[-FIRST_WORDS_MAX:]
+                self._dirty = True
+                self._maybe_save()
+        except Exception:
+            logger.debug("kame: could not note a first word", exc_info=True)
+
+    def first_word_stats(self, identity: str, reasoning: bool,
+                         now: Optional[float] = None) -> Optional[Tuple[float, float]]:
+        """``(median, p95)`` of the remembered first words within ``MAX_AGE_S``; ``None`` under ``FIRST_WORDS_MIN``."""
+        try:
+            if disabled() or not identity:
+                return None
+            stamp = time.time() if now is None else float(now)
+            with self._lock:
+                self.ensure_loaded()
+                rows = self._words.get(f"{identity}|{1 if reasoning else 0}", [])
+                recent = sorted(sec for at, sec in rows if stamp - at <= MAX_AGE_S)
+            if len(recent) < FIRST_WORDS_MIN:
+                return None
+            median = recent[len(recent) // 2]
+            p95 = recent[min(len(recent) - 1, int(len(recent) * 0.95))]
+            return float(median), float(p95)
+        except Exception:
+            return None
+
     def forget(self, match: Callable[[str], bool]) -> int:
         """Drop every identity ``match`` is True for, here and (by a tombstone) in the file."""
         try:
@@ -536,9 +689,12 @@ class ModelHealth:
                 self.ensure_loaded()
                 dropped = 0
                 stamp = round(time.time(), 3)
-                for ident in [i for i in list(self._events) if match(i)]:
+                word_idents = {_words_identity(k) for k in self._words}
+                for ident in [i for i in list(set(self._events) | word_idents) if match(i)]:
                     self._events.pop(ident, None)
                     self._last_call.pop(ident, None)
+                    for wkey in [k for k in self._words if _words_identity(k) == ident]:
+                        self._words.pop(wkey, None)      # 1.9.0.4 (R1): the samples go with the identity
                     self._cleared[ident] = stamp
                     dropped += 1
                 if dropped:
@@ -560,5 +716,5 @@ class ModelHealth:
 HEALTH = ModelHealth()
 atexit.register(HEALTH.flush)
 
-__all__ = ["HEALTH", "ModelHealth", "MAX_EVENTS", "MAX_AGE_S", "MIN_FAILS", "FILE_NAME", "SCHEMA", "ENV_OFF",
+__all__ = ["HEALTH", "ModelHealth", "MAX_EVENTS", "MAX_AGE_S", "MIN_FAILS", "FIRST_WORDS_MAX", "FIRST_WORDS_MIN", "FILE_NAME", "SCHEMA", "ENV_OFF",
            "disabled"]

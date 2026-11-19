@@ -478,7 +478,16 @@ class HedgeTracker:
         with self._lock:
             recent = sorted(l for t, l in self._samples.get(key, []))
         if len(recent) < _MIN_SAMPLES:
-            return None
+            # 1.9.0.4 (R1): what the disk remembers (a restart, or a model that rarely answers); memory with
+            # enough samples still wins above.
+            try:
+                try:
+                    from usr.plugins.api_rotation_by_kame import kame_model_health as _health
+                except Exception:
+                    import kame_model_health as _health  # running from the plugin directory, e.g. in tests
+                return _health.HEALTH.first_word_stats(identity, bool(reasoning))
+            except Exception:
+                return None
         median = recent[len(recent) // 2]
         p95 = recent[min(len(recent) - 1, int(len(recent) * 0.95))]
         return median, p95

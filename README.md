@@ -6,7 +6,7 @@
 
 ### All your API keys and models as one pool. A `429`, a spent quota or a slow model never stops your agent again.
 
-[![Version](https://img.shields.io/badge/version-1.9.0.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0.4-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -124,7 +124,7 @@ Watch it work in **API Rotation** (central menu).
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.3 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.4 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -461,7 +461,20 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 
 <a id="new"></a>
 <details>
-<summary><b>📣 What's new in 1.9.0.3</b></summary>
+<summary><b>📣 What's new in 1.9.0.4</b></summary>
+
+> **1.9.0.4 — the race asks the model that answers, when it usually answers.** Kept in step with Hermes 1.9.0.4.
+
+- **The race picks by record, not by place.** A model of your list that keeps failing is left out of the race
+  (looked at again when its retest is due); the model that usually answers fastest goes first.
+- **It joins when that model usually answers** - not at three times the first model's own time (with a slow
+  thinking model first: 31 s before, about 7 s now on the same list), never later than before.
+- **What KAME learns is kept** on disk (each model's last 20 first-word times, seven days) and seeded once from
+  the plugin's own call log.
+- **A raced model that fails is replaced at once** by another key of that model, once per reply.
+- **A raced reply never spins on a timer that fires early** (Windows, Python 3.11 and 3.12).
+- **What it costs:** with a first model that usually takes longer than a model below it, most replies send one
+  more request, to that faster model of your list. Saver turns the race off.
 
 > **1.9.0.3 — the screen says what happened.** Kept in step with Hermes 1.9.0.3.
 
@@ -585,6 +598,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.4** | The race asks the model that answers, when it usually answers | A model that keeps failing is left out of the race and the fastest model of your list goes first, at its own usual first word; first-word times kept on disk; a raced model that fails is replaced by another key; no timer spin on Windows Python 3.11/3.12 |
 | **v1.9.0.3** | The screen says what happened | Every failure row opens with the provider's own text, and a refused request says it is the request, not a key; the status line speaks every 5 s while the model is silent; the Speed line counts only backup requests; "API Rotation" on screen; clearer slow, overloaded and stopped words |
 | **v1.9.0.2** | A reply starts on a model that is not failing; the wait is said | A model due a second look is asked beside the reply instead of starting it; the waiting line gives the provider's own return time, or says the provider gave none; one closing row per call without an answer |
 | **v1.9.0.1** | A reply is never left waiting when something else could answer | A stalled reply moves on to the next free model of your list; one key or no list still gets its extra request; the only key busy is the model busy; an answer that began and went silent is cut and continued (`answer_quiet_s`, 45 s) |

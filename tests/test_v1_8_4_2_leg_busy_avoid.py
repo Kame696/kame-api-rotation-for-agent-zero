@@ -125,7 +125,9 @@ def test_the_model_that_refused_busy_beside_the_reply_is_not_handed_the_same_rep
     ctx, _ = make_ctx(fails_after(3.0))                      # the reply's own model: silent, then 503
     result = world.vt.run(K._kame_carousel(None, ctx), limit=60)
     assert result[0] == f"answer from {THIRD}"
-    assert len(asked(world, NEXT)) == 1, world.starts        # asked once, beside the reply - never again
+    # 1.9.0.4 (R4): once beside the reply and once more on another key (the replacement, refused too) - the
+    # hand-over that follows does not go back to it, so never a third time
+    assert len(asked(world, NEXT)) == 2, world.starts
     assert ctx.get("leg_busy") == [NEXT_ID]
     assert mh.HEALTH.summary(NEXT_ID) == (1, 1)              # one failure in the record, for one reply
 
