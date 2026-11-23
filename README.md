@@ -65,7 +65,7 @@ Before you remove the plugin, run `/kame-keys undo`: Agent Zero then keeps one v
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.5 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.6 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -447,6 +447,19 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 
 <a id="new"></a>
 <details>
+<summary><b>📣 What's new in 1.9.0.6</b></summary>
+
+> **1.9.0.6 — a reply is never stopped, many sessions never block each other.** Kept in step with Hermes 1.9.0.6.
+
+- **No give-up.** A best model that refuses every key waits for a busy list instead of ending the turn; a list model that said busy is asked again after 20 s.
+- **A refused request walks your list once** before its error is shown; a model your provider does not know (a typo) is named on the page with the provider's suggestion and skipped for six hours.
+- **Many chats and subordinate agents at once** never wait on each other: no KAME lock is held across a disk write, a sleep or a network call.
+- **The live line looks alive:** the reply's running time, a pulsing dot in the chip, and `✕ no answer - <reason>` for ten seconds when a reply ends without an answer.
+- **ⓘ How to install or configure:** the round "i" at the end of the page's tabs opens a five-step guide.
+</details>
+
+<a id="new-1905"></a>
+<details>
 <summary><b>📣 What's new in 1.9.0.5</b></summary>
 
 > **1.9.0.5 — while every key rests, one is asked again.** Kept in step with Hermes 1.9.0.5. Verified on Agent Zero v2.16.
@@ -596,6 +609,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.6** | A reply is never stopped, many sessions never block each other | A refused best model waits for a busy list; a busy list model is asked again; a refused request walks the list once; a mistyped model is named and skipped; no lock held across disk, sleep or network; the live line shows the running time, a pulsing dot and the end state; ⓘ How to install or configure |
 | **v1.9.0.5** | While every key rests, one is asked again | After 20 s (then 40, 80, 160, every 300 s) the waiting request goes to one resting key, so a healthy provider answers at once; an account-wide hold needs a second model; reset says what it cleared; keys are checked when added; `/kame-keys undo` leaves Agent Zero with one key per provider; verified on Agent Zero v2.16 |
 | **v1.9.0.4** | The race asks the model that answers, when it usually answers | A model that keeps failing is left out of the race and the fastest model of your list goes first, at its own usual first word; first-word times kept on disk; a raced model that fails is replaced by another key; no timer spin on Windows Python 3.11/3.12 |
 | **v1.9.0.3** | The screen says what happened | Every failure row opens with the provider's own text, and a refused request says it is the request, not a key; the status line speaks every 5 s while the model is silent; the Speed line counts only backup requests; "API Rotation" on screen; clearer slow, overloaded and stopped words |
