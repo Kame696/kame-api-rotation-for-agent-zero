@@ -5,6 +5,12 @@
 Kept in step with the Hermes 1.9.0.6 changes that apply here. Agent Zero's KAME walks the whole model list itself, so the
 Hermes hand-over limit does not exist here; this version proves the same promise and closes what the proof found.
 
+- **A local main model is never a switch target (issue #1).** With a local model as the preset's main model (llama.cpp) and two Gemini models in the
+  fallback list, a chat on Gemini that found it busy was moved to the local main model, and llama.cpp reloaded its
+  model for minutes. A main model that runs on your machine or network (a local server provider such as Ollama,
+  llama.cpp, LM Studio, vLLM, or an `api_base` on a loopback, private or `.local` address) is now a switch target only
+  when it is written in the fallback list. A reply that starts on it still walks the list. Same rule as Hermes. The
+  page's Fallback models card says so.
 - **Locks audited.** No KAME lock is held across an await, a sleep or a network call. The two places that wrote to
   disk with the shared lock held (the pool-health file after a refusal or an answer, and the first read of the
   prompt-cache table) now do it after the lock is released; a slow disk can no longer stop other conversations.

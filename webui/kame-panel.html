@@ -644,7 +644,7 @@
           <div class="kame-card-title">Fallback models</div>
           <div class="kame-dim kame-small">
             These models answer when the model in use cannot. If a chat runs on another model, your
-            main model is tried first, then this list in order. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.
+            main model is tried first, then this list in order. A local main model (Ollama, llama.cpp, LM Studio) is tried only if it is in this list. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.
             Empty list: nothing ever switches.
           </div>
 

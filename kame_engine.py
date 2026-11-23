@@ -9012,12 +9012,37 @@ def _kame_ladder_after(ctx, identity=None) -> list:
     return _kame_prefer_not_risky(_kame_ladder_raw(ctx, identity))   # 1.8.4.2 (S1d): not failing first
 
 
+#: 1.9.0.6 (issue #1, a user's llama.cpp): providers that run a model on the user's own machine. Twin of
+#: Hermes' ``core/fallback_chain.LOCAL_PROVIDERS``.
+_KAME_LOCAL_PROVIDERS = frozenset({"ollama", "llama_cpp", "llamacpp", "llama.cpp", "llama-cpp", "lmstudio",
+                                   "lm_studio", "lm-studio", "vllm", "sglang", "localai", "koboldcpp", "tabbyapi",
+                                   "oobabooga", "text-generation-webui", "jan", "gpt4all", "mlx", "local"})
+_KAME_PRIVATE_HOST = re.compile(r"://(localhost|127\.|0\.0\.0\.0|\[::1\]|host\.docker\.internal|10\.|192\.168\.|"
+                                r"172\.(1[6-9]|2\d|3[01])\.|[^/:]+\.local\b)", re.I)
+
+
+def _kame_entry_is_local(entry) -> bool:
+    """1.9.0.6 (issue #1): a model served on the user's own machine or network. It has no key to rotate and
+    no rate limit, and a request it was not expecting can make the server load another model for minutes:
+    KAME never moves a reply to one the user did not put in the fallback list."""
+    try:
+        if str((entry or {}).get("provider") or "").strip().lower() in _KAME_LOCAL_PROVIDERS:
+            return True
+        return bool(_KAME_PRIVATE_HOST.search(str((entry or {}).get("api_base") or "")))
+    except Exception:
+        return False
+
+
 def _kame_ladder_raw(ctx, identity=None) -> list:
     """``_kame_ladder_after`` in the user's own order, before the models remembered as failing are moved back."""
     if not _KAME_FALLBACK_MODELS:
         return []
     origin = identity or ctx.get("identity") or ""
     main = _kame_main_entry(ctx)
+    if main and _kame_entry_is_local(main):
+        # 1.9.0.6 (issue #1): a local main model is a switch target only when the user wrote it in the list
+        # (then it comes from the list below, in the user's order).
+        main = None
     # 1.8.3.1 (review R7): inside a ladder hop, a model this reply already left (the model it started on and
     # every entry the walk tried before this one) is not a candidate again - like Hermes' `after()`.
     hop = _KAME_FALLBACK_HOP.get()
