@@ -7,6 +7,9 @@ not a newly accepted fingerprint generated to hide a failure.
   sole fingerprint difference from later hosts is the adaptive
   LiteLLMChatWrapper.unified_turn body; native request, stream and result
   execution belong to Agent Zero.
+- v2.15.json is a0_compat.json from published tag v1.9.0.4, verified against v2.15.
+  Its one difference from v2.16 is helpers.dotenv.save_dotenv_value: v2.16 only adds a
+  secrets-cache refresh after the write (accepted in 1.9.0.5).
 - v2.14.json is a0_compat.json from published commit fb47394 (1.8.3.1),
   verified against v2.14. Agent Zero v2.13 matches it, and the v2.13 job reads it.
 

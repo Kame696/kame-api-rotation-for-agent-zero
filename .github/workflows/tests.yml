@@ -42,6 +42,9 @@ jobs:
             baseline: tests/host_baselines/v2.14.json
           - tag: v2.15
             sha: ba9b67df0f54ac78106ae85c552ef5d2458f7c9a
+            baseline: tests/host_baselines/v2.15.json
+          - tag: v2.16
+            sha: 2b0b3a416d80638379dc575798a4174ab4d3e1d9
             baseline: a0_compat.json
     env:
       PYTHONIOENCODING: utf-8
