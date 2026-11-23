@@ -52,7 +52,7 @@ def test_the_sentence_counts_keys_by_kind_the_longest_hold_account_holds_and_bus
     count = K.reset_pool()
     assert count == 8                                                          # key rows: 4 keys on 2 models
     assert sentence() == ("pool reset: 4 keys resting (daily 2, out of credit 1, per minute 1), "
-                          "longest 60 min, 1 account hold, 1 busy window")
+                          "longest 1 h, 1 account hold, 1 busy window")
     assert K._KAME_ACCOUNT_HOLDS == {}
     assert K._pool_has_ready_key(A, KEYS) and K._pool_has_ready_key(B, KEYS)
 

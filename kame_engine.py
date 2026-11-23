@@ -1548,12 +1548,15 @@ def _kame_reset_sentence(now: float) -> str:
         for word in resting.values():
             by_word[word] = by_word.get(word, 0) + 1
         kinds = ", ".join(f"{w} {n}" for w, n in sorted(by_word.items(), key=lambda item: (-item[1], item[0])))
-        if longest < 60:
+        # the unit is chosen on the ROUNDED number, so a one-hour hold reads "1 h" whether the clock tick
+        # left 3599.99 s or exactly 3600 s (Windows' 15.6 ms clock gave both in CI)
+        minutes = round(longest / 60)
+        if longest < 59.5:
             left = f"{longest:.0f} s"
-        elif longest < 3600:
-            left = f"{longest / 60:.0f} min"
+        elif minutes < 60:
+            left = f"{minutes} min"
         else:
-            left = f"{longest / 3600:.1f} h"
+            left = f"{longest / 3600:.1f}".rstrip("0").rstrip(".") + " h"
         parts = [f"pool reset: {_kame_plural(len(resting), 'key')} resting ({kinds}), longest {left}"]
     if accounts:
         parts.append(_kame_plural(accounts, "account hold"))
