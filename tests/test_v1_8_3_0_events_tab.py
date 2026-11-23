@@ -223,7 +223,9 @@ def test_the_legend_lists_every_kind_agent_zero_records_in_hermes_order_with_its
                    "Setting changed", "Answer continued", "Provider outage", "Answer cut", "Fallback",
                    "Passed to Agent Zero", "Next key", "All keys resting",
                    # 1.8.4.0 (E1): Agent Zero only, after Hermes' kinds so their order is untouched
-                   "Prompt cache off"]
+                   "Prompt cache off",
+                       # 1.9.0.5 (E1): the live re-test, Hermes' word for it
+                       "Asked again"]
 
 
 # -- the background tab -------------------------------------------------------------------------

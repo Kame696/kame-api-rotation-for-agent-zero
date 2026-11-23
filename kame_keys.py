@@ -413,11 +413,21 @@ def backup(path: Path) -> Optional[str]:
 
 
 def add(path: Path, provider: str, keys: List[str],
-        save: Callable[[str, str], None], rejected: Optional[List[str]] = None) -> str:
+        save: Callable[[str, str], None], rejected: Optional[List[str]] = None,
+        check: bool = False) -> str:
+    """Merge ``keys`` into the provider's line and say what happened.
+
+    ``check`` (1.9.0.5, D2) is True only for an explicit ``/kame-keys add`` or ``import``: each NEW Google key
+    is then asked once. Never at start, never from a loop.
+    """
     # Agent Zero runs commands in one process. Serialize read/merge/save so
     # two imports cannot both read the same old list and lose one addition.
+    added_keys: List[str] = []
     with _IMPORT_LOCK:
-        message = _add_locked(path, provider, keys, save)
+        message = _add_locked(path, provider, keys, save, added_keys)
+    if check and added_keys and canonical_provider(provider, keys) == "google":
+        # outside the lock: up to 10 s per key must not hold up another import
+        message += "\n" + "\n".join(_check_with_google(added_keys))
     if rejected:
         # Masked like every key: a rejected token is usually junk, and
         # "usually" is not worth betting a key on.
@@ -428,32 +438,154 @@ def add(path: Path, provider: str, keys: List[str],
 
 
 def _add_locked(path: Path, provider: str, keys: List[str],
-                save: Callable[[str, str], None]) -> str:
-    """Merge `keys` into the provider's line. Returns the message to show."""
+                save: Callable[[str, str], None], added_out: Optional[List[str]] = None) -> str:
+    """Merge `keys` into the provider's line. Returns the message to show; the keys written go to ``added_out``."""
+    keys = [k for k in dict.fromkeys(str(k or "").strip() for k in keys) if k]   # 1.9.0.5: no empty item, no repeat
     if not keys:
         return "No key found in that text."
     provider = canonical_provider(provider, keys) if provider else guess_provider(keys)
     if not provider:
         return ("Which provider? The keys do not say. Usage: "
                 "`/kame-keys add <provider> key1,key2` — e.g. `openai`, `deepseek`.")
+    # 1.9.0.5 (D2, as the Hermes port): a key of the wrong shape is named and still written; the user decides
+    wrong = [k for k in keys if shape_problem(provider, k)]
+    notes = [f"- key {_tail(k)} {shape_problem(provider, k)}; it is written anyway, check it." for k in wrong]
     env = read_env(path)
     var = env_var_for(provider, env)
     merged, added = plan_add(env.get(var, ""), keys)
     if not added:
-        return f"`{var}` already holds all {len(keys)} key(s). Nothing changed."
+        return "\n".join([f"`{var}` already holds all {len(keys)} key(s). Nothing changed."] + notes)
     existed = path.is_file()
     saved = backup(path)
     if existed and saved is None:
         return "Could not create a backup of the existing .env. Nothing changed."
     save(var, ",".join(merged))
+    if added_out is not None:
+        added_out.extend(added)
     lines = [f"Added {len(added)} key(s) to `{var}` — {len(merged)} in the pool now."]
     lines += [f"- {mask(k)}" for k in added]
+    lines += notes
     skipped = len(keys) - len(added)
     if skipped:
         lines.append(f"{skipped} already there, skipped.")
     if saved:
         lines.append(f"Backup of the previous file: `usr/{saved}` (plaintext, last {MAX_BACKUPS} kept).")
     lines.append("KAME picks them up on the next call.")
+    return "\n".join(lines)
+
+
+# --- 1.9.0.5 (D2, decisions/0036): the keys are checked when they are added, never at start ------------------------
+
+#: The shape a provider's keys have, by Agent Zero's provider id: ``(prefix, length, exact)``. Google's classic
+#: ``AIza`` key is exactly 39 characters; its newer ``AQ.`` keys are at least 40. Every other provider is judged
+#: only by "not empty".
+_KEY_SHAPES = {
+    "google": (("AIza", 39, True), ("AQ.", 40, False)),
+}
+_PROVIDER_LABELS = {"google": "Google"}
+_PROBE_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
+_PROBE_HEADER = "x-goog-api-key"
+_PROBE_TIMEOUT_S = 10.0
+_REFUSING_STATUSES = frozenset({400, 401, 403})
+
+
+def shape_problem(provider: str, key: str) -> Optional[str]:
+    """``"does not look like a Google key"`` when ``key`` breaks the provider's shape, else ``None``.
+
+    Pure and offline. A provider with no listed shape accepts any non-empty key; an empty one is refused for
+    every provider. ``gemini`` is ``google`` here, as everywhere in this module.
+    """
+    name = canonical_provider(provider)
+    label = _PROVIDER_LABELS.get(name) or name or "provider"
+    text = str(key or "").strip()
+    if not text:
+        return f"does not look like a {label} key"
+    shape = _KEY_SHAPES.get(name)
+    if shape is None:
+        return None
+    for prefix, length, exact in shape:
+        if text.startswith(prefix) and (len(text) == length if exact else len(text) >= length):
+            return None
+    return f"does not look like a {label} key"
+
+
+def http_status(url: str, headers: Optional[Dict[str, str]] = None,
+                timeout: float = _PROBE_TIMEOUT_S) -> Optional[int]:
+    """One GET and its status code; ``None`` when nothing answered. The tests replace this function.
+
+    The key travels in a header, never in the URL, and an exception is reduced to "no answer": nothing here can
+    put a key in a log.
+    """
+    import urllib.error
+    import urllib.request
+    try:
+        request = urllib.request.Request(url, headers=dict(headers or {}), method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            return int(reply.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except Exception:
+        return None
+
+
+def _tail(key: str) -> str:
+    return f"...{str(key)[-4:]}"
+
+
+def _check_with_google(added: List[str]) -> List[str]:
+    """Ask Google once per NEW key; the lines to add to the reply. Never raises."""
+    refused, unchecked = [], 0
+    for key in added:
+        try:
+            status = http_status(_PROBE_URL, {_PROBE_HEADER: key}, _PROBE_TIMEOUT_S)
+        except Exception:
+            status = None
+        if status in _REFUSING_STATUSES:
+            refused.append((key, int(status)))
+        elif status is None or not 200 <= int(status) < 300:
+            unchecked += 1
+    lines = [f"- key {_tail(k)} was rejected by Google (HTTP {code}). It was added anyway; "
+             "remove it if it is wrong." for k, code in refused]
+    if unchecked:
+        lines.append(f"- could not check {unchecked} key(s) with Google just now (no answer); they were added.")
+    return lines
+
+
+# --- 1.9.0.5 (D1, decisions/0036): leave Agent Zero clean ------------------------------------------------------------
+
+def undo(path: Path, provider: str, save: Callable[[str, str], None]) -> str:
+    """Keep only the FIRST key of every key line KAME rotates (or of ``provider``'s line), after a backup.
+
+    If the plugin is removed while ``API_KEY_GOOGLE=k1,k2,k3`` is still in ``usr/.env``, Agent Zero would send the
+    whole list as one key. The keys taken out stay in the backup. Counts and masked keys only.
+    """
+    with _IMPORT_LOCK:
+        return _undo_locked(path, provider, save)
+
+
+def _undo_locked(path: Path, provider: str, save: Callable[[str, str], None]) -> str:
+    rows = pools(path)
+    wanted = canonical_provider(provider) if str(provider or "").strip() else ""
+    if wanted:
+        rows = [row for row in rows if canonical_provider(row[0]) == wanted]
+        if not rows:
+            return f"There is no key line for `{wanted}` in `usr/.env`. Nothing changed."
+    many = [row for row in rows if len(row[2]) > 1]
+    if not many:
+        return "Nothing to undo: every key line holds a single key already, so you can remove the plugin."
+    existed = path.is_file()
+    saved = backup(path)
+    if existed and saved is None:
+        return "Could not create a backup of the existing .env. Nothing changed."
+    lines = [f"Kept the first key of {len(many)} line(s) in `usr/.env`:"]
+    for _provider, variable, found in many:
+        save(variable, found[0])
+        out = ", ".join(mask(k) for k in found[1:])
+        lines.append(f"- `{variable}`: kept 1 of {len(found)} ({mask(found[0])}); took out {out}")
+    if saved:
+        lines.append(f"The keys taken out are in the backup of the previous file: `usr/{saved}` "
+                     f"(plaintext, last {MAX_BACKUPS} kept).")
+    lines.append("Agent Zero now reads one valid key per provider; you can now remove the plugin.")
     return "\n".join(lines)
 
 

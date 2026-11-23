@@ -1,3 +1,16 @@
+# Agent Zero 1.9.0.5 validation
+
+## 1.9.0.5 - verified runtime
+
+Offline only. No real Agent Zero session was run for this version. The whole offline suite (`tests/run_all.py`):
+104 / 104 suites, about 370 s of suite time (the one failure of the first pass, an old key-add test, was the shape
+rule of the first D2 draft; it passes with the final rule). New tests: `test_v1_9_0_5_retest`,
+`account_confirm`, `reset_report`, `key_check`, `undo_keys`, `chat_notice`. `tools/parity_check.py`: clean (one
+new written difference, `live_chat_line`); `tools/authorship_check.py`: ok. `tools/a0_upgrade_check.py` on Agent
+Zero v2.16: 14 of 15 patch points unchanged (`save_dotenv_value` only adds a secrets-cache refresh, accepted),
+27 of 27 host facts, live harness green. `chaos` and `race_chaos` were not run for this version (nothing in the
+race changed). Not covered: a real key and a real provider behind the re-test.
+
 # Agent Zero 1.9.0.1 validation
 
 ## 1.9.0.1 - verified runtime

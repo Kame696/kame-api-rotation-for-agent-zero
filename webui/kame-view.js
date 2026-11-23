@@ -60,6 +60,7 @@ export const MOVE_ICON = {
   model_switch: "→",
   quarantine: "■",
   recovery: "✓",
+  retest: "↻",
   rotation: "↻",
   storm: "!",
   stream_drop: "↻",
@@ -85,6 +86,7 @@ export const KIND_WORDS = {
   stitch: "Answer continued",
   gave_up: "Stopped waiting",
   cache_off: "Prompt cache off",
+  retest: "Asked again",
 };
 
 /** The engine's short reason in a person's words. */

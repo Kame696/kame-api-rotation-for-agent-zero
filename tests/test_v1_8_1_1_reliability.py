@@ -178,7 +178,7 @@ def test_engine_account_hold_reaches_new_model_and_success_preserves_other_model
     # model-b hold back instead of assuming the old flat five minutes.
     model_b_until = K._KAME_KEY_HEALTH["p:model-b"]["keys"][key]["model_until"]
     assert model_b_until > time.time()
-    K._mark_key_health("p:model-a", key, False, 300, "per_minute", scope="account")
+    K._mark_key_health("p:model-a", key, False, 300, "per_minute", sized_by="provider", scope="account")
     assert K._get_identity_state("p:model-new", [key])["keys"][key]["sick_until"] > time.time() + 250
     K._mark_key_health("p:model-a", key, True)
     assert K._KAME_KEY_HEALTH["p:model-a"]["keys"][key]["sick_until"] <= time.time()
@@ -192,7 +192,7 @@ def test_server_thaw_shortens_only_model_component_and_persists_it():
     identity = "p:model-a"
     K._get_identity_state(identity, ["ok", key])
     K._mark_key_health(identity, key, False, 90, "server")
-    K._mark_key_health(identity, key, False, 300, "per_minute", scope="account")
+    K._mark_key_health(identity, key, False, 300, "per_minute", sized_by="provider", scope="account")
     account_before = K._KAME_ACCOUNT_HOLDS[("p", key)]["until"]
     assert K._thaw_server_cooled_keys(identity, "ok", new_cooldown=3) == 1
     kd = K._KAME_KEY_HEALTH[identity]["keys"][key]

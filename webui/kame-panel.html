@@ -340,6 +340,7 @@
             <button class="btn" title="Every API Rotation setting goes back to its built-in default." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'reset_all'">Reset to defaults</button>
             <button class="btn" title="Only clears rotation and quarantine; it does not delete any key." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'clear_pool_all'">Clear pool</button>
             <button class="btn" title="Empties the event list on the Events page. Nothing else changes." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.act('clear_events')">Clear events</button>
+            <button class="btn" title="Before you remove the plugin: keeps only the first key of every key line in usr/.env, so Agent Zero reads one valid key per provider. A backup is made first." :disabled="$store.kamePanel.busy" @click="$store.kamePanel.confirming = 'undo_keys'">Remove API Rotation's keys</button>
             <button class="btn" x-show="$store.kamePanel.advancedCount || $store.kamePanel.showAdvanced"
                     title="Settings that are already tuned or only one unusual setup needs. Hidden unless you changed them."
                     @click="$store.kamePanel.showAdvanced = !$store.kamePanel.showAdvanced"
@@ -355,6 +356,12 @@
             <b class="kame-small">Clear the pool?</b>
             <span class="kame-small">Every key starts again as if it had never been tried: cooldowns, quarantines and the request history are forgotten. This does not delete any key, and a key that is genuinely spent will simply be refused again.</span>
             <button class="btn btn-ok" @click="$store.kamePanel.act('clear_pool')">Clear the pool</button>
+            <button class="btn" @click="$store.kamePanel.confirming = ''">Cancel</button>
+          </div>
+          <div class="kame-confirm" x-show="$store.kamePanel.confirming === 'undo_keys'">
+            <b class="kame-small">Remove API Rotation's keys?</b>
+            <span class="kame-small">Run this before you remove the plugin. Every key line in usr/.env keeps only its first key, so Agent Zero reads one valid key per provider. The other keys stay in a backup file beside it. Nothing is deleted.</span>
+            <button class="btn btn-ok" @click="$store.kamePanel.act('undo_keys')">Keep one key per provider</button>
             <button class="btn" @click="$store.kamePanel.confirming = ''">Cancel</button>
           </div>
         </div>

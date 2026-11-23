@@ -68,8 +68,8 @@ def ours(key: str, field: str) -> str:
     return S.DETAIL.get(key, "")
 
 
-def test_the_table_has_a_twin_for_every_hermes_key_but_the_two_without_a_function_here():
-    assert HERMES_ONLY == {"resolver_disabled", "quota_id_disabled"}
+def test_the_table_has_a_twin_for_every_hermes_key_but_the_three_without_a_function_here():
+    assert HERMES_ONLY == {"resolver_disabled", "quota_id_disabled", "live_chat_line"}
     for key, mine in TWIN.items():
         assert mine in S.SETTINGS, f"{key} has no Agent Zero twin ({mine})"
     assert "never_fall_back_to_another_model" in S.SETTINGS

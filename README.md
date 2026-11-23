@@ -6,8 +6,8 @@
 
 ### All your API keys and models as one pool. A `429`, a spent quota or a slow model never stops your agent again.
 
-[![Version](https://img.shields.io/badge/version-1.9.0.4-blue.svg)](CHANGELOG.md)
-[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.15-purple.svg)](#verified)
+[![Version](https://img.shields.io/badge/version-1.9.0.5-blue.svg)](CHANGELOG.md)
+[![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.16-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Kame696/kame-api-rotation-for-agent-zero?style=social)](https://github.com/Kame696/kame-api-rotation-for-agent-zero/stargazers)
@@ -18,7 +18,89 @@
 
 </div>
 
+KAME puts many API keys and models into one pool, so rate limits and quota errors never stop your agent. Free, zero setup.
+
+<a id="install-fast"></a>
+## ⚡ Install in 3 steps
+
+1. **Install.** Agent Zero → **Plugins** → install from the GitHub URL `https://github.com/Kame696/kame-api-rotation-for-agent-zero` (or the zip of the [latest release](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases/latest)).
+2. **Paste your keys,** comma-separated, in one provider's API key field: `key1,key2,key3`.
+3. **Done.** Nothing to configure. Watch it in **API Rotation** (central menu).
+
+## What you get
+
+| | |
+|---|---|
+| 🔁 **More quota** | every key, project and account is one pool; a `429` moves the call to the next healthy key |
+| ⚡ **Less waiting** | a late or silent reply is asked again on another key or your next model |
+| 🔀 **Your model leads** | every reply starts on the model you picked; your fallback list takes over only when it is busy |
+| 👀 **You see it all** | the chat and the **API Rotation** page say which key rested, why, and when it is back |
+
+Before you remove the plugin, run `/kame-keys undo`: Agent Zero then keeps one valid key per provider.
+
+> **🔑 All your keys in one field, no command**
+>
+> 1. In Agent Zero open **Settings → Model Provider** (or the file `/a0/usr/.env`).
+> 2. In your provider's **API key** field, **delete the key that is there** and paste **all your keys for that provider, separated by commas**.
+> 3. Save. Do the same for every provider you use.
+>
+> ```
+> API_KEY_GOOGLE=AIza...key1,AIza...key2,AIza...key3
+> API_KEY_OPENROUTER=sk-or-...key1,sk-or-...key2
+> ```
+>
+> Keys from different projects and accounts each bring their own quota. Prefer the chat? `/kame-keys add AIza...,AIza...` does the same.
+
+<details>
+<summary><b>Step by step — install by hand, add your keys</b></summary>
+<a id="install"></a>
+
+### Install
+
+**From the Agent Zero Plugin Hub** — search for **KAME** and install.
+
+**Or by hand** — copy this repository into your Agent Zero's user plugins folder as `api_rotation_by_kame`:
+
+```
+/a0/usr/plugins/api_rotation_by_kame/
+```
+
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.5 — ACTIVE` in the log.
+
+| | |
+|---|---|
+| **Needs** | Agent Zero v1.14+ or the V2 line — nothing else, no extra package |
+| **Configuration** | none required |
+| **Uninstall** | run `/kame-keys undo` first (Agent Zero then keeps one key per provider), then remove the folder; `hooks.py` reverts every patch |
+<a id="keys"></a>
+
+### Add your keys
+
+In **Agent Zero → Settings → Model Provider**, paste all your keys into that provider's **one** API key field, separated by commas:
+
+```
+key1,key2,key3,key4
+```
+
+Or in `/a0/usr/.env`:
+
+```
+API_KEY_GOOGLE=AIzaSy...aaa,AIzaSy...bbb,AIzaSy...ccc
+```
+
+One key works too: a stalled reply is asked again on it and a busy model hands the reply to your next one; more keys add rotation.
+
+Or from any chat: `/kame-keys add AIza...,AIza...` (the provider is read from the
+prefix; name it when it cannot be: `/kame-keys add deepseek sk-...,sk-...`), or
+`/kame-keys import google keys.txt` to keep the keys out of the chat history.
+Keys already there are skipped, and the previous `.env` is saved beside it as
+`.env.kame-<timestamp>.bak` (plaintext like the `.env`, last 5 kept).
+
+</details>
+
 ---
+
+## Details
 
 ## 🎯 Two jobs in one plugin
 
@@ -59,103 +141,6 @@ Most key rotators cycle keys in order and retry on a timer. KAME decides from th
 | A key spent on one model | benched everywhere | **still used on your other models** |
 | All keys resting | error, run over | **sleeps until the first recovery, and says so in the chat** |
 | Longest a healthy key can be lost | whatever the provider claimed | **1 hour** (`max_hold_seconds`) |
-
-<a id="install-fast"></a>
-## ⚡ Install in 1 minute
-
-<table>
-<tr>
-<td width="33%" valign="top">
-
-### 1️⃣ Install
-
-Agent Zero → **Plugin Hub** → search **KAME** → *Install*.
-
-Or unzip the [latest release](https://github.com/Kame696/kame-api-rotation-for-agent-zero/releases/latest) into `/a0/usr/plugins/`.
-
-</td>
-<td width="33%" valign="top">
-
-### 2️⃣ Paste your keys
-
-In the provider's **API key** field, put **all your keys, separated by commas**:
-
-`key1,key2,key3`
-
-No command needed (details below the table).
-
-</td>
-<td width="33%" valign="top">
-
-### 3️⃣ That's it
-
-Everything is **automatic** — no settings to learn.
-
-Watch it work in **API Rotation** (central menu).
-
-</td>
-</tr>
-</table>
-
-> **🔑 All your keys in one field, no command**
->
-> 1. In Agent Zero open **Settings → Model Provider** (or the file `/a0/usr/.env`).
-> 2. In your provider's **API key** field, **delete the key that is there** and paste **all your keys for that provider, separated by commas**.
-> 3. Save. Do the same for every provider you use.
->
-> ```
-> API_KEY_GOOGLE=AIza...key1,AIza...key2,AIza...key3
-> API_KEY_OPENROUTER=sk-or-...key1,sk-or-...key2
-> ```
->
-> Keys from different projects and accounts each bring their own quota. Prefer the chat? `/kame-keys add AIza...,AIza...` does the same.
-
-<details>
-<summary><b>Step by step — install by hand, add your keys</b></summary>
-<a id="install"></a>
-
-### Install
-
-**From the Agent Zero Plugin Hub** — search for **KAME** and install.
-
-**Or by hand** — copy this repository into your Agent Zero's user plugins folder as `api_rotation_by_kame`:
-
-```
-/a0/usr/plugins/api_rotation_by_kame/
-```
-
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.4 — ACTIVE` in the log.
-
-| | |
-|---|---|
-| **Needs** | Agent Zero v1.14+ or the V2 line — nothing else, no extra package |
-| **Configuration** | none required |
-| **Uninstall** | remove the folder; `hooks.py` reverts every patch |
-<a id="keys"></a>
-
-### Add your keys
-
-In **Agent Zero → Settings → Model Provider**, paste all your keys into that provider's **one** API key field, separated by commas:
-
-```
-key1,key2,key3,key4
-```
-
-Or in `/a0/usr/.env`:
-
-```
-API_KEY_GOOGLE=AIzaSy...aaa,AIzaSy...bbb,AIzaSy...ccc
-```
-
-One key works too: a stalled reply is asked again on it and a busy model hands the reply to your next one; more keys add rotation.
-
-Or from any chat: `/kame-keys add AIza...,AIza...` (the provider is read from the
-prefix; name it when it cannot be: `/kame-keys add deepseek sk-...,sk-...`), or
-`/kame-keys import google keys.txt` to keep the keys out of the chat history.
-Keys already there are skipped, and the previous `.env` is saved beside it as
-`.env.kame-<timestamp>.bak` (plaintext like the `.env`, last 5 kept).
-
-</details>
 
 <a id="screens"></a>
 ## 🖥️ What you see
@@ -421,6 +406,7 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
+| **1.9.0.5** — offline suites | the full suite (104 files) green on a virtual clock, no real Agent Zero; checked against Agent Zero v2.16 (14 of 15 patch points unchanged, 27 of 27 host facts, live harness green) |
 | **1.9.0.3** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (95 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.3 |
 | **1.9.0.2** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (91 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.2 |
 | **1.9.0.2** — native Agent Zero | the plugin loaded and exercised on Agent Zero v2.12, v2.13 and v2.15 (CI): green |
@@ -460,6 +446,18 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 </details>
 
 <a id="new"></a>
+<details>
+<summary><b>📣 What's new in 1.9.0.5</b></summary>
+
+> **1.9.0.5 — while every key rests, one is asked again.** Kept in step with Hermes 1.9.0.5. Verified on Agent Zero v2.16.
+
+- **A wait is no longer silent.** When every key rests on a label with no time from the provider, the waiting request is sent to one of them after 20 s, then 40, 80, 160, and every 300 s: a healthy provider answers at once, a refused request costs nothing.
+- **An account-wide hold needs a second model** (or a deadline the provider stated, or an account out of credit).
+- **Reset says what it cleared**, in counts.
+- **Keys are checked when you add them**, never at start.
+- **`/kame-keys undo`** keeps one key per provider, so you can remove the plugin cleanly.
+</details>
+
 <details>
 <summary><b>📣 What's new in 1.9.0.4</b></summary>
 
@@ -598,6 +596,7 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
+| **v1.9.0.5** | While every key rests, one is asked again | After 20 s (then 40, 80, 160, every 300 s) the waiting request goes to one resting key, so a healthy provider answers at once; an account-wide hold needs a second model; reset says what it cleared; keys are checked when added; `/kame-keys undo` leaves Agent Zero with one key per provider; verified on Agent Zero v2.16 |
 | **v1.9.0.4** | The race asks the model that answers, when it usually answers | A model that keeps failing is left out of the race and the fastest model of your list goes first, at its own usual first word; first-word times kept on disk; a raced model that fails is replaced by another key; no timer spin on Windows Python 3.11/3.12 |
 | **v1.9.0.3** | The screen says what happened | Every failure row opens with the provider's own text, and a refused request says it is the request, not a key; the status line speaks every 5 s while the model is silent; the Speed line counts only backup requests; "API Rotation" on screen; clearer slow, overloaded and stopped words |
 | **v1.9.0.2** | A reply starts on a model that is not failing; the wait is said | A model due a second look is asked beside the reply instead of starting it; the waiting line gives the provider's own return time, or says the provider gave none; one closing row per call without an answer |

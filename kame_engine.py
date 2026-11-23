@@ -209,11 +209,21 @@ except Exception:
 # Before 1.0.9 the version was typed by hand in the banner, in the patch-failure
 # line and in the docs; one of them always drifted. Everything that prints a
 # version reads THIS constant now.
-KAME_VERSION = "1.9.0.4"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14; 1.9.0.2: H5 parity (closing row); 1.9.0.3: what the screen says (C1-C5, C8, C9); 1.9.0.4: the race by record (R1-R4)
+KAME_VERSION = "1.9.0.5"      # 1.9.0.0 was developed as 1.8.4.3 (comments and test names keep that number); 1.9.0.1: A11-A14; 1.9.0.2: H5 parity (closing row); 1.9.0.3: what the screen says (C1-C5, C8, C9); 1.9.0.4: the race by record (R1-R4); 1.9.0.5: re-test while every key rests, second-model account holds, reset report, key check, undo keys
 
 # --- GLOBAL REGISTRY ---
 _KAME_KEY_HEALTH = {}  # { "provider:model": { "keys": {key: {sick_until, last_used, request_log, last_sick_at, consecutive_rl}} } }
 _KAME_ACCOUNT_HOLDS = {}  # {(provider, key): {until, kind, scope, at}}
+# 1.9.0.5 (E2): a LABEL-only account-scope refusal (``PerProject`` with no time from the provider) holds one model
+# only and waits here for a second model to say the same on the same key. {(provider, key): {identity, at}}
+_KAME_ACCOUNT_PENDING = {}
+_KAME_ACCOUNT_CONFIRM_S = 600.0
+# 1.9.0.5 (E1, decisions/0036): while every key rests on a LABEL (no time from the provider) the pending request
+# itself is sent to one of them: after 20 s, then +40, +80, +160, then every +300 s (Hermes' schedule).
+_KAME_RETEST_FIRST_S = 20.0
+_KAME_RETEST_STEPS_S = (20.0, 40.0, 80.0, 160.0)
+_KAME_RETEST_CAP_S = 300.0
+_KAME_RETEST_INFLIGHT = set()   # identities with a re-test out right now (claimed under _KAME_LOCK)
 _KAME_LOCK = threading.Lock()
 
 #: The longest rest each ``provider:model`` has ever been **told** to take on a
@@ -1440,7 +1450,7 @@ def _kame_zero_key(kd) -> None:
                   "retired_at", "short_streak", "last_hold_until"):
         kd[field] = 0
     for field in ("rest_label", "hold_kind", "hold_scope",
-                  "last_hold_kind", "last_hold_window"):
+                  "last_hold_kind", "last_hold_window", "last_hold_sized_by"):
         kd[field] = ""
     kd["model_until"] = 0
     kd["model_kind"] = kd["model_scope"] = ""
@@ -1496,6 +1506,67 @@ def forget_busy(identity) -> bool:
     return was_busy
 
 
+#: What `reset_pool` last cleared, in words, for the command and the page to show (1.9.0.5, E3).
+_KAME_LAST_RESET = {"sentence": ""}
+
+_KAME_RESET_KIND_WORDS = {
+    "daily": "daily", "per_minute": "per minute", "insufficient_quota": "out of credit", "server": "busy server",
+    "auth": "key refused", "revoked": "key refused", "denied": "model not allowed", "timeout": "no answer",
+    "other": "other",
+}
+
+
+def _kame_plural(n: int, one: str, many: str = "") -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _kame_reset_sentence(now: float) -> str:
+    """What a reset is about to forget, in one sentence. Counts only, never a key. Call under `_KAME_LOCK`."""
+    resting = {}                                # (provider, key) -> kind word
+    longest = 0.0
+    for identity, state in _KAME_KEY_HEALTH.items():
+        provider = str(identity).split(":", 1)[0]
+        for key, kd in (state.get("keys") or {}).items():
+            until = float(kd.get("sick_until") or 0)
+            if until <= now:
+                continue
+            longest = max(longest, until - now)
+            kind = kd.get("last_hold_kind") or ""
+            slot = (provider, key)
+            if slot not in resting or (kind and resting[slot] == ""):
+                resting[slot] = kind
+    for slot, kind in list(resting.items()):
+        if not kind:
+            kind = (_KAME_ACCOUNT_HOLDS.get(slot) or {}).get("kind") or "other"
+        resting[slot] = _KAME_RESET_KIND_WORDS.get(kind, "other")
+    accounts = sum(1 for hold in _KAME_ACCOUNT_HOLDS.values() if float(hold.get("until", 0) or 0) > now)
+    windows = sum(1 for until in _KAME_BUSY_UNTIL.values() if until > now)
+    if not resting:
+        parts = ["pool reset: no key was resting"]
+    else:
+        by_word = {}
+        for word in resting.values():
+            by_word[word] = by_word.get(word, 0) + 1
+        kinds = ", ".join(f"{w} {n}" for w, n in sorted(by_word.items(), key=lambda item: (-item[1], item[0])))
+        if longest < 60:
+            left = f"{longest:.0f} s"
+        elif longest < 3600:
+            left = f"{longest / 60:.0f} min"
+        else:
+            left = f"{longest / 3600:.1f} h"
+        parts = [f"pool reset: {_kame_plural(len(resting), 'key')} resting ({kinds}), longest {left}"]
+    if accounts:
+        parts.append(_kame_plural(accounts, "account hold"))
+    if windows:
+        parts.append(_kame_plural(windows, "busy window"))
+    return ", ".join(parts)
+
+
+def last_reset_sentence() -> str:
+    """The sentence of the last `reset_pool` (``""`` before the first)."""
+    return _KAME_LAST_RESET["sentence"]
+
+
 def reset_pool() -> int:
     """Every key starts again as if it had never been tried. Returns how many.
 
@@ -1507,11 +1578,14 @@ def reset_pool() -> int:
     """
     count = 0
     with _KAME_LOCK:
+        # 1.9.0.5 (E3): what is about to go is counted first
+        report = _kame_reset_sentence(time.time())
         for state in _KAME_KEY_HEALTH.values():
             for kd in (state.get("keys") or {}).values():
                 count += 1
                 _kame_zero_key(kd)
         _KAME_ACCOUNT_HOLDS.clear()
+        _KAME_ACCOUNT_PENDING.clear()   # 1.9.0.5 (E2)
         _KAME_STATED_RL.clear()
         _KAME_NO_ANSWER_SINCE.clear()
         _KAME_PROBED_AT.clear()   # 1.8.2.9: a pool that starts again has not been asked while busy
@@ -1528,7 +1602,8 @@ def reset_pool() -> int:
                     f"Pool reset incomplete: {count} in-memory key(s) cleared; "
                     "persisted holds could not be cleared. Retry the reset."
                 ) from exc
-    _kame_event("setting", reason=f"pool cleared: {count} key(s) start again from zero")
+    _KAME_LAST_RESET["sentence"] = report
+    _kame_event("setting", reason=report)
     return count
 
 
@@ -1870,6 +1945,69 @@ def _pool_has_ready_key(identity: str, all_keys: list) -> bool:
         if not candidates:
             candidates = [k for k in all_keys if k in pool]
         return any(float(pool[k].get("sick_until") or 0) < now for k in candidates)
+
+
+# --- 1.9.0.5 (E1, decisions/0036): the live re-test while every key rests ----------------------------------------
+#
+# ADR 0002 made the wait on a fully resting pool silent: no request until the soonest key's hold ends, up to an
+# hour. Google labels 429s "PerDay" on keys that are not out of quota, so a label that lands on the whole pool
+# used to cost an hour while the provider was answering. Now the pending request itself is sent to ONE key whose
+# hold came from a LABEL (nobody stated a time): after 20 s, then +40, +80, +160, then every +300 s. A refused
+# request is not billed (Gemini, OpenAI, Anthropic, OpenRouter) and an answer is the reply the user asked for.
+
+#: Rests a re-test may question: a throttle KAME sized itself. Money, a refused credential, a model the key is not
+#: allowed on and a 5xx (short anyway) are never asked early; neither is a rest read back from disk at start (it
+#: carries no kind, so nobody knows whether the provider named its time).
+_KAME_RETEST_KINDS = frozenset({"daily", "per_minute", "other"})
+
+
+def _kame_retest_interval(n: int) -> float:
+    """Seconds from the ``n``-th re-test (1-based) to the next one: 40, 80, 160, then the cap."""
+    steps = _KAME_RETEST_STEPS_S
+    return float(steps[n] if 0 < n < len(steps) else _KAME_RETEST_CAP_S)
+
+
+def _kame_retest_candidate(identity, all_keys, now=None):
+    """The key to send the pending request to while every key rests, or ``None``.
+
+    Soonest-to-return first among the keys resting on a LABEL: not retired, ``last_hold_sized_by`` not
+    ``"provider"`` (a deadline the provider stated is served), the last refusal a throttle of KAME's own sizing,
+    no money or stated account hold. A reserve key only when no other candidate exists. Taking one claims the
+    identity (one re-test in flight at a time); the caller releases it with `_kame_retest_release`.
+    """
+    now = time.time() if now is None else now
+    provider = str(identity).split(":", 1)[0]
+    with _KAME_LOCK:
+        if identity in _KAME_RETEST_INFLIGHT:
+            return None
+        pool = _KAME_KEY_HEALTH.get(identity, {}).get("keys", {})
+        found = []
+        for k in all_keys:
+            kd = pool.get(k)
+            if not kd or kd.get("retired_at") or float(kd.get("sick_until") or 0) <= now:
+                continue
+            if kd.get("last_hold_sized_by") == "provider" or kd.get("last_hold_kind", "") not in _KAME_RETEST_KINDS:
+                continue
+            account = _KAME_ACCOUNT_HOLDS.get((provider, k))
+            if account and float(account.get("until", 0) or 0) > now and (
+                    account.get("sized_by") == "provider" or account.get("kind") in ("insufficient_quota", "billing")):
+                continue
+            found.append((float(kd.get("sick_until") or 0), k))
+    if not found:
+        return None
+    found.sort()
+    plain = [item for item in found if not _kame_is_reserve(identity, item[1])]   # outside the lock: it reads settings
+    key = (plain or found)[0][1]
+    with _KAME_LOCK:
+        if identity in _KAME_RETEST_INFLIGHT:
+            return None
+        _KAME_RETEST_INFLIGHT.add(identity)
+    return key
+
+
+def _kame_retest_release(identity) -> None:
+    with _KAME_LOCK:
+        _KAME_RETEST_INFLIGHT.discard(identity)
 
 
 def _session_summary_line() -> str:
@@ -2978,6 +3116,7 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             # v1.8.1.0: the key answered, so no deadline of its is proven short.
             kd["short_streak"] = 0
             kd["last_hold_until"] = 0
+            kd["last_hold_sized_by"] = ""   # 1.9.0.5 (E1)
             # v1.8.1.0: what this key was told is forgotten the moment it
             # answers, so the memory cannot outlive its evidence by one call.
             _KAME_STATED_RL.pop((identity, key), None)
@@ -2990,6 +3129,7 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             # other models is refuted by this answer — the account is serving.
             provider = str(identity).split(":", 1)[0]
             _KAME_ACCOUNT_HOLDS.pop((provider, key), None)
+            _KAME_ACCOUNT_PENDING.pop((provider, key), None)
             _refresh_account_projections(provider, key)
             _KAME_STATS["ok"] += 1
             _KAME_CALL_COUNT += 1
@@ -3202,8 +3342,25 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
             kd["last_hold_until"] = now + applied
             kd["last_hold_kind"] = kind
             kd["last_hold_window"] = lane
+            kd["last_hold_sized_by"] = sized_by or ""   # 1.9.0.5 (E1): who named this time, the provider or KAME
             kd["last_sick_at"] = now
-            if kind == "insufficient_quota" or scope == "account":
+            account_wide = kind in ("insufficient_quota", "billing")
+            if scope == "account" and not account_wide:
+                # 1.9.0.5 (E2, decisions/0036): proof is money (above), a deadline the PROVIDER stated, or a hold
+                # already confirmed and still standing. A label alone holds this model's key and waits for a
+                # DIFFERENT model to say the same on the same key within ``_KAME_ACCOUNT_CONFIRM_S``.
+                slot = (str(identity).split(":", 1)[0], key)
+                if sized_by == "provider" or _KAME_ACCOUNT_HOLDS.get(slot, {}).get("until", 0) > now:
+                    account_wide = True
+                else:
+                    pending = _KAME_ACCOUNT_PENDING.get(slot)
+                    if (pending is not None and pending.get("identity") != identity
+                            and 0.0 <= now - float(pending.get("at", 0) or 0) <= _KAME_ACCOUNT_CONFIRM_S):
+                        account_wide = True
+                        _KAME_ACCOUNT_PENDING.pop(slot, None)
+                    else:
+                        _KAME_ACCOUNT_PENDING[slot] = {"identity": identity, "at": now}
+            if account_wide:
                 # v1.8.0.0: out of credit belongs to the account, not to the
                 # model. The same key is benched on every model of this
                 # provider it has been seen on; other keys are untouched.
@@ -3217,6 +3374,9 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                 deadline = max(float(previous.get("until", 0) or 0), now + applied)
                 _KAME_ACCOUNT_HOLDS[slot] = {
                     "until": deadline, "kind": kind, "scope": "account", "at": now,
+                    # 1.9.0.5 (E1): the re-test leaves a hold alone that money or a stated deadline put there
+                    "sized_by": ("provider" if (sized_by == "provider" or previous.get("sized_by") == "provider")
+                                 else ""),
                 }
                 _refresh_account_projections(provider, key)
                 if _KJ is not None:
@@ -3230,7 +3390,12 @@ def _mark_key_health(identity, key, success=True, delay=20, kind="other",
                     kd["model_scope"] = str(scope or "")
                 _effective_hold_until(identity, key, kd)
                 if _KJ is not None:
-                    _KJ.note_hold(identity, key, deadline, kd.get("model_kind", kind), kd.get("model_scope", ""))
+                    # 1.9.0.5 (E2): a model-only hold that came from an account LABEL is kept on disk as a model
+                    # row. Stored with scope "account" the journal would file it as an account-wide hold, and the
+                    # next start (or a new model) would find the whole provider resting on one label.
+                    _scope_kept = kd.get("model_scope", "")
+                    _KJ.note_hold(identity, key, deadline, kd.get("model_kind", kind),
+                                  "" if _scope_kept == "account" else _scope_kept)
             _KAME_STATS[kind] = _KAME_STATS.get(kind, 0) + 1
     return applied
 
@@ -5081,7 +5246,9 @@ class _KameSleepState:
                  # status line (so every way out of the carousel knows to give it back)
                  "ctx", "line_on",
                  # 1.8.3.1 - a wait was shown and has not been told as "back after ..." yet
-                 "waited")
+                 "waited",
+                 # 1.9.0.5 (E1) - re-tests sent in this wait, and when the next is due
+                 "retest_n", "retest_due_at", "wake_at")
 
     def __init__(self):
         self.sleep_count = 0
@@ -5093,6 +5260,9 @@ class _KameSleepState:
         self.ctx = None
         self.line_on = False
         self.waited = False
+        self.retest_n = 0
+        self.retest_due_at = 0.0
+        self.wake_at = None
 
 
 def _kame_pool_counts(identity: str, all_keys: list):
@@ -5246,6 +5416,11 @@ def _kame_live_line(activity) -> str:
         if eta is None:
             return f"⏳ Every key of {model} is resting - waiting for one to come back{back}"
         return f"⏳ Every key of {model} is resting · next key in {_kame_live_duration(eta)}{back}"
+    if kind == "retesting":
+        # 1.9.0.5 (C): every key rests and the pending request is asked once more on one of them
+        tail = str(activity.get("tail") or "")
+        who = f"key {tail}" if tail else "one key"
+        return f"↻ {model}: every key resting - asking {who} again (re-test {activity.get('n') or 1})"
     if kind == "stitching":
         done, limit = _kame_first(activity, "n", "resume"), _kame_first(activity, "max", "budget")
         tail = f" ({done} of {limit})" if done is not None and limit is not None else ""
@@ -5488,7 +5663,10 @@ def _kame_say_attempt(ctx, st, attempt_no) -> None:
             st.waited = False
             _kame_say(ctx, "standin", model=_kame_live_name(hop["origin"]), other=_kame_live_name(hop["to"]))
         return
-    if ctx.get("stitcher") is not None:
+    if ctx.get("kame_retest"):
+        # 1.9.0.5 (C): the attempt is a re-test while every key rests
+        _kame_say(ctx, "retesting", st, n=ctx["kame_retest"], tail=ctx.get("kame_retest_tail", ""))
+    elif ctx.get("stitcher") is not None:
         limit = _KAME_STREAM_RESUME_LIMIT
         _kame_say(ctx, "stitching", st, n=ctx.get("resumes"), max=limit if limit > 0 else None)
     else:
@@ -5569,6 +5747,10 @@ async def _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, 
         wait = min(_soonest_eta + 0.5, 60.0) + random.uniform(0.1, 1.5)
     else:
         wait = 2.0 + random.uniform(0.1, 1.5)
+    if st.wake_at is not None:
+        # 1.9.0.5 (E1): the re-test is due then; the wait is cut there (a hair over, so a timer that fires one
+        # clock tick early still finds it due)
+        wait = min(wait, max(float(st.wake_at) - time.time(), 0.0) + 0.05)
     st.sleep_count += 1
     _sleep_started = time.perf_counter()
 
@@ -9401,7 +9583,11 @@ async def _kame_carousel(self, ctx):
                 if _switched is not None:
                     return _switched
 
+    _retest_claim = False    # 1.9.0.5 (E1): this call holds the identity's one re-test
     while True:  # ETERNAL CAROUSEL - all call types use the same robust rotation
+        if _retest_claim:    # a re-test claimed in a pass that left before its attempt's own `finally`
+            _kame_retest_release(identity)
+            _retest_claim = False
         attempt_no += 1
         if attempt_no > 1:
             for _flag in ("probe_primary", "probe_cross", "probe_noted", "probe_risky", "probe_retest"):
@@ -9513,19 +9699,49 @@ async def _kame_carousel(self, ctx):
                             reason="every key resting" + (
                                 f", next back in ~{_fmt_duration(_eta_now)}" if _eta_now else ""),
                             seconds=_eta_now)
-            # v0.5.8.0 ETA-driven sleep (v1.0.2: honest logging + interruptible).
-            # All keys sick. Sleep until the SOONEST key recovers (capped) instead
-            # of pulsing the API with sick keys. After the sleep we `continue` so we
-            # re-select - we NEVER call the model with a key we know is cooling.
-            try:
-                await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st)
-            except BaseException:
-                # The user pressed stop / nudged mid-sleep (InterventionException
-                # comes out of _kame_honor_intervention, not out of the call
-                # below), so the "waiting" item must not be left standing.
-                _kame_wait_notice_finish(st, "stopped")
-                raise
-            continue
+            # 1.9.0.5 (E1, decisions/0036): every key rests, and the wait is long. Instead of waiting in silence
+            # the pending request is sent to one key that rests on a LABEL, on the schedule 20 / +40 / +80 / +160 /
+            # every +300 s. Only the conversation, only on the configured model (a hop is somebody else's
+            # carousel), never a background job.
+            _retest_go = False
+            st.wake_at = None
+            if _aux is None and _kame_main(ctx) and _KAME_FALLBACK_HOP.get() is None:
+                _rt_now = time.time()
+                if not st.cold_since:
+                    st.cold_since = _rt_now
+                if not st.retest_due_at:
+                    st.retest_due_at = st.cold_since + _KAME_RETEST_FIRST_S
+                _rt_eta = _next_recovery_seconds(identity, all_keys)
+                if _rt_eta is not None and _rt_eta > _KAME_RETEST_FIRST_S:
+                    if _rt_now >= st.retest_due_at - 0.001:
+                        _rt_key = _kame_retest_candidate(identity, all_keys, _rt_now)
+                        if _rt_key is not None:
+                            _retest_go, _retest_claim = True, True
+                            st.retest_n += 1
+                            st.retest_due_at = _rt_now + _kame_retest_interval(st.retest_n)
+                            ctx["kame_retest"] = st.retest_n
+                            ctx["kame_retest_tail"] = f"...{str(_rt_key)[-4:]}"
+                            key, status = _rt_key, "SUCCESS"
+                            _kame_event("retest", identity, key,
+                                        reason="every key resting - asking one again")
+                        else:
+                            st.retest_due_at = _rt_now + _kame_retest_interval(max(st.retest_n, 1))
+                    if not _retest_go:
+                        st.wake_at = st.retest_due_at
+            if not _retest_go:
+                # v0.5.8.0 ETA-driven sleep (v1.0.2: honest logging + interruptible).
+                # All keys sick. Sleep until the SOONEST key recovers (capped) instead
+                # of pulsing the API with sick keys. After the sleep we `continue` so we
+                # re-select - we NEVER call the model with a key we know is cooling.
+                try:
+                    await _kame_sleep_on_exhaustion(identity, all_keys, call_type, model_short, st)
+                except BaseException:
+                    # The user pressed stop / nudged mid-sleep (InterventionException
+                    # comes out of _kame_honor_intervention, not out of the call
+                    # below), so the "waiting" item must not be left standing.
+                    _kame_wait_notice_finish(st, "stopped")
+                    raise
+                continue
         # 1.8.2.9 (E10): a key is ready - the wait is over, Agent Zero's own words come back
         # now, not when the first text arrives; and the page learns which key this call uses.
         _fl_now = ctx.get("flight")
@@ -9974,6 +10190,13 @@ async def _kame_carousel(self, ctx):
                             continue
             await asyncio.sleep(0)
             continue
+        finally:
+            # 1.9.0.5 (E1): success, refusal or stop, the identity's one re-test is free again
+            if _retest_claim:
+                _kame_retest_release(identity)
+                _retest_claim = False
+            ctx.pop("kame_retest", None)
+            ctx.pop("kame_retest_tail", None)
 
 
 def _kame_wrap_callbacks(ctx, response_callback, reasoning_callback, tokens_callback):

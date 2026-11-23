@@ -309,7 +309,7 @@ NOT_PORTED = [
 #: A shelf that exists only in the Agent Zero port, and where it sits (index in the final list).
 AGENT_ZERO_ONLY_GROUPS = [{"id": "agentzero", "after": "tuning"}]
 #: Hermes keys with no Agent Zero twin: no function behind them here (decisions/0015).
-HERMES_ONLY_KEYS = ["resolver_disabled", "quota_id_disabled"]
+HERMES_ONLY_KEYS = ["resolver_disabled", "quota_id_disabled", "live_chat_line"]   # 1.9.0.5: live_chat_line posts to the conversation, which Agent Zero has no call for
 #: Hermes keys that Agent Zero stores under another name.
 RENAMED_KEYS = {"disabled": "rotation_disabled"}
 

@@ -135,6 +135,12 @@ ALLOWED = {
         "1.8.4.3: unset = learned for each model in both ports. Hermes' table shows 20 (what a model uses before it "
         "has learned) and an unset key is never written; Agent Zero's page and `/kame reset` write the table default, "
         "and 20 there would turn every reset into a fixed 20 s, so the default is empty",
+    ("setting", "live_chat_line", "exists"):
+        "1.9.0.5: Hermes posts a line in the conversation through ctx.post_message (the TUI and messaging chats). "
+        "Agent Zero has no such call: its live line is the heading of the chat call itself, which Agent Zero "
+        "already shows and overwrites, and which the advanced `live_status_disabled` setting switches off",
+    ("setting", "shelf extra", "order"):
+        "1.9.0.5: the same difference, seen in the shelf: `live_chat_line` is not in Agent Zero's list",
     ("constant", "a reading is called old after (s)"):
         "not the same clock: Hermes re-reads a file its backend republishes every 20 s (75 s = three misses); "
         "Agent Zero's page fetches the live status every second, so 30 s without a good read already means the "

@@ -169,7 +169,7 @@ command("kame_command.py", "reset all")
 check("/kame reset all", CONFIG.get("spread_disabled") is False and not K._KAME_SPREAD_DISABLED)
 
 ID = "google:gemini-3.7-flash"
-KEYS = ["AIzaSyCMDTESTKEY-aaaaaa", "AIzaSyCMDTESTKEY-bbbbbb"]
+KEYS = ["AIzaSyCMDTESTKEY-" + "a" * 22, "AIzaSyCMDTESTKEY-" + "b" * 22]   # 39 characters each (1.9.0.5 shape rule)
 K._get_identity_state(ID, KEYS)
 e = Exception("429 Too Many Requests")
 e.status_code = 429

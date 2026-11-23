@@ -7,6 +7,8 @@
 * ``forget_busy`` + ``identity``: "Try this model now" - it is not known busy any more.
 * ``clear_events``: "Clear events" - the event list is emptied, nothing else changes.
 * ``reset_settings``: "Reset to defaults" - every KAME setting goes back to its default.
+* ``undo_keys``: "Remove API Rotation's keys" - 1.9.0.5: every key line keeps only its first key (a backup first),
+  so Agent Zero reads one valid key per provider once the plugin is removed. Nothing is deleted from the backup.
 
 It never receives, stores or returns an API key, and no action deletes one.
 """
@@ -32,7 +34,16 @@ class KamePoolAction(ApiHandler):
                             "message": f"{count} key{'' if count == 1 else 's'} of this model start again."}
                 count = engine.reset_pool()
                 return {"ok": True, "count": count,
-                        "message": f"{count} key{'' if count == 1 else 's'} start again from zero."}
+                        "message": f"{count} key{'' if count == 1 else 's'} start again from zero. "
+                                   f"{engine.last_reset_sentence()}"}
+            if action == "undo_keys":
+                from pathlib import Path
+
+                from helpers import dotenv
+                from usr.plugins.api_rotation_by_kame import kame_keys as keys
+
+                message = keys.undo(Path(dotenv.get_dotenv_file_path()), identity, dotenv.save_dotenv_value)
+                return {"ok": True, "message": message}
             if action == "forget_busy":
                 if not identity:
                     return {"ok": False, "message": "Which model?"}

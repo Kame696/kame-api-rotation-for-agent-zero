@@ -4,6 +4,7 @@
     /kame-keys add [provider] k1,k2     merge keys into that provider's line
     /kame-keys import [provider] <file> the same, from a file (keeps keys out of the chat)
     /kame-keys reset                    every key starts again from zero
+    /kame-keys undo [provider]          keep only the first key of each line: run it BEFORE removing the plugin
 
 Keys go into Agent Zero's own `usr/.env`, in the comma-separated line KAME
 rotates (`API_KEY_GOOGLE=k1,k2,k3`), through Agent Zero's own
@@ -38,12 +39,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         if verb == "reset":
             count = engine.reset_pool()
             return _show("KAME — keys", f"**{count} key(s) start again from zero.** "
-                                         "Rests, refusal streaks and retirements cleared.")
+                                         "Rests, refusal streaks and retirements cleared.\n\n"
+                                         f"_{engine.last_reset_sentence()}_")
+        if verb == "undo":
+            return _show("KAME — keys undone", keys.undo(env_path, rest.strip(), dotenv.save_dotenv_value))
         if verb == "add":
             provider, text = keys.split_provider(rest, _host_providers(), keys.read_env(env_path))
             found, rejected = keys.pasted_keys(text)
             return _show("KAME — keys added", keys.add(env_path, provider, found,
-                                                        dotenv.save_dotenv_value, rejected))
+                                                        dotenv.save_dotenv_value, rejected, check=True))
         if verb == "import":
             provider, file_text = keys.split_provider(rest, _host_providers(), keys.read_env(env_path))
             path = Path(file_text.strip().strip("\"'")).expanduser()
@@ -66,8 +70,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 refused = f" {len(rejected)} token(s) did not look like an API key." if rejected else ""
                 return _toast("No key found in that file." + refused, "error")
             return _show("KAME — keys imported", keys.add(env_path, provider, found,
-                                                           dotenv.save_dotenv_value, rejected))
-        return _toast(f"Unknown: {verb}. Use status, add, import or reset.", "error")
+                                                           dotenv.save_dotenv_value, rejected, check=True))
+        return _toast(f"Unknown: {verb}. Use status, add, import, reset or undo.", "error")
     except Exception as exc:
         # Never the arguments: on the `add` path they are live keys.
         return _toast(f"/kame-keys {verb} failed: {type(exc).__name__}", "error")

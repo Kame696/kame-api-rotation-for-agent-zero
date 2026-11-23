@@ -237,10 +237,12 @@ GAVE_UP = "gave_up"
 STITCH = "stitch"
 #: 1.8.4.0: a model refused the provider's prompt cache and is sent without it for 30 days.
 CACHE_OFF = "cache_off"
+#: 1.9.0.5: every key rested on a label, so the pending request was sent to one of them again.
+RETEST = "retest"
 _KINDS = frozenset({ROTATION, SWITCH, QUARANTINE, INVALID_KEY, DENIED_MODEL,
                     STORM, STREAM_DROP, WAIT, RECOVERY, SURFACED, SETTING,
-                    MODEL_SWITCH, BACKUP, GAVE_UP, STITCH, CACHE_OFF})
-GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP, STITCH, CACHE_OFF})
+                    MODEL_SWITCH, BACKUP, GAVE_UP, STITCH, CACHE_OFF, RETEST})
+GOOD_KINDS = frozenset({SWITCH, RECOVERY, WAIT, SETTING, MODEL_SWITCH, BACKUP, STITCH, CACHE_OFF, RETEST})
 #: 1.8.2.7: which job an event belongs to. `chat` is the conversation; the
 #: others are Agent Zero's background calls (memory, titles, summaries).
 JOBS = ("chat", "utility", "compress", "")

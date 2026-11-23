@@ -178,11 +178,14 @@ const EVENT_LABELS = {
   wait: ["All keys resting", "warn"],
   // 1.8.4.0 (E1): Agent Zero only; last, so Hermes' order above is untouched
   cache_off: ["Prompt cache off", "good"],
+  // 1.9.0.5 (E1): the Hermes word for the same event
+  retest: ["Asked again", "good"],
 };
 
 const EVENT_MEANING = {
   answered: "The key this call went out on answered, first time. The time is the whole call; the reason says how long the first word took.",
   gave_up: "Every key stayed resting past your “Stop waiting” time, so API Rotation stopped waiting and handed Agent Zero the original refusal.",
+  retest: "Every key was resting on a label (a daily or account word) with no time from the provider, so API Rotation sent the pending request to one of them again instead of waiting in silence. A refused request costs nothing.",
   cache_off: "This model’s provider refused the prompt cache Agent Zero asked for (free Gemini keys have no cache storage). API Rotation sent the same request again without it, and will not ask this model for the cache for 30 days. Nothing is wrong with your keys.",
   sent: "A request went out on this key. Every request leaves one of these, so a slow answer is visible while it is still coming.",
   denied_model: "The provider refused this key for THIS model only — a plan that does not include it, or an API not switched on. The key is fine everywhere else, and replacing it would change nothing.",
@@ -236,6 +239,7 @@ const REASON_ID = {
 const EVENT_NEXT = {
   answered: "",
   cache_off: "the same request went out again without the cache",
+  retest: "if it answers, that is the reply; if not, the wait goes on",
   denied_model: "this key skips this model and keeps working on your others",
   gave_up: "Agent Zero got the original error",
   invalid_key: "out of rotation until you replace it (/kame-keys)",
@@ -254,7 +258,7 @@ const EVENT_NEXT = {
 };
 
 /** The kinds that are KAME working, rather than a provider failing. */
-const GOOD_KINDS = new Set(["switch", "recovery", "stitch", "wait", "setting", "sent", "answered", "handover", "cache_off"]);
+const GOOD_KINDS = new Set(["switch", "recovery", "stitch", "wait", "setting", "sent", "answered", "handover", "cache_off", "retest"]);
 
 /** Where a rest came from, in one word (Hermes' SIZED_BY_LABELS). */
 const SIZED_BY_LABELS = {
@@ -848,7 +852,7 @@ const model = {
   },
   /** Every kind Agent Zero records, in Hermes' order, with its sentence. */
   get legendKinds() {
-    const recorded = new Set(["cache_off", "denied_model", "gave_up", "invalid_key", "quarantine", "recovery", "rotation",
+    const recorded = new Set(["cache_off", "retest", "denied_model", "gave_up", "invalid_key", "quarantine", "recovery", "rotation",
       "setting", "stitch", "storm", "stream_drop", "handover", "surfaced", "switch", "wait"]);
     return Object.entries(EVENT_LABELS)
       .filter(([kind]) => recorded.has(kind))
@@ -898,7 +902,7 @@ const model = {
     return JOB_WORDS[job || ""] || job;
   },
   good(kind) {
-    return ["switch", "recovery", "wait", "setting", "model_switch", "backup"].includes(kind);
+    return ["switch", "recovery", "wait", "setting", "model_switch", "backup", "retest"].includes(kind);
   },
   seconds,
   clock,

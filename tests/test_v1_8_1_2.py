@@ -17,7 +17,7 @@ if not any(name in sys.modules for name in ("test_v1_8_1_1_reliability", "tests.
 import kame_engine as engine
 import kame_keys as keys
 
-GEMINI = "AIzaSyA1234567890abcdefghijklmnopqrstu"
+GEMINI = "AIzaSyA1234567890abcdefghijklmnopqrstuv"   # 39 characters: 1.9.0.5 refuses a Google key of another length
 NVIDIA = "nvapi-abcdefghijklmnopqrstuvwxyz0123456789"
 
 

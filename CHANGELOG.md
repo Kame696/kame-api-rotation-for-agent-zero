@@ -1,5 +1,27 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
+## 1.9.0.5 - While every key rests, one is asked again (2026-11-22)
+
+Kept in step with the Hermes 1.9.0.5 changes that apply here. Verified on Agent Zero v2.16.
+
+- **A wait is no longer silent.** When every key rests on a label with no time from the provider (Google's "PerDay"
+  on keys that are not out of quota), the waiting request itself goes to one of them after 20 s, then 40, 80, 160,
+  and every 300 s after that. A healthy provider answers at once; a refused request costs nothing. The chat says
+  "every key resting - asking key ...abcd again (re-test 2)". A time the provider stated, a refused credential and
+  money are never asked early, and one request at a time per model.
+- **An account-wide hold needs a second model.** A label like `PerProject` now rests the key on the model that got it;
+  it rests the key on every model of the provider only when a second model says the same within 10 minutes, or the
+  provider stated a deadline, or the account is out of credit.
+- **Reset says what it cleared.** "pool reset: 9 keys resting (daily 7, per minute 2), longest 52 min, 3 account
+  holds, 1 busy window" - in the events, in `/kame clear-pool`, in `/kame-keys reset` and on the page. Counts only.
+- **Keys are checked when you add them.** `/kame-keys add` and `import` drop empty items and repeats, name a Google key
+  of the wrong shape (and still add it: you decide), and ask Google once per new key (the key in a header, 10 s). A key Google
+  refuses is named and still added; no answer is said, not guessed. Never at start.
+- **Leave Agent Zero clean.** `/kame-keys undo [provider]`, and "Remove API Rotation's keys" on the page, keep only the
+  first key of each key line in `usr/.env` (a backup first). Run it before you remove the plugin.
+- **Verified on Agent Zero v2.16.** Agent Zero now refreshes its secrets after it saves a key, so a key you add with
+  `/kame-keys add` is seen without a restart.
+
 ## 1.9.0.4 - The race asks the model that answers, when it usually answers (2026-11-19)
 
 Kept in step with the Hermes 1.9.0.4 changes. Which models race a slow reply, and when, now follow what each model

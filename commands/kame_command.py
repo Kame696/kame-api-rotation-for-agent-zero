@@ -62,6 +62,7 @@ HELP = """**KAME commands**
 | `/kame clear-pool` | every key starts again from zero (rests, ladders, holds on disk) |
 | `/kame-quota` · `/kame-quota reset` | the quota picture per key and model · clear the counts |
 | `/kame-keys` · `add` · `import` · `reset` | add and inspect keys in bulk |
+| `/kame-keys undo [provider]` | keep only the first key of each key line: run it BEFORE you remove the plugin |
 
 Same settings, same environment variables as the Hermes port. Keys appear only
 as fingerprints."""
@@ -90,7 +91,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 return _show("KAME — pool cleared",
                              f"**{count} key(s) start again from zero** — rests, ladders, "
                              "refusal streaks and the holds kept on disk are gone. "
-                             "No key and no setting was touched.")
+                             "No key and no setting was touched.\n\n"
+                             f"_{engine.last_reset_sentence()}_")
             if verb == "get":
                 return _show("KAME — settings", _render_settings(engine))
             if verb == "set":
