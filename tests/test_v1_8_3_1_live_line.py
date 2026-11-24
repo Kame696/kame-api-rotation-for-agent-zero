@@ -53,7 +53,7 @@ def test_every_fixture_row_renders_to_its_words(row):
 
 def test_the_table_has_every_state_of_the_plan():
     assert {r["kind"] for r in TABLE["live"]} == {
-        "calling", "retrying", "racing", "standin", "waiting", "stitching", "recovered"}
+        "calling", "retrying", "racing", "standin", "waiting", "stitching", "recovered", "ended"}
 
 
 def test_an_activity_with_the_other_ports_field_names_renders_the_same_words():

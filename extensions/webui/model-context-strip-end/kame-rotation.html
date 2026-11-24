@@ -60,7 +60,7 @@
         </div>
 
         <div class="kame-rot-sentence">
-          <span class="kame-rot-dot" :class="'kame-rot-dot-' + p.tone" aria-hidden="true"></span>
+          <span class="kame-rot-dot" :class="['kame-rot-dot-' + p.tone, p.live ? 'kame-rot-dot-live' : '']" aria-hidden="true"></span>
           <span x-text="p.sentence"></span>
         </div>
         <div class="kame-rot-count" x-text="p.keysLine"></div>
@@ -110,6 +110,10 @@
 </div>
 
 <style>
+  /* 1.9.0.6 (0019 A5): a reply in flight - the dot pulses; still under reduced motion */
+  .kame-rot-dot-live { animation: kame-rot-pulse 1.4s ease-in-out infinite; }
+  @keyframes kame-rot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .kame-rot-dot-live { animation: none; } }
   .kame-rot-anchor {
     position: static;
     display: flex;

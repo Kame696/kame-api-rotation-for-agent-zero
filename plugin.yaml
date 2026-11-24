@@ -1,7 +1,7 @@
 name: api_rotation_by_kame
 title: KAME API Rotation
 description: "Puts many API keys and models into one pool, so rate limits and quota errors never stop your agent. Paste your keys comma-separated in one provider field; KAME picks the healthiest key for every call and moves to your next model when one is busy. Free, zero setup."
-version: 1.9.0.5
+version: 1.9.0.6
 settings_sections:
   - agent
 per_project_config: false

@@ -29,6 +29,7 @@ import {
   modelState,
   modelStateTitle,
   lifetimeLine,
+  missingModelLines,
   movesEmptyLine,
   nowSentences,
   oneCount,
@@ -1198,6 +1199,7 @@ const model = {
     return {
       why: fb.why,
       warning: typeof fb.warning === "string" ? fb.warning : "",
+      missing: missingModelLines(this.view),      // 1.9.0.6 (A6b)
       entries,
       how: "Change this list in the Fallback models tab. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.",
     };

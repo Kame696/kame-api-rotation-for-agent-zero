@@ -871,9 +871,41 @@ export function chipSummary(data, nowMs) {
  *  included: calling, retrying, racing, standin, waiting, stitching, recovered. `phase` (`racing` /
  *  `standin`) rides beside `kind: "calling"`. `etaSeconds` is the time left as the page counts it (null =
  *  no estimate). `""` when there is nothing to say. */
-export function liveLineText(activity, etaSeconds) {
+/** 1.9.0.6 (A6b): one line per model of the fallback list that answered 404 "not found" in the last 6 h. */
+export function missingModelLines(view) {
+  const out = [];
+  for (const entry of view?.fallback?.entries || []) {
+    if (!entry || entry.missing_until == null) continue;
+    const name = entry.missing_name || entry.label || entry.identity;
+    const provider = entry.missing_provider || String(entry.identity || "").split(":")[0];
+    out.push(`Model '${name}' was not found by ${provider} - check the name in your fallback list`
+      + (entry.missing_hint ? ` (did you mean '${entry.missing_hint}'?)` : ""));
+  }
+  return out;
+}
+
+export function liveLineText(activity, etaSeconds, elapsedSeconds = null) {
   if (!activity || typeof activity !== "object") return "";
   const kind = String(activity.phase || activity.kind || "");
+  if (kind === "ended") {
+    // 1.9.0.6 (0019 A5): a reply that ended without an answer, said for ten seconds
+    const why = String(activity.reason ?? "").trim();
+    return why ? `✕ no answer - ${why}` : "✕ no answer";
+  }
+  const words = liveWords(activity, kind, etaSeconds);
+  // 1.9.0.6 (0019 A5, parity with Hermes 0037 C21): every in-flight state ends with the reply's running time
+  const elapsed = elapsedSeconds ?? activity.elapsed_s ?? null;
+  return words && elapsed != null ? `${words} · ${durationWords(elapsed)}` : words;
+}
+
+/** The reply's running time as the page counts it: from `started_at` (epoch seconds), else `elapsed_s`. */
+export function elapsedOf(activity, nowMs) {
+  if (!activity || typeof activity !== "object") return null;
+  if (activity.started_at != null) return Math.max(0, nowMs / 1000 - Number(activity.started_at));
+  return activity.elapsed_s ?? null;
+}
+
+function liveWords(activity, kind, etaSeconds) {
   const model = activity.name ?? activity.model ?? "";
   const ready = activity.ready ?? activity.healthy;
   const keys = activity.keys;
@@ -1060,7 +1092,7 @@ export function chipPopover(data, nowMs) {
     sentence = said.line2;
   } else if (activity) {
     const eta = typeof activity.eta_s === "number" ? untilEpoch((generated || nowSec) + activity.eta_s, nowMs) : null;
-    sentence = liveLineText(activity, activity.kind === "waiting" ? eta : null);
+    sentence = liveLineText(activity, activity.kind === "waiting" ? eta : null, elapsedOf(activity, nowMs));
   } else if (usable) {
     sentence = `Ready - next reply: ${modelName(usable)}`;
   } else {
@@ -1104,6 +1136,8 @@ export function chipPopover(data, nowMs) {
       : "",
     sentence,
     stale,
+    // 1.9.0.6 (0019 A5): a reply in flight - the dot beside the sentence pulses
+    live: Boolean(active && activity && activity.kind !== "ended"),
     title: "API Rotation",
     tone: popoverTone(view, active, stale),
     version: has && data.version ? `API Rotation ${data.version}` : "API Rotation",
