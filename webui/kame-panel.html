@@ -43,10 +43,6 @@
           <button class="btn" :class="$store.kamePanel.tab === t[0] ? 'btn-ok' : ''"
                   @click="$store.kamePanel.tab = t[0]"><span x-text="t[1]"></span><span x-show="$store.kamePanel.tabCount(t[0])" x-text="' (' + $store.kamePanel.tabCount(t[0]) + ')'"></span></button>
         </template>
-        <!-- 1.9.0.6: the round i opens "How to install or configure" -->
-        <button type="button" class="kame-info-tab" :class="$store.kamePanel.tab === 'guide' ? 'kame-info-tab-on' : ''"
-                title="How to install or configure" aria-label="How to install or configure"
-                @click="$store.kamePanel.tab = 'guide'">i</button>
       </div>
 
       <div class="kame-error" x-show="$store.kamePanel.error" x-text="$store.kamePanel.error"></div>
@@ -55,33 +51,6 @@
       <template x-for="n in $store.kamePanel.notes.filter((n) => n.id !== 'incomplete')" :key="n.id">
         <div class="kame-banner" :class="n.tone === 'bad' ? 'kame-banner-bad' : ''" x-text="n.text"></div>
       </template>
-
-      <!-- ===== How to install or configure (1.9.0.6) ===== -->
-      <div class="kame-stack" x-show="$store.kamePanel.tab === 'guide'">
-        <div class="kame-card">
-          <div class="kame-card-title">How to install or configure</div>
-          <p class="kame-dim kame-small">Five steps; only the first two are needed. Keys are never shown, logged or sent anywhere but your provider.</p>
-          <ol class="kame-guide">
-            <li><strong>1 · Install</strong>
-              <p>Agent Zero → Plugins → search for API Rotation and install (or install from the GitHub URL https://github.com/Kame696/kame-api-rotation-for-agent-zero). Restart Agent Zero once.</p>
-            </li>
-            <li><strong>2 · Add your keys</strong>
-              <p>Agent Zero → Settings → Model Provider: paste ALL your keys for that provider into its one API key field, separated by commas. From any chat: /kame-keys add AIza...,AIza...</p>
-              <pre>API_KEY_GOOGLE=AIza...key1,AIza...key2,AIza...key3</pre>
-            </li>
-            <li><strong>3 · Add more models (optional)</strong>
-              <p>The Fallback models tab is API Rotation’s list of models, best first. Every reply starts on your chat model; when it is busy, out of quota or slow, the next one answers - as many models as you like. The reply is never ended for it: when every key of every model rests, it waits until one is back and answers.</p>
-            </li>
-            <li><strong>4 · Watch it (optional)</strong>
-              <p>The chip beside the model name shows the live line while a reply runs; this page shows every key and model.</p>
-            </li>
-            <li><strong>5 · Choose how it behaves (optional)</strong>
-              <p>Overview → Quick controls: Speed (Saver · Balanced · Faster) and Fallback. Everything else is already tuned; it lives in Settings. Check it any time with /kame doctor.</p>
-            </li>
-          </ol>
-          <p class="kame-dim kame-small">Every step in detail: github.com/Kame696/kame-api-rotation-for-agent-zero</p>
-        </div>
-      </div>
 
       <!-- ===== Overview ===== -->
       <div class="kame-stack" x-show="$store.kamePanel.tab === 'overview'">
@@ -420,9 +389,6 @@
               <div class="kame-fblist">
                 <p x-text="$store.kamePanel.fallbackList.why"></p>
                 <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
-                <template x-for="line in $store.kamePanel.fallbackList.missing" :key="line">
-                  <p class="kame-tone-warn" x-text="line"></p>
-                </template>
                 <ol class="kame-small">
                   <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
                     <li><span class="kame-mono" x-text="e.identity"></span>
@@ -543,9 +509,6 @@
               <div class="kame-fblist">
                 <p x-text="$store.kamePanel.fallbackList.why"></p>
                 <p class="kame-tone-warn" x-show="$store.kamePanel.fallbackList.warning" x-text="$store.kamePanel.fallbackList.warning"></p>
-                <template x-for="line in $store.kamePanel.fallbackList.missing" :key="line">
-                  <p class="kame-tone-warn" x-text="line"></p>
-                </template>
                 <ol class="kame-small">
                   <template x-for="e in $store.kamePanel.fallbackList.entries" :key="e.identity">
                     <li><span class="kame-mono" x-text="e.identity"></span>
@@ -644,7 +607,7 @@
           <div class="kame-card-title">Fallback models</div>
           <div class="kame-dim kame-small">
             These models answer when the model in use cannot. If a chat runs on another model, your
-            main model is tried first, then this list in order. A local main model (Ollama, llama.cpp, LM Studio) is tried only if it is in this list. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.
+            main model is tried first, then this list in order. Background jobs are never raced and never switch on their own account; a stopped important job goes down your list once.
             Empty list: nothing ever switches.
           </div>
 
@@ -886,13 +849,7 @@
   .kame-bad, .kame-tone-bad { color: #ef4444; }
   .kame-tone-warn { color: #d99a2b; }
   .kame-tone-quiet { opacity: 0.6; }
-  .kame-tabs { display: flex; flex-wrap: wrap; gap: 0.4em; align-items: center; }
-  .kame-info-tab { margin-left: auto; width: 1.7em; height: 1.7em; border-radius: 50%; border: 1px solid var(--color-border, #555);
-    background: transparent; color: inherit; font-style: italic; font-weight: 600; cursor: pointer; opacity: 0.75; }
-  .kame-info-tab:hover, .kame-info-tab-on { opacity: 1; border-color: currentColor; }
-  .kame-guide { display: flex; flex-direction: column; gap: 0.8em; padding-left: 0; list-style: none; }
-  .kame-guide p { margin: 0.2em 0; }
-  .kame-guide pre { margin: 0.3em 0; padding: 0.4em; overflow-x: auto; background: var(--color-panel, rgba(127,127,127,0.12)); border-radius: 4px; }
+  .kame-tabs { display: flex; flex-wrap: wrap; gap: 0.4em; }
   .kame-small { font-size: 0.85em; }
   .kame-mono { font-family: var(--font-family-code, monospace); }
   .kame-card { border: 1px solid var(--color-border, #444); border-radius: 8px; padding: 0.7em 0.9em; }

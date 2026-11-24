@@ -670,7 +670,6 @@ def record_call(*, identity: str = "", key: str = "", attempt: int = 0,
 # pool-health.json — holds that survive a restart
 # ---------------------------------------------------------------------------
 _HEALTH_LOCK = threading.Lock()
-_HEALTH_IO_LOCK = threading.Lock()      # 1.9.0.6 (0019 A1): one disk writer; never taken while _HEALTH_LOCK is held
 _HEALTH: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _ACCOUNT_HEALTH: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _HEALTH_LOADED = False
@@ -775,80 +774,50 @@ def _load_health() -> None:
 
 
 def _flush_health(force: bool = False) -> Tuple[bool, str]:
-    """Write pool-health.json. Call with ``_HEALTH_LOCK`` NOT held.
-
-    1.9.0.6 (Agent Zero decisions/0019 A1): the table is copied under ``_HEALTH_LOCK`` (memory only) and the disk
-    is touched with it released, so a context reading a hold (``hold_for``, which the engine does under its own
-    shared lock) never waits for a slow disk. ``_HEALTH_IO_LOCK`` keeps one writer at a time and is taken before
-    the copy, so the last file written is always the latest table."""
     global _HEALTH_DIRTY, _HEALTH_LAST_WRITE
-    with _HEALTH_IO_LOCK:
-        with _HEALTH_LOCK:
-            now = time.time()
-            if not _HEALTH_DIRTY or (not force and now - _HEALTH_LAST_WRITE < _HEALTH_WRITE_EVERY_S):
-                return True, ""
-            folder = data_dir()
-            if folder is None:
-                # No host data directory means the journal is memory-only.
-                _HEALTH_DIRTY = False
-                return True, ""
-            path = _path(HEALTH_FILE)
-            if path is None:
-                return False, "pool-health data directory is unavailable"
-            holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
-            account_holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
-            count = 0
-            for source, target in ((_HEALTH, holds), (_ACCOUNT_HEALTH, account_holds)):
-                for outer, rows in source.items():
-                    live: Dict[str, Dict[str, Any]] = {}
-                    for key_hash, row in rows.items():
-                        clean = _clean_health_row(row, now, account=(source is _ACCOUNT_HEALTH))
-                        if clean is not None:
-                            live[str(key_hash)] = clean
-                    if live:
-                        target[str(outer)] = live
-                        count += len(live)
-            if count > _HEALTH_MAX_ENTRIES:
-                return False, "pool-health entry limit exceeded"
-            _HEALTH_DIRTY = False        # a note from now on is dirty again and schedules its own write
-        temporary: Optional[str] = None
-        try:
-            handle, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-            with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                json.dump({"schema": _HEALTH_SCHEMA, "holds": holds,
-                           "account_holds": account_holds}, stream, sort_keys=True)
-            os.replace(temporary, path)
-            with _HEALTH_LOCK:
-                _HEALTH_LAST_WRITE = now
-            return True, ""
-        except Exception as exc:
-            if temporary:
-                try:
-                    os.unlink(temporary)
-                except OSError:
-                    pass
-            with _HEALTH_LOCK:
-                _HEALTH_DIRTY = True     # not on disk: the next flush tries again
-            return False, (f"{type(exc).__name__}: {exc}")[:240]
-
-
-def flush_health() -> Tuple[bool, str]:
-    """Write the holds now, if any changed. Never raises. Used by the engine after it releases its own lock."""
+    now = time.time()
+    if not _HEALTH_DIRTY or (not force and now - _HEALTH_LAST_WRITE < _HEALTH_WRITE_EVERY_S):
+        return True, ""
+    folder = data_dir()
+    if folder is None:
+        # No host data directory means the journal is memory-only.
+        _HEALTH_DIRTY = False
+        return True, ""
+    path = _path(HEALTH_FILE)
+    if path is None:
+        return False, "pool-health data directory is unavailable"
+    holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    account_holds: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    count = 0
+    for source, target in ((_HEALTH, holds), (_ACCOUNT_HEALTH, account_holds)):
+        for outer, rows in source.items():
+            live: Dict[str, Dict[str, Any]] = {}
+            for key_hash, row in rows.items():
+                clean = _clean_health_row(row, now, account=(source is _ACCOUNT_HEALTH))
+                if clean is not None:
+                    live[str(key_hash)] = clean
+            if live:
+                target[str(outer)] = live
+                count += len(live)
+    if count > _HEALTH_MAX_ENTRIES:
+        return False, "pool-health entry limit exceeded"
+    temporary: Optional[str] = None
     try:
-        return _flush_health(force=True)
+        handle, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump({"schema": _HEALTH_SCHEMA, "holds": holds,
+                       "account_holds": account_holds}, stream, sort_keys=True)
+        os.replace(temporary, path)
+        _HEALTH_DIRTY = False
+        _HEALTH_LAST_WRITE = now
+        return True, ""
     except Exception as exc:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
         return False, (f"{type(exc).__name__}: {exc}")[:240]
-
-
-def preload_health() -> None:
-    """Read pool-health.json now (once), so the first ``hold_for`` under the engine's lock does no disk read."""
-    try:
-        if not SHARE_HEALTH_ON or data_dir() is None:
-            return
-        with _HEALTH_LOCK:
-            _load_health()
-    except Exception:
-        pass
 
 
 def note_hold(identity: str, key: str, until: float, kind: str = "",
@@ -877,7 +846,7 @@ def note_hold(identity: str, key: str, until: float, kind: str = "",
             else:
                 rows.pop(digest, None)
             _HEALTH_DIRTY = True
-        _flush_health(force=True)
+            _flush_health(force=True)
     except Exception:
         pass
 
@@ -901,8 +870,7 @@ def note_answer(identity: str, key: str) -> None:
                 # working key out for up to the ceiling. Rare - only a key
                 # that was actually held gets here.
                 _HEALTH_DIRTY = True
-        if changed:
-            _flush_health(force=True)
+                _flush_health(force=True)
     except Exception:
         pass
 
@@ -952,8 +920,8 @@ def forget_holds() -> ForgetHoldsResult:
             _HEALTH.clear()
             _ACCOUNT_HEALTH.clear()
             _HEALTH_DIRTY = True
-        ok, error = _flush_health(force=True)
-        return ForgetHoldsResult(count, ok, error)
+            ok, error = _flush_health(force=True)
+            return ForgetHoldsResult(count, ok, error)
     except Exception as exc:
         return ForgetHoldsResult(0, False, (f"{type(exc).__name__}: {exc}")[:240])
 

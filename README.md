@@ -6,7 +6,7 @@
 
 ### All your API keys and models as one pool. A `429`, a spent quota or a slow model never stops your agent again.
 
-[![Version](https://img.shields.io/badge/version-1.9.0.6-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0.5-blue.svg)](CHANGELOG.md)
 [![Agent Zero](https://img.shields.io/badge/Agent_Zero-v1.14%2B_·_verified_v2.16-purple.svg)](#verified)
 [![Native host tests](https://img.shields.io/badge/remote_native_hosts-3%2F3_passed-brightgreen.svg)](#verified)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -65,7 +65,7 @@ Before you remove the plugin, run `/kame-keys undo`: Agent Zero then keeps one v
 /a0/usr/plugins/api_rotation_by_kame/
 ```
 
-Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.6 — ACTIVE` in the log.
+Then **restart Agent Zero** once. Look for `🐢⚡ KAME v1.9.0.5 — ACTIVE` in the log.
 
 | | |
 |---|---|
@@ -406,7 +406,6 @@ Nothing needs changing. Ten settings are on show (the first two of each shelf); 
 
 | Check | Result |
 |---|---|
-| **1.9.0.6** — offline suites | the full suite (111 files) on a virtual clock, no real Agent Zero; nothing new read from or patched in Agent Zero (the v2.16 checks of 1.9.0.5 stand); CI on 3 OS × Python 3.11–3.14 and native Agent Zero v2.12, v2.13, v2.15, v2.16 |
 | **1.9.0.5** — offline suites | the full suite (104 files) green on a virtual clock, no real Agent Zero; checked against Agent Zero v2.16 (14 of 15 patch points unchanged, 27 of 27 host facts, live harness green) |
 | **1.9.0.3** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (95 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.3 |
 | **1.9.0.2** — offline suites | Run on a virtual clock, no real Agent Zero: the full suite (91 files), 5,000 calls with random refusals, cuts, timeouts and backups (`tools/chaos.py --hedge`) and 200 raced replies (`tools/race_chaos.py`): 0 defects. The same rules were checked live on Hermes 1.9.0.2 |
@@ -447,20 +446,6 @@ The real sessions ran with Agent Zero's `nest_asyncio` shim replaced by a no-op,
 </details>
 
 <a id="new"></a>
-<details>
-<summary><b>📣 What's new in 1.9.0.6</b></summary>
-
-> **1.9.0.6 — a reply is never stopped, many sessions never block each other.** Kept in step with Hermes 1.9.0.6.
-
-- **No give-up.** A best model that refuses every key waits for a busy list instead of ending the turn; a list model that said busy is asked again after 20 s.
-- **A refused request walks your list once** before its error is shown; a model your provider does not know (a typo) is named on the page with the provider's suggestion and skipped for six hours.
-- **Many chats and subordinate agents at once** never wait on each other: no KAME lock is held across a disk write, a sleep or a network call.
-- **The live line looks alive:** the reply's running time, a pulsing dot in the chip, and `✕ no answer - <reason>` for ten seconds when a reply ends without an answer.
-- **A local main model is never a switch target:** a chat on a model of your list no longer moves to a main model that runs on your machine or network (Ollama, llama.cpp, LM Studio, a local address) unless it is in your fallback list too ([issue #1](https://github.com/Kame696/kame-api-rotation-for-agent-zero/issues/1)).
-- **ⓘ How to install or configure:** the round "i" at the end of the page's tabs opens a five-step guide.
-</details>
-
-<a id="new-1905"></a>
 <details>
 <summary><b>📣 What's new in 1.9.0.5</b></summary>
 
@@ -611,7 +596,6 @@ In development since early 2026, and every release came from a real log, not fro
 
 | Version | Focus | In one line |
 |---|---|---|
-| **v1.9.0.6** | A reply is never stopped, many sessions never block each other | A refused best model waits for a busy list; a busy list model is asked again; a refused request walks the list once; a mistyped model is named and skipped; no lock held across disk, sleep or network; the live line shows the running time, a pulsing dot and the end state; ⓘ How to install or configure |
 | **v1.9.0.5** | While every key rests, one is asked again | After 20 s (then 40, 80, 160, every 300 s) the waiting request goes to one resting key, so a healthy provider answers at once; an account-wide hold needs a second model; reset says what it cleared; keys are checked when added; `/kame-keys undo` leaves Agent Zero with one key per provider; verified on Agent Zero v2.16 |
 | **v1.9.0.4** | The race asks the model that answers, when it usually answers | A model that keeps failing is left out of the race and the fastest model of your list goes first, at its own usual first word; first-word times kept on disk; a raced model that fails is replaced by another key; no timer spin on Windows Python 3.11/3.12 |
 | **v1.9.0.3** | The screen says what happened | Every failure row opens with the provider's own text, and a refused request says it is the request, not a key; the status line speaks every 5 s while the model is silent; the Speed line counts only backup requests; "API Rotation" on screen; clearer slow, overloaded and stopped words |

@@ -18,7 +18,6 @@
     "fallback.entries[].busy_until",
     "fallback.entries[].identity",
     "fallback.entries[].probe_at",
-    "fallback.missing",
     "fallback.state",
     "fallback.warning",
     "fallback.why",

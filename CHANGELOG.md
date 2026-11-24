@@ -1,38 +1,5 @@
 # 🐢⚡ KAME Version Evolution — Complete History
 
-## 1.9.0.6 - A reply is never stopped, many sessions never block each other (2026-11-23)
-
-Kept in step with the Hermes 1.9.0.6 changes that apply here. Agent Zero's KAME walks the whole model list itself, so the
-Hermes hand-over limit does not exist here; this version proves the same promise and closes what the proof found.
-
-- **A local main model is never a switch target (issue #1).** With a local model as the preset's main model (llama.cpp) and two Gemini models in the
-  fallback list, a chat on Gemini that found it busy was moved to the local main model, and llama.cpp reloaded its
-  model for minutes. A main model that runs on your machine or network (a local server provider such as Ollama,
-  llama.cpp, LM Studio, vLLM, or an `api_base` on a loopback, private or `.local` address) is now a switch target only
-  when it is written in the fallback list. A reply that starts on it still walks the list. Same rule as Hermes. The
-  page's Fallback models card says so.
-- **Locks audited.** No KAME lock is held across an await, a sleep or a network call. The two places that wrote to
-  disk with the shared lock held (the pool-health file after a refusal or an answer, and the first read of the
-  prompt-cache table) now do it after the lock is released; a slow disk can no longer stop other conversations.
-- **A list model that said busy is asked again.** Once both models of your list had answered busy in one reply, the reply
-  never asked them again, so a model that came back could not answer it while the best model stayed busy. They are asked
-  again after one probe clock (20 s).
-- **A refused best model waits for a busy list.** When every key of the best model refuses it (plan, country) and the list is
-  only busy or throttled, the reply waits and walks the list again instead of ending the turn.
-- **A refused request walks the list once.** A request a model refuses (404 not found, 410 gone, 413 too large, a 400
-  the provider calls the request's fault, a blocked prompt) is asked of each model of your list once before anything is
-  shown; when every one refuses, the first model's error is shown. A model the provider does not know is remembered for
-  six hours and named on the page with the provider's "did you mean".
-- **The live line looks alive.** Every in-flight state ends with the reply's running time (`· 23s`), the chip's dot
-  pulses while a reply runs (still under reduced motion), and a reply that ends without an answer says
-  `✕ no answer - <reason>` for ten seconds; the words are the shared table of both ports.
-- **ⓘ How to install or configure.** A round "i" at the end of the page's tabs opens a five-step guide.
-- **Tests.** Twelve conversations at once (eight chats and four subordinate agents) answer without waiting for each other,
-  with and without the host rate limiter and with every model busy twice; every storm (busy, throttled with and without a
-  return time, silent, dropped connections) on a one-provider and a mixed list answers when a model comes back; a 2 h wait with
-  every key resting keeps the chat line; `max_total_wait_seconds` still ends a wait with the provider's words.
-
-
 ## 1.9.0.5 - While every key rests, one is asked again (2026-11-22)
 
 Kept in step with the Hermes 1.9.0.5 changes that apply here. Verified on Agent Zero v2.16.
